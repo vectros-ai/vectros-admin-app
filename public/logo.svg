@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 200">
+  <g transform="translate(24, 24) scale(0.3)">
+    <rect width="512" height="512" rx="112" fill="#09090B"/>
+    <polygon points="372,150 302,150 220,360 290,360" fill="#3B82F6"/>
+    <polygon points="140,150 210,150 290,360 220,360" fill="#F9FAFB"/>
+  </g>
+
+  <text x="210" y="135" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="96" font-weight="800" fill="#F9FAFB" letter-spacing="-3">VECTROS</text>
+</svg>

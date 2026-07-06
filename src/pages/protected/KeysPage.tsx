@@ -1,0 +1,371 @@
+// ---------------------------------------------------------------------------
+// KeysPage — Scoped Keys (ssk_*) management surface.
+//
+// Functional scope (list view):
+//   - List scoped keys via `client.auth.listScopedKeys()` (partner-wide; the
+//     dev-portal source documents this — the response includes keys across
+//     both live + test tenants and a `tenantId` column surfaces which one).
+//     v1 doesn't filter by the active TenantSwitcher env — server-side
+//     filtering would need an SDK + backend param. Captured as a follow-up.
+//   - Revoke a key via `client.auth.revokeScopedKey({ keyId })`, gated by a
+//     confirmation dialog that surfaces the ~5-minute Rust-authorizer cache
+//     window so admins aren't surprised by lingering 401s.
+//   - Per-row chips for user type (HUMAN / SERVICE) + key status (active /
+//     revoked), matching the dev-portal idioms partners will already know.
+//
+// Built on TanStack Query: useQuery for the list + useMutation for revoke.
+// Refresh button invalidates ['scopedKeys'].
+//
+// "Create scoped key" opens the 5-step <ScopedKeyCreateDialog> wizard
+// (user → key name → contexts → roles → review).
+// ---------------------------------------------------------------------------
+
+import { useState } from 'react';
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  IconButton,
+  Paper,
+  Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Tooltip,
+  Typography,
+} from '@mui/material';
+import { ConfirmDialog, LoadingBlock } from '@vectros-ai/react';
+import { ScopedKeyCreateDialog } from './ScopedKeyCreateDialog';
+import { ApiErrorAlert } from '../../components/ApiErrorAlert';
+import { RequestIdCaption } from '../../components/RequestIdCaption';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
+import AddIcon from '@mui/icons-material/Add';
+import PersonIcon from '@mui/icons-material/Person';
+import SmartToyIcon from '@mui/icons-material/SmartToy';
+import { FormattedMessage, useIntl } from 'react-intl';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+
+import { useActiveTenantId, useCurrentTenant } from '../../auth';
+import { vectrosApiClient } from '../../api/vectrosApi';
+import type { ScopedKeyResponse } from '../../api/vectrosApi';
+
+export function KeysPage(): React.JSX.Element {
+  const intl = useIntl();
+  const tenant = useActiveTenantId();
+  const { activeMembership } = useCurrentTenant();
+  const queryClient = useQueryClient();
+
+  // Server-state — partner-wide list of scoped keys. queryKey is
+  // intentionally NOT tenant-namespaced: the SDK's listScopedKeys()
+  // returns ALL keys across the partner (no tenant filter on the
+  // request). Adding `tenant` to the key would just refetch the SAME
+  // data into a different cache bucket when TenantSwitcher flips.
+  // The tenantId column on each row + the (future) tenant-scoped
+  // filter UI handle the "viewing live vs test" framing client-side.
+  // When the backend adds a server-side `?tenant=` param, add tenant to
+  // the queryKey here at the same time.
+  const keysQuery = useQuery({
+    queryKey: ['scopedKeys'],
+    // listScopedKeys returns the `{ data, nextCursor }` page but — unlike
+    // the context-scoped auth lists — exposes no startFrom/limit params in the
+    // SDK request surface, so it cannot be drained. We surface the first page.
+    // Follow-up: add pagination params to the listScopedKeys request so this
+    // can drain like the others (partners may hold more keys than one page).
+    queryFn: async () =>
+      (await vectrosApiClient(tenant).auth.listScopedKeys()).data ?? [],
+  });
+  const keys = keysQuery.data ?? null;
+
+  // UI state (correct domain — stays as useState).
+  const [revokeTarget, setRevokeTarget] = useState<ScopedKeyResponse | null>(null);
+  // Success-only status banner. Revoke FAILURES surface inside the
+  // ConfirmDialog (so a failed revoke is never occluded behind the open
+  // modal — the canonical "error behind the dialog" bug). The query's own
+  // load error renders via <ApiErrorAlert> below.
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+
+  const revokeMutation = useMutation({
+    mutationFn: (vars: { keyId: string }) =>
+      vectrosApiClient(tenant).auth.revokeScopedKey({ keyId: vars.keyId }),
+    onSuccess: () => {
+      const keyName = revokeTarget?.keyName ?? '';
+      setSuccessMessage(intl.formatMessage({ id: 'keys.revokeSuccess' }, { keyName }));
+      setRevokeTarget(null);
+      revokeMutation.reset();
+      void queryClient.invalidateQueries({ queryKey: ['scopedKeys'] });
+    },
+    // onError intentionally omitted — the error stays on revokeMutation.error
+    // and renders IN the ConfirmDialog's error slot.
+  });
+
+  const handleRevokeConfirm = (): void => {
+    if (!revokeTarget?.keyId) return;
+    revokeMutation.mutate({ keyId: revokeTarget.keyId });
+  };
+
+  // Closing the dialog resets the mutation so a prior failure doesn't
+  // reappear when a different key's dialog is opened.
+  const handleRevokeClose = (): void => {
+    if (revokeMutation.isPending) return;
+    setRevokeTarget(null);
+    revokeMutation.reset();
+  };
+
+  return (
+    <Stack spacing={3}>
+      <Box>
+        <Stack
+          direction="row"
+          alignItems="flex-start"
+          justifyContent="space-between"
+          spacing={2}
+        >
+          <Box>
+            <Typography variant="h4" component="h1" sx={{ fontWeight: 700 }}>
+              <FormattedMessage id="keys.title" />
+            </Typography>
+            <Typography variant="body1" color="text.secondary" sx={{ mt: 1 }}>
+              <FormattedMessage id="keys.subtitle" />
+            </Typography>
+          </Box>
+          <Button
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => setCreateOpen(true)}
+            // Match the other list-header create buttons (default size); keep the
+            // label on one line so the header Stack can't wrap it.
+            sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}
+          >
+            <FormattedMessage id="keys.createButton" />
+          </Button>
+        </Stack>
+      </Box>
+
+      {successMessage && (
+        <Alert
+          severity="success"
+          role="status"
+          onClose={() => setSuccessMessage(null)}
+        >
+          {successMessage}
+        </Alert>
+      )}
+
+      {/* Header controls — refresh, primarily; column filters land later. */}
+      <Stack direction="row" alignItems="center" spacing={2}>
+        <Box sx={{ flexGrow: 1 }} />
+        <Tooltip title={intl.formatMessage({ id: 'keys.refresh' })}>
+          <span>
+            <IconButton
+              onClick={() => {
+                void queryClient.invalidateQueries({ queryKey: ['scopedKeys'] });
+              }}
+              disabled={keysQuery.isFetching}
+              aria-label={intl.formatMessage({ id: 'keys.refresh' })}
+            >
+              <RefreshIcon />
+            </IconButton>
+          </span>
+        </Tooltip>
+      </Stack>
+
+      {keysQuery.isError && (
+        <ApiErrorAlert error={keysQuery.error}>
+          <FormattedMessage
+            id="keys.loadError"
+            values={{
+              message:
+                keysQuery.error instanceof Error
+                  ? keysQuery.error.message
+                  : String(keysQuery.error),
+            }}
+          />
+        </ApiErrorAlert>
+      )}
+
+      {keys === null && !keysQuery.isError && (
+        <LoadingBlock label={intl.formatMessage({ id: 'keys.loading' })} />
+      )}
+
+      {keys !== null && keys.length === 0 && !keysQuery.isError && (
+        <Paper sx={{ p: 4, textAlign: 'center' }}>
+          <Typography variant="body1" color="text.secondary">
+            <FormattedMessage id="keys.empty" />
+          </Typography>
+        </Paper>
+      )}
+
+      {keys !== null && keys.length > 0 && (
+        <TableContainer component={Paper}>
+          <Table aria-label={intl.formatMessage({ id: 'keys.title' })}>
+            <TableHead>
+              <TableRow>
+                <TableCell>
+                  <FormattedMessage id="keys.columnName" />
+                </TableCell>
+                <TableCell>
+                  <FormattedMessage id="keys.columnUser" />
+                </TableCell>
+                <TableCell>
+                  <FormattedMessage id="keys.columnContext" />
+                </TableCell>
+                <TableCell>
+                  <FormattedMessage id="keys.columnTenant" />
+                </TableCell>
+                <TableCell>
+                  <FormattedMessage id="keys.columnStatus" />
+                </TableCell>
+                <TableCell>
+                  <FormattedMessage id="keys.columnCreated" />
+                </TableCell>
+                <TableCell align="right">
+                  <FormattedMessage id="keys.columnActions" />
+                </TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {keys.map((key) => {
+                const isActive = key.status === 'active';
+                return (
+                  <TableRow key={key.keyId ?? `${key.tenantId}#${key.contextId}#${key.userId}#${key.createdAt}`}>
+                    <TableCell>{key.keyName ?? '—'}</TableCell>
+                    <TableCell>
+                      <Stack direction="row" spacing={1} alignItems="center">
+                        <Typography
+                          variant="body2"
+                          sx={{ fontFamily: 'monospace', fontSize: 12 }}
+                        >
+                          {key.userId ?? '—'}
+                        </Typography>
+                        {key.userType && (
+                          <Chip
+                            size="small"
+                            icon={
+                              key.userType === 'SERVICE' ? (
+                                <SmartToyIcon fontSize="small" />
+                              ) : (
+                                <PersonIcon fontSize="small" />
+                              )
+                            }
+                            label={
+                              <FormattedMessage
+                                id={
+                                  key.userType === 'SERVICE'
+                                    ? 'members.typeService'
+                                    : 'members.typeHuman'
+                                }
+                              />
+                            }
+                          />
+                        )}
+                      </Stack>
+                    </TableCell>
+                    <TableCell>{key.contextId ?? '—'}</TableCell>
+                    <TableCell sx={{ fontFamily: 'monospace', fontSize: 12 }}>
+                      {key.tenantId ?? '—'}
+                    </TableCell>
+                    <TableCell>
+                      <Chip
+                        label={
+                          <FormattedMessage
+                            id={isActive ? 'keys.statusActive' : 'keys.statusRevoked'}
+                          />
+                        }
+                        size="small"
+                        color={isActive ? 'success' : 'default'}
+                      />
+                    </TableCell>
+                    <TableCell sx={{ color: 'text.secondary', fontSize: 13 }}>
+                      {key.createdAt ? new Date(key.createdAt).toLocaleDateString() : '—'}
+                    </TableCell>
+                    <TableCell align="right">
+                      <Tooltip title={intl.formatMessage({ id: 'keys.actionRevoke' })}>
+                        <span>
+                          <IconButton
+                            size="small"
+                            onClick={() => setRevokeTarget(key)}
+                            disabled={!isActive || revokeMutation.isPending}
+                            aria-label={intl.formatMessage({ id: 'keys.actionRevoke' })}
+                          >
+                            <DeleteOutlineIcon fontSize="small" />
+                          </IconButton>
+                        </span>
+                      </Tooltip>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
+
+      {/* Create scoped key — opens the 5-step wizard. On success the
+          wizard internally invalidates ['scopedKeys'] so the
+          table refetches without explicit wiring here. Closing the
+          dialog (either via Done on confirmation, or Cancel earlier)
+          is the only thing KeysPage handles directly. */}
+      <ScopedKeyCreateDialog
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        initialEnv={activeMembership?.tenantKind ?? 'live'}
+      />
+
+      {/* Revoke confirmation — ConfirmDialog bakes in aria-labelledby,
+          pending-guarded dismissal, and an IN-DIALOG role="alert" error
+          slot so a failed revoke is announced and never occluded behind
+          the open modal. The error slot carries the requestId
+          via <ApiErrorAlert>'s sibling <RequestIdCaption> shape. */}
+      <ConfirmDialog
+        open={revokeTarget !== null}
+        title={<FormattedMessage id="keys.revokeConfirmTitle" />}
+        body={
+          // Inline (`component="span"`, display:block) — ConfirmDialog renders
+          // `body` inside a <p> (DialogContentText); a block <div> there is
+          // invalid DOM nesting (React 19 hydration warning).
+          <>
+            <Box component="span" sx={{ display: 'block', mb: 2 }}>
+              <FormattedMessage
+                id="keys.revokeConfirmBody"
+                values={{
+                  keyName: <strong>{revokeTarget?.keyName ?? ''}</strong>,
+                  userId: <code>{revokeTarget?.userId ?? ''}</code>,
+                }}
+              />
+            </Box>
+            <Box component="span" sx={{ display: 'block', color: 'warning.main' }}>
+              <FormattedMessage id="keys.revokeConfirmWarning" />
+            </Box>
+          </>
+        }
+        confirmLabel={<FormattedMessage id="keys.revokeConfirmCta" />}
+        cancelLabel={<FormattedMessage id="keys.revokeCancelCta" />}
+        onConfirm={handleRevokeConfirm}
+        onClose={handleRevokeClose}
+        pending={revokeMutation.isPending}
+        error={
+          revokeMutation.isError ? (
+            <>
+              <FormattedMessage
+                id="keys.revokeError"
+                values={{
+                  message:
+                    revokeMutation.error instanceof Error
+                      ? revokeMutation.error.message
+                      : String(revokeMutation.error),
+                }}
+              />
+              <RequestIdCaption error={revokeMutation.error} />
+            </>
+          ) : undefined
+        }
+      />
+    </Stack>
+  );
+}

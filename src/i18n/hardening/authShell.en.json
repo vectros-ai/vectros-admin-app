@@ -1,0 +1,5 @@
+{
+  "layout.tenantSwitchError": "Couldn't switch tenant. Please try again.",
+  "layout.tenantKindLive": "Live",
+  "layout.tenantKindTest": "Test"
+}

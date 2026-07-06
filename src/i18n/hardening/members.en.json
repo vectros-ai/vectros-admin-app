@@ -1,0 +1,9 @@
+{
+  "members.loadErrorBody": "We couldn't load your members. Please try again.",
+  "members.resendNoRole": "This member has no access profile role bound, so the invite can't be re-sent.",
+  "members.resendErrorBody": "We couldn't re-send that invitation. Please try again.",
+  "members.revokeErrorBody": "We couldn't revoke that member. Please try again.",
+  "members.profileError": "Couldn't load",
+  "invite.rolesErrorBody": "We couldn't load the available roles. Please try again.",
+  "invite.tokenLabel": "Raw invite token (copy it — it's shown only once)"
+}

@@ -1,0 +1,15 @@
+{
+  "access.contexts.loadError.friendly": "Could not load your app contexts. Please try again.",
+  "access.contexts.countLoading": "Loading count",
+  "access.contexts.countPlaceholder": "—",
+  "access.contexts.openRow": "Open app context {contextId}",
+  "access.contexts.createDialog.createError.friendly": "Could not create the app context. Please review the details and try again.",
+  "access.contexts.editDialog.saveError.friendly": "Could not save your changes. Please try again.",
+  "access.contexts.deleteConfirm.error.friendly": "Could not delete the app context. Please try again.",
+  "access.contexts.detail.loadError.friendly": "Could not load this app context. Please try again.",
+  "access.roles.loadError.friendly": "Could not load roles for this context. Please try again.",
+  "access.roles.openRow": "Open role {roleId}",
+  "access.profiles.loadError.friendly": "Could not load access profiles for this context. Please try again.",
+  "access.profiles.openRow": "Open access profile for {principalId}",
+  "access.profiles.emptyFiltered": "No access profiles reference {roleId} in this context."
+}

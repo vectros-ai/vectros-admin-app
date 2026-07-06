@@ -1,0 +1,18 @@
+{
+  "access.roles.editor.loadErrorBody": "We could not load this role. Please try again.",
+  "access.roles.editor.saveErrorBody": "We could not save this role. Please try again.",
+  "access.roles.editor.duplicateId": "A role with this ID already exists in this context. Choose a different ID.",
+  "access.roles.cloneDialog.cloneErrorBody": "We could not clone this role. Please try again.",
+  "access.roles.cloneDialog.duplicateId": "A role with this ID already exists in this context. Choose a different ID.",
+  "access.roles.deleteConfirm.errorBody": "We could not delete this role. Please try again.",
+  "access.profiles.editor.saveErrorBody": "We could not save this profile. Please try again.",
+  "access.profiles.editor.loadErrorBody": "We could not load this profile. Please try again.",
+  "access.profiles.editor.duplicateId": "A profile with this principal ID already exists in this context. Choose a different principal ID.",
+  "access.profiles.cloneDialog.cloneErrorBody": "We could not clone this profile. Please try again.",
+  "access.profiles.cloneDialog.duplicateId": "A profile with this principal ID already exists in this context. Choose a different principal ID.",
+  "access.profiles.deleteConfirm.errorBody": "We could not delete this profile. Please try again.",
+  "access.profiles.editor.sourceSwitchTitle": "Discard the other source?",
+  "access.profiles.editor.sourceSwitchBody": "Switching the permission source will discard the draft on the side you are leaving. This cannot be undone.",
+  "access.profiles.editor.sourceSwitchConfirmCta": "Discard and switch",
+  "access.profiles.editor.sourceSwitchCancel": "Keep editing"
+}

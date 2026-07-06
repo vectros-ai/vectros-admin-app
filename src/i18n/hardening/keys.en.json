@@ -1,0 +1,7 @@
+{
+  "keysWizard.review.userTypeHuman": "Human",
+  "keysWizard.review.userTypeService": "Service",
+  "keysWizard.review.envLive": "Live",
+  "keysWizard.review.envTest": "Test",
+  "keysWizard.servicePrincipal.errorExternalIdExists": "A service principal with external ID “{externalId}” already exists. Pick a different external ID, or select the existing one from the list."
+}
