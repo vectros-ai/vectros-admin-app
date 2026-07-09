@@ -80,10 +80,11 @@ type KeyEnv = 'live' | 'test';
 import { VectrosError, vectrosApiClient } from '../../api/vectrosApi';
 import type {
   AccessProfileResponse,
-  AppContextResponse,
   ScopedKeyResponse,
   UserResponse,
 } from '../../api/vectrosApi';
+import { useDeveloperApi } from '../../api/developerApi';
+import type { AppContextSummary } from '../../api/developerApi';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
 import {
   ScopeEditor,
@@ -185,6 +186,15 @@ export function ScopedKeyCreateDialog({
   // (shown ONCE), idempotent matches don't.
   const [result, setResult] = useState<ScopedKeyResponse | null>(null);
 
+  // The tenant the whole wizard operates in — resolved from the selected env
+  // radio (not the active TenantSwitcher), so the context list, the profile
+  // check/create, and the key mint all target the SAME tenant. Falls back to the
+  // active tenant if the env's membership isn't found (shouldn't happen).
+  const targetTenantId = useMemo(
+    () => memberships.find((m) => m.tenantKind === env)?.tenantId ?? activeTenant,
+    [memberships, env, activeTenant],
+  );
+
   const queryClient = useQueryClient();
 
   // The actual create-key mutation. Triggered from handleNext on the
@@ -194,13 +204,9 @@ export function ScopedKeyCreateDialog({
   // wired in a later step).
   const submitMutation = useMutation({
     mutationFn: () => {
-      // The key is minted in the tenant matching the selected env. For a
-      // single-partner Dev Admin that's their live or test tenant (the env
-      // radio picks which); falls back to the active tenant if the env's
-      // membership isn't found (shouldn't happen for a valid selection).
-      const targetTenantId =
-        memberships.find((m) => m.tenantKind === env)?.tenantId ?? activeTenant;
-      return vectrosApiClient(targetTenantId).auth.createScopedKey({
+      // Per-context bearer in the env-selected tenant (see targetTenantId): the
+      // key binds to the chosen (tenant, context).
+      return vectrosApiClient(targetTenantId, contextId).auth.createScopedKey({
         keyName: keyName.trim(),
         tenantId: targetTenantId,
         contextId,
@@ -323,6 +329,8 @@ export function ScopedKeyCreateDialog({
             contextId={contextId}
             setContextId={setContextId}
             principalId={`usr_${boundUser.id}`}
+            env={env}
+            tenantId={targetTenantId}
             onProfileResolved={setProfileExists}
           />
         )}
@@ -811,6 +819,10 @@ interface ContextStepProps {
   readonly contextId: string;
   readonly setContextId: (id: string) => void;
   readonly principalId: string;
+  /** The env the wizard is minting in — drives the tenant for every call here. */
+  readonly env: KeyEnv;
+  /** The resolved tenant id for {@link env}; the context + profile calls use it. */
+  readonly tenantId: string;
   /** Bubbles profile-existence up to the parent wizard's canAdvance gate. */
   readonly onProfileResolved: (exists: boolean) => void;
 }
@@ -819,24 +831,25 @@ function ContextStep({
   contextId,
   setContextId,
   principalId,
+  env,
+  tenantId,
   onProfileResolved,
 }: ContextStepProps): React.JSX.Element {
   const intl = useIntl();
-  const tenant = useActiveTenantId();
+  // The whole step operates in the env-selected tenant, so the enumerated
+  // contexts, the profile probe, and the key mint can't target different tenants.
+  const devApi = useDeveloperApi(env);
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
 
-  // List of AppContexts in the active tenant — keyed on tenant so
-  // switching the TenantSwitcher mid-flight refetches automatically.
+  // The account's data contexts — from the owner-gated Developer API, the only
+  // surface that can enumerate every context (a context-pinned bearer sees just
+  // its own). Keys are bound to a data context, so this is the picker's source.
   const contextsQuery = useQuery({
-    queryKey: ['appContexts', tenant],
+    queryKey: ['appContexts', tenantId],
     queryFn: () =>
-      drainPages<AppContextResponse>((startFrom) =>
-        vectrosApiClient(tenant).auth.listAppContexts(
-          startFrom === undefined
-            ? { limit: AUTH_PAGE_SIZE }
-            : { startFrom, limit: AUTH_PAGE_SIZE },
-        ),
+      drainPages<AppContextSummary>((startFrom) =>
+        devApi.listAppContexts(startFrom, AUTH_PAGE_SIZE),
       ),
   });
 
@@ -845,10 +858,12 @@ function ContextStep({
   // bubbles to isError so the partner sees the failure rather than a
   // silent "Create profile" stuck state.
   const profileQuery = useQuery({
-    queryKey: ['accessProfile', tenant, contextId, principalId],
+    queryKey: ['accessProfile', tenantId, contextId, principalId],
     queryFn: async (): Promise<AccessProfileResponse | null> => {
       try {
-        return await vectrosApiClient(tenant).auth.getAccessProfile({
+        // Per-context bearer in the env tenant: the profile lives inside the
+        // picked context, so the read is issued with a credential minted for it.
+        return await vectrosApiClient(tenantId, contextId).auth.getAccessProfile({
           contextId,
           principalId,
         });
@@ -893,7 +908,7 @@ function ContextStep({
               <FormattedMessage id="keysWizard.context.empty" />
             </MenuItem>
           )}
-          {(contextsQuery.data ?? []).map((c: AppContextResponse) =>
+          {(contextsQuery.data ?? []).map((c: AppContextSummary) =>
             c.contextId ? (
               <MenuItem key={c.contextId} value={c.contextId}>
                 {c.name ? `${c.contextId} — ${c.name}` : c.contextId}
@@ -1012,6 +1027,7 @@ function ContextStep({
       <InlineProfileCreateDialog
         open={createOpen}
         onClose={() => setCreateOpen(false)}
+        tenantId={tenantId}
         contextId={contextId}
         principalId={principalId}
         onCreated={() => {
@@ -1019,7 +1035,7 @@ function ContextStep({
           // newly-created row, which triggers the useEffect above to set
           // profileExists=true in the parent → wizard's Next enables.
           void queryClient.invalidateQueries({
-            queryKey: ['accessProfile', tenant, contextId, principalId],
+            queryKey: ['accessProfile', tenantId, contextId, principalId],
           });
           setCreateOpen(false);
         }}
@@ -1041,6 +1057,7 @@ function ContextStep({
 interface InlineProfileCreateDialogProps {
   readonly open: boolean;
   readonly onClose: () => void;
+  readonly tenantId: string;
   readonly contextId: string;
   readonly principalId: string;
   readonly onCreated: () => void;
@@ -1049,12 +1066,12 @@ interface InlineProfileCreateDialogProps {
 function InlineProfileCreateDialog({
   open,
   onClose,
+  tenantId,
   contextId,
   principalId,
   onCreated,
 }: InlineProfileCreateDialogProps): React.JSX.Element {
   const intl = useIntl();
-  const tenant = useActiveTenantId();
   const [clauses, setClauses] = useState<ScopeClause[]>(() => [emptyClause()]);
 
   const validationError = validateClauses(clauses);
@@ -1064,7 +1081,9 @@ function InlineProfileCreateDialog({
 
   const createMutation = useMutation({
     mutationFn: () =>
-      vectrosApiClient(tenant).auth.createAccessProfile({
+      // Per-context bearer in the env tenant: the profile is created inside the
+      // picked context.
+      vectrosApiClient(tenantId, contextId).auth.createAccessProfile({
         contextId,
         body: {
           principalId,

@@ -34,7 +34,9 @@ import enMessages from '../../i18n/messages.en.json';
 import { VectrosError, vectrosApiClient } from '../../api/vectrosApi';
 import { pageOf } from '../../test/pageOf';
 import type * as VectrosApi from '../../api/vectrosApi';
-import { TestTenantProvider, TEST_TENANT_ID } from '../../test/TestTenantProvider';
+import { useDeveloperApi } from '../../api/developerApi';
+import type * as DevApi from '../../api/developerApi';
+import { TestTenantProvider, TEST_TENANT_ID, TEST_MEMBERSHIPS } from '../../test/TestTenantProvider';
 import {
   ScopedKeyCreateDialog,
   formatKeyNameError,
@@ -46,6 +48,17 @@ vi.mock('../../api/vectrosApi', async (importOriginal) => {
   return {
     ...actual,
     vectrosApiClient: vi.fn(),
+  };
+});
+
+// Contexts are enumerated via the owner-gated developer API (the partner list is
+// context-confined); the context-scoped create calls still use the per-context
+// vectrosApiClient bearer above.
+vi.mock('../../api/developerApi', async (importOriginal) => {
+  const actual = await importOriginal<typeof DevApi>();
+  return {
+    ...actual,
+    useDeveloperApi: vi.fn(),
   };
 });
 
@@ -100,7 +113,6 @@ const SAMPLE_IDEMPOTENT_KEY = {
 function makeMockClient(overrides: {
   listUsers?: ReturnType<typeof vi.fn>;
   createUser?: ReturnType<typeof vi.fn>;
-  listAppContexts?: ReturnType<typeof vi.fn>;
   getAccessProfile?: ReturnType<typeof vi.fn>;
   createAccessProfile?: ReturnType<typeof vi.fn>;
   createScopedKey?: ReturnType<typeof vi.fn>;
@@ -118,8 +130,6 @@ function makeMockClient(overrides: {
         }),
     },
     auth: {
-      listAppContexts:
-        overrides.listAppContexts ?? vi.fn().mockResolvedValue(pageOf(SAMPLE_CONTEXTS)),
       // Default: profile exists. Tests that want the "missing" / "error"
       // paths override this with a 404 VectrosError or a non-404 error.
       getAccessProfile:
@@ -148,6 +158,16 @@ function renderDialog(
   const onSuccess = opts.onSuccess ?? vi.fn();
   const client = opts.client ?? makeMockClient();
   vi.mocked(vectrosApiClient).mockReturnValue(client as never);
+  // The context picker enumerates via the developer API; the context-scoped
+  // create calls above still go through the per-context vectrosApiClient bearer.
+  vi.mocked(useDeveloperApi).mockReturnValue({
+    listAppContexts: vi.fn().mockResolvedValue(pageOf(SAMPLE_CONTEXTS)),
+    createAppContext: vi.fn(),
+    deleteAppContext: vi.fn(),
+    listScopedKeys: vi.fn(),
+    revokeScopedKey: vi.fn(),
+    getAdminLogs: vi.fn(),
+  } as never);
   const utils = render(
     <TestIntlProvider>
       <TestTenantProvider>
@@ -193,12 +213,15 @@ async function advancePastBind(user: ReturnType<typeof userEvent.setup>): Promis
  * default getAccessProfile mock returns SAMPLE_PROFILE so the profile-
  * exists path fires immediately.
  */
-async function advancePastContext(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+async function advancePastContext(
+  user: ReturnType<typeof userEvent.setup>,
+  context: RegExp = /^vectros-admin/,
+): Promise<void> {
   // Open MUI Select via its accessible role (combobox).
   await user.click(screen.getByRole('combobox', { name: /^app context$/i }));
-  // The listbox shows the contexts — pick vectros-admin.
+  // The listbox shows the contexts — pick the requested one.
   const listbox = await screen.findByRole('listbox');
-  await user.click(within(listbox).getByText(/^vectros-admin/));
+  await user.click(within(listbox).getByText(context));
   // Wait for the profile-exists success alert to render.
   await screen.findByText(/AccessProfile exists for this/i);
   // Next now enables; click it.
@@ -754,6 +777,71 @@ describe('<ScopedKeyCreateDialog>', () => {
     // Parent's onSuccess prop is fired on a successful create so the
     // parent can refresh its keys list (wired in a later step).
     await waitFor(() => expect(onSuccess).toHaveBeenCalled());
+  });
+
+  it('mints a PER-CONTEXT bearer for the profile + key when a DATA context is picked (BUG-2)', async () => {
+    const user = userEvent.setup();
+    const { client } = renderDialog();
+    await advancePastBind(user);
+    // Pick a NON-admin data context — the exact case the old vectros-admin
+    // bearer failed on (a key could only ever be made for vectros-admin).
+    await advancePastContext(user, /^partner-api/);
+    await user.click(screen.getByRole('button', { name: /^create$/i }));
+
+    // The mint carries the picked context...
+    await waitFor(() =>
+      expect(client.auth.createScopedKey).toHaveBeenCalledWith(
+        expect.objectContaining({ contextId: 'partner-api' }),
+      ),
+    );
+    // ...and — the BUG-2 fix — the profile read AND the key mint ride a bearer
+    // minted for THAT context (the second vectrosApiClient arg). Reverting any
+    // context-scoped call to vectrosApiClient(tenant) would drop this arg.
+    expect(vectrosApiClient).toHaveBeenCalledWith(TEST_TENANT_ID, 'partner-api');
+  });
+
+  it('operates in the ENV-selected tenant, not the active tenant, when they differ (#578)', async () => {
+    const user = userEvent.setup();
+    const LIVE_TENANT = 'tnt_live_11111111';
+    // Active tenant = test; a second (live) membership exists. The wizard's env
+    // radio starts on 'live', so the whole flow must target the LIVE tenant.
+    const memberships = [
+      ...TEST_MEMBERSHIPS,
+      {
+        ...TEST_MEMBERSHIPS[0]!,
+        tenantId: LIVE_TENANT,
+        tenantName: 'Test Org (Live)',
+        tenantKind: 'live' as const,
+      },
+    ];
+    const client = makeMockClient();
+    vi.mocked(vectrosApiClient).mockReturnValue(client as never);
+    vi.mocked(useDeveloperApi).mockReturnValue({
+      listAppContexts: vi.fn().mockResolvedValue(pageOf(SAMPLE_CONTEXTS)),
+      createAppContext: vi.fn(),
+      deleteAppContext: vi.fn(),
+      listScopedKeys: vi.fn(),
+      revokeScopedKey: vi.fn(),
+      getAdminLogs: vi.fn(),
+    } as never);
+    render(
+      <TestIntlProvider>
+        <TestTenantProvider tenant={TEST_TENANT_ID} memberships={memberships}>
+          <ScopedKeyCreateDialog open onClose={vi.fn()} initialEnv="live" />
+        </TestTenantProvider>
+      </TestIntlProvider>,
+    );
+    await advancePastBind(user);
+    await advancePastContext(user, /^partner-api/);
+    await user.click(screen.getByRole('button', { name: /^create$/i }));
+    await waitFor(() => expect(client.auth.createScopedKey).toHaveBeenCalled());
+
+    // Contexts are enumerated for the LIVE env...
+    expect(vi.mocked(useDeveloperApi)).toHaveBeenCalledWith('live');
+    // ...and the profile probe + key mint ride the LIVE tenant, never the active
+    // TEST tenant — profile-check and mint can no longer diverge across tenants.
+    expect(vectrosApiClient).toHaveBeenCalledWith(LIVE_TENANT, 'partner-api');
+    expect(vectrosApiClient).not.toHaveBeenCalledWith(TEST_TENANT_ID, 'partner-api');
   });
 
   it('ConfirmationStep — fresh create shows the rawKey + copy button + cache warning', async () => {

@@ -1,7 +1,55 @@
 /// <reference types="vitest" />
+import { execSync } from 'node:child_process';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+
+// ---------------------------------------------------------------------------
+// versionManifest — bakes a build id into the bundle and emits it as a small
+// `version.json` next to index.html. The client (VersionUpdateBanner) polls
+// that manifest and compares it against the baked id to detect a newer deploy.
+//
+// The id is the short git SHA (overridable via APP_BUILD_ID for build systems
+// without a git checkout). In the dev server it is left as 'dev' so the banner
+// disables itself — there is nothing to poll against locally.
+// ---------------------------------------------------------------------------
+function versionManifest(): Plugin {
+  let buildId = 'dev';
+  let outDir = 'dist';
+  const resolveId = (): string => {
+    if (process.env.APP_BUILD_ID) return process.env.APP_BUILD_ID;
+    try {
+      return execSync('git rev-parse --short HEAD', { encoding: 'utf8' }).trim();
+    } catch {
+      return 'dev';
+    }
+  };
+  return {
+    name: 'version-manifest',
+    config(_config, env) {
+      buildId = env.command === 'build' ? resolveId() : 'dev';
+      if (env.command === 'build' && buildId === 'dev') {
+        // A production build with no resolvable id ships with version-skew
+        // detection OFF (banner disabled, no version.json). Surface it loudly.
+        console.warn(
+          '[version-manifest] no build id (git rev-parse failed and APP_BUILD_ID unset) — ' +
+            'version.json will NOT be emitted and the update banner is disabled for this build.',
+        );
+      }
+      return { define: { __APP_VERSION__: JSON.stringify(buildId) } };
+    },
+    configResolved(resolved) {
+      outDir = resolved.build.outDir;
+    },
+    closeBundle() {
+      if (buildId === 'dev') return;
+      mkdirSync(outDir, { recursive: true });
+      writeFileSync(join(outDir, 'version.json'), `${JSON.stringify({ version: buildId })}\n`);
+    },
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Vite + Vitest configuration for the Vectros Admin App.
@@ -43,7 +91,7 @@ import react from '@vitejs/plugin-react';
 // ---------------------------------------------------------------------------
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), versionManifest()],
   resolve: {
     alias: {
       // Consume @vectros-ai/react as its BUILT bundle (one module) — matches what

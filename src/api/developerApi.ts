@@ -13,8 +13,12 @@
 //   - **Creating** a new app context. Provisioning a context is an
 //     account-owner act; the capability that authorizes it is never minted into
 //     a browser-held bearer, so a client-side create is rejected.
+//   - **Deleting** an app context. Teardown permanently erases the context and
+//     everything in it, so the authority is likewise held server-side and gated
+//     to account owners; the server additionally requires the contextId echoed
+//     back as a `confirm` parameter before it will start the cascade.
 //
-// Both are served by the Developer API, which authenticates with the user's
+// All three are served by the Developer API, which authenticates with the user's
 // Cognito session (the same identity that mints partner-API bearers) and is
 // gated to account owners on the server. No provisioning-capable credential
 // ever reaches the browser. Everything else about an app context — its detail,
@@ -32,6 +36,7 @@ import { useCallback } from 'react';
 
 import { useAuth, useCurrentTenant } from '../auth';
 import { API_CONFIG } from '../config';
+import type { AdminLogsResponse, ScopedKeyResponse } from './vectrosApi';
 
 /**
  * An app context as returned by the Developer API list/create routes. Mirrors
@@ -68,6 +73,32 @@ export interface CreateAppContextInput {
 
 /** Which of the account's tenants a Developer API call targets. */
 export type TenantKind = 'live' | 'test';
+
+/**
+ * Query for the account activity log. `startTime` is required (ISO-8601 UTC);
+ * everything else narrows the result. Omitting `contextId` returns activity
+ * across every app context in the account — a single context-pinned credential
+ * cannot produce that account-wide view, which is why this rides the Developer
+ * API. Supplying `contextId` narrows to one context.
+ */
+export interface AdminLogsQuery {
+  /** Start of the window, ISO-8601 UTC (e.g. `2025-01-15T09:00:00Z`). */
+  readonly startTime: string;
+  /** End of the window, ISO-8601 UTC; defaults to now when omitted. */
+  readonly endTime?: string;
+  /** Resource filter (e.g. `documents`), or omit for all resources. */
+  readonly resource?: string;
+  /** HTTP method filter, or omit for all methods. */
+  readonly method?: string;
+  /** API key id filter, or omit for all keys. */
+  readonly keyId?: string;
+  /** App context filter, or omit for every context in the account. */
+  readonly contextId?: string;
+  /** When true, only entries with a status of 400+ are returned. */
+  readonly errorsOnly?: boolean;
+  /** Max entries to return (server clamps to its hard cap). */
+  readonly limit?: number;
+}
 
 /**
  * Error thrown by a failed Developer API call. Shaped to match how the rest of
@@ -115,7 +146,7 @@ async function parse<T>(resp: Response): Promise<T> {
 }
 
 /**
- * The two Developer API calls the app needs, bound to a tenant kind + a way to
+ * The Developer API calls the app needs, bound to a tenant kind + a way to
  * obtain the Cognito id token. Pure (no React) so it is directly unit-testable;
  * the {@link useDeveloperApi} hook supplies the bindings at the call site.
  */
@@ -124,6 +155,30 @@ export interface DeveloperApi {
   listAppContexts(startFrom?: string, limit?: number): Promise<AppContextPage>;
   /** Create (or idempotently return) an app context. */
   createAppContext(input: CreateAppContextInput): Promise<AppContextSummary>;
+  /**
+   * Tear down an app context — permanently erases the context and everything
+   * in it (records, documents, folders, schemas, roles, access profiles). The
+   * server requires the contextId echoed as a `confirm` parameter and responds
+   * 202: the cascade runs asynchronously, with the context reported as
+   * `purging` until it finishes draining.
+   */
+  deleteAppContext(contextId: string): Promise<void>;
+  /**
+   * List every scoped API key in the account, across both environments and ALL
+   * app contexts. A context-pinned bearer only ever sees its own context's keys,
+   * so this account-wide view lives on the Developer API instead.
+   */
+  listScopedKeys(): Promise<ReadonlyArray<ScopedKeyResponse>>;
+  /**
+   * Revoke a scoped API key by id, regardless of which app context it is bound
+   * to. Idempotent — revoking an already-revoked key succeeds.
+   */
+  revokeScopedKey(keyId: string): Promise<void>;
+  /**
+   * Read the account activity log across every app context (or a single one when
+   * {@link AdminLogsQuery.contextId} is set). Tenant-wide by design.
+   */
+  getAdminLogs(query: AdminLogsQuery): Promise<AdminLogsResponse>;
 }
 
 /** Construct a {@link DeveloperApi} from its dependencies. */
@@ -166,6 +221,57 @@ export function createDeveloperApi(deps: {
       );
       return parse<AppContextSummary>(resp);
     },
+
+    async deleteAppContext(contextId) {
+      // The server's irreversible-operation contract: the contextId must be
+      // echoed back as `confirm`, or the request is rejected with a 400.
+      const params = new URLSearchParams({ tenant: deps.tenant, confirm: contextId });
+      const resp = await fetch(
+        endpoint(
+          deps.baseUrl,
+          `/developer/app-contexts/${encodeURIComponent(contextId)}?${params.toString()}`,
+        ),
+        { method: 'DELETE', headers: await authHeader() },
+      );
+      // 202 with an empty body on success; parse() still maps errors.
+      await parse<void>(resp);
+    },
+
+    async listScopedKeys() {
+      const resp = await fetch(endpoint(deps.baseUrl, `/developer/scoped-keys`), {
+        method: 'GET',
+        headers: await authHeader(),
+      });
+      // Same `{ data, nextCursor }` page envelope as the app-context list; the
+      // account's key count is small, so a single unpaginated page is returned.
+      const page = await parse<{ data?: ReadonlyArray<ScopedKeyResponse> }>(resp);
+      return page.data ?? [];
+    },
+
+    async revokeScopedKey(keyId) {
+      const resp = await fetch(
+        endpoint(deps.baseUrl, `/developer/scoped-keys/${encodeURIComponent(keyId)}`),
+        { method: 'DELETE', headers: await authHeader() },
+      );
+      // 204 with an empty body on success; parse() still maps errors.
+      await parse<void>(resp);
+    },
+
+    async getAdminLogs(query) {
+      const params = new URLSearchParams({ tenant: deps.tenant, startTime: query.startTime });
+      if (query.endTime) params.set('endTime', query.endTime);
+      if (query.resource) params.set('resource', query.resource);
+      if (query.method) params.set('method', query.method);
+      if (query.keyId) params.set('keyId', query.keyId);
+      if (query.contextId) params.set('contextId', query.contextId);
+      if (query.errorsOnly) params.set('errorsOnly', 'true');
+      if (query.limit !== undefined) params.set('limit', String(query.limit));
+      const resp = await fetch(
+        endpoint(deps.baseUrl, `/developer/logs?${params.toString()}`),
+        { method: 'GET', headers: await authHeader() },
+      );
+      return parse<AdminLogsResponse>(resp);
+    },
   };
 }
 
@@ -178,7 +284,7 @@ export function createDeveloperApi(deps: {
  * the tenant gate, so a missing membership is a wiring bug, and silently
  * defaulting the tenant kind could target the wrong tenant.
  */
-export function useDeveloperApi(): DeveloperApi {
+export function useDeveloperApi(tenantOverride?: TenantKind): DeveloperApi {
   const { getIdToken } = useAuth();
   const { activeMembership } = useCurrentTenant();
 
@@ -189,7 +295,11 @@ export function useDeveloperApi(): DeveloperApi {
         'seeded with an active membership).',
     );
   }
-  const tenant: TenantKind = activeMembership.tenantKind === 'test' ? 'test' : 'live';
+  // Defaults to the active tenant's kind; a caller operating in a DIFFERENT
+  // environment (e.g. the scoped-key wizard's env radio) overrides it so the
+  // whole flow stays in one tenant.
+  const tenant: TenantKind =
+    tenantOverride ?? (activeMembership.tenantKind === 'test' ? 'test' : 'live');
 
   // Stable across renders for the same tenant kind so dependent queryFns don't
   // re-create their identity on every render.
@@ -206,6 +316,32 @@ export function useDeveloperApi(): DeveloperApi {
       createDeveloperApi({ baseUrl: API_CONFIG.developerApiBase, tenant, getIdToken }).createAppContext(input),
     [tenant, getIdToken],
   );
+  const deleteAppContext = useCallback(
+    (contextId: string) =>
+      createDeveloperApi({ baseUrl: API_CONFIG.developerApiBase, tenant, getIdToken }).deleteAppContext(contextId),
+    [tenant, getIdToken],
+  );
+  const listScopedKeys = useCallback(
+    () => createDeveloperApi({ baseUrl: API_CONFIG.developerApiBase, tenant, getIdToken }).listScopedKeys(),
+    [tenant, getIdToken],
+  );
+  const revokeScopedKey = useCallback(
+    (keyId: string) =>
+      createDeveloperApi({ baseUrl: API_CONFIG.developerApiBase, tenant, getIdToken }).revokeScopedKey(keyId),
+    [tenant, getIdToken],
+  );
+  const getAdminLogs = useCallback(
+    (query: AdminLogsQuery) =>
+      createDeveloperApi({ baseUrl: API_CONFIG.developerApiBase, tenant, getIdToken }).getAdminLogs(query),
+    [tenant, getIdToken],
+  );
 
-  return { listAppContexts, createAppContext };
+  return {
+    listAppContexts,
+    createAppContext,
+    deleteAppContext,
+    listScopedKeys,
+    revokeScopedKey,
+    getAdminLogs,
+  };
 }

@@ -30,7 +30,7 @@ import {
 } from './auth';
 import { COGNITO_CONFIG, API_CONFIG } from './config';
 import { BRAND } from './brand';
-import { ErrorBoundary } from '@vectros-ai/react';
+import { ErrorBoundary, VersionUpdateBanner } from '@vectros-ai/react';
 import { theme } from './theme';
 import { IntlProvider } from './i18n/IntlProvider';
 import { createQueryClient } from './lib/queryClient';
@@ -98,6 +98,12 @@ setPartnerApiTokenMinter((tenantId, contextId) =>
   authProvider.mintPartnerApiToken(tenantId, contextId ?? CONTROL_PLANE_CONTEXT),
 );
 
+// Build id baked in by the versionManifest() plugin in vite.config.ts. The
+// `typeof` guard keeps this a safe read if the define ever fails to apply —
+// it falls back to a non-deploy id so the banner simply disables itself
+// rather than throwing a ReferenceError at module load.
+const APP_VERSION = typeof __APP_VERSION__ === 'undefined' ? 'dev' : __APP_VERSION__;
+
 // 6. Mount.
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -126,6 +132,14 @@ ReactDOM.createRoot(rootElement).render(
         <IntlProvider>
           <ThemeProvider theme={theme}>
             <CssBaseline />
+            {/*
+              App-wide, route-independent: polls version.json and offers a
+              user-initiated refresh when a newer build is deployed, so a
+              long-open tab never strands on a stale shell (a pruned lazy chunk
+              would otherwise 404). Inside ThemeProvider for MUI theming;
+              outside the Router since it is not route-scoped.
+            */}
+            <VersionUpdateBanner currentVersion={APP_VERSION} />
             <BrowserRouter>
               <AuthProvider provider={authProvider}>
                 {/*

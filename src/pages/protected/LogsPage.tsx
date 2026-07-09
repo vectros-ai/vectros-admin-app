@@ -2,10 +2,11 @@
 // LogsPage — admin-app's Activity Logs surface.
 //
 // Functional scope:
-//   - Query `GET /v1/admin/logs` via `client.auth.getAdminLogs({...})`. The
-//     endpoint reads CloudWatch Logs Insights for `partner_request` log
-//     lines emitted by the Lambda handlers; request and response bodies are
-//     never logged (only metadata: method / path / status / duration / key id).
+//   - Read the account activity log via the owner-gated Developer API. The
+//     endpoint reads CloudWatch Logs Insights for request-completion log lines;
+//     request and response bodies are never logged (only metadata: method /
+//     path / status / duration / key id / context). Tenant-wide by default —
+//     every app context — with an optional single-context filter.
 //   - Time-range presets (30m, 1h, 6h, 24h) + custom datetime-local pickers.
 //   - Resource + method allow-list filters (mirror of the server's accepted
 //     resource / method values; out-of-list values are rejected with 400).
@@ -27,11 +28,10 @@
 // in-progress form state). Updating the filter form does NOT trigger a
 // refetch; the user commits via Fetch / Refresh.
 //
-// Tenant resolution: `useActiveTenantId()` returns the active tenant's real
-//   UUID (from `authProvider.getMemberships()`). That UUID selects which
-//   partner-API client/token issues the call via `vectrosApiClient(tenant)`;
-//   the backend derives the tenant scope from that token, so there
-//   is NO `tenantId` in the request body.
+// Tenant resolution: the Developer API resolves the account (its tenant + every
+//   context) from the account owner's session server-side; the client sends only
+//   the live/test selector. `useActiveTenantId()` is still used to namespace the
+//   query cache per active environment.
 //
 // Interaction model (mirrors the developer portal's logs page): the first
 // query is gated on an explicit Fetch (CloudWatch Logs Insights is metered),
@@ -46,7 +46,7 @@
 // that allow-list; keeping the two in sync is a soft contract.
 // ---------------------------------------------------------------------------
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Alert,
   Box,
@@ -79,14 +79,10 @@ import { LoadingBlock, SubmitButton } from '@vectros-ai/react';
 
 import { useActiveTenantId } from '../../auth';
 import { ApiErrorAlert } from '../../components/ApiErrorAlert';
-import { VectrosError, vectrosApiClient } from '../../api/vectrosApi';
-import type {
-  AdminLogsResponse,
-  GetAdminLogsRequest,
-  LogEntry,
-} from '../../api/vectrosApi';
+import { VectrosError } from '../../api/vectrosApi';
+import type { AdminLogsResponse, LogEntry } from '../../api/vectrosApi';
 import { useDeveloperApi } from '../../api/developerApi';
-import type { AppContextSummary } from '../../api/developerApi';
+import type { AdminLogsQuery, AppContextSummary } from '../../api/developerApi';
 import { accessQueryKeys } from '../../lib/accessQueryKeys';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
 
@@ -134,9 +130,9 @@ const KEY_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 /** Default result-set size; the server clamps to a hard cap of 500. */
 const DEFAULT_LIMIT = 200;
 
-/** The base data context, preferred as the default log view (most data-plane
- *  traffic lands here). Mirrors the server's reserved base-context id. */
-const DEFAULT_DATA_CONTEXT = 'default';
+/** Sentinel for the context selector's "All contexts" option — the default,
+ *  tenant-wide view. An empty context sends no context filter to the server. */
+const ALL_CONTEXTS = '';
 
 // ---------------------------------------------------------------------------
 // Time helpers — the `<input type="datetime-local">` value is a LOCAL-time
@@ -218,26 +214,21 @@ function defaultPendingFilters(): LogFilters {
 }
 
 /**
- * Build the SDK request body from current filters. Skips empty fields so the
- * request shape matches the SDK's `?param` semantics (omitting a query param
- * is different from sending `?param=`).
- *
- * The backend derives the tenant from the caller's token — there is
- * no `tenantId` in the request body. The active tenant still selects WHICH
- * partner-API client (and therefore which token) issues the call; see the
- * `vectrosApiClient(tenant)` call site.
+ * Build the query from current filters. Skips empty fields so the request shape
+ * matches `?param` semantics (omitting a query param is different from sending
+ * `?param=`). The account (tenant + all its contexts) is derived server-side
+ * from the account owner's session, not from the body.
  */
-function buildApiRequest(filters: LogFilters): GetAdminLogsRequest {
-  const req: GetAdminLogsRequest = {
+function buildApiRequest(filters: LogFilters): AdminLogsQuery {
+  return {
     startTime: localDateTimeToIsoUtc(filters.startTime),
     endTime: localDateTimeToIsoUtc(filters.endTime),
     limit: DEFAULT_LIMIT,
+    ...(filters.resource ? { resource: filters.resource } : {}),
+    ...(filters.method ? { method: filters.method } : {}),
+    ...(filters.keyId ? { keyId: filters.keyId } : {}),
+    ...(filters.errorsOnly ? { errorsOnly: true } : {}),
   };
-  if (filters.resource) req.resource = filters.resource;
-  if (filters.method) req.method = filters.method;
-  if (filters.keyId) req.keyId = filters.keyId;
-  if (filters.errorsOnly) req.errorsOnly = true;
-  return req;
 }
 
 // ---------------------------------------------------------------------------
@@ -329,20 +320,15 @@ export function LogsPage(): React.JSX.Element {
   // 1h window.
   const [preset, setPreset] = useState<number | null>(60);
 
-  // Which app context's API traffic to show. A browser bearer is confined to a
-  // single context, so this page mints a bearer for the SELECTED context and
-  // reads that context's logs — the only way to see traffic outside the admin
-  // context until the tenant-wide developer-API logs route lands (the proper
-  // cross-context fix; see the access-log epic). Starts on the base `default`
-  // data context (where most data-plane traffic lands); the effect below
-  // reconciles it only if this tenant has no `default`.
-  const [selectedContext, setSelectedContext] = useState<string>(DEFAULT_DATA_CONTEXT);
+  // Which app context's activity to show. The account activity log is tenant-wide
+  // by default (every context); the selector is an OPTIONAL filter that narrows to
+  // one context. Starts on "All contexts".
+  const [selectedContext, setSelectedContext] = useState<string>(ALL_CONTEXTS);
 
-  // Load the tenant's app contexts to populate the selector. Owner-gated
-  // developer API — the same source (and cache key) the App Contexts page uses,
-  // and the only surface that can enumerate every context (a confined bearer
-  // can't). Best-effort: if it fails, the selector falls back to the admin
-  // context and logs still work for it.
+  // Load the account's app contexts to populate the filter. Owner-gated developer
+  // API — the same source (and cache key) the App Contexts page uses, and the only
+  // surface that can enumerate every context. Best-effort: if it fails, the filter
+  // stays on "All contexts" and logs still work.
   const devApi = useDeveloperApi();
   const contextsQuery = useQuery({
     queryKey: accessQueryKeys.appContexts(),
@@ -355,17 +341,6 @@ export function LogsPage(): React.JSX.Element {
     () => contextsQuery.data ?? [],
     [contextsQuery.data],
   );
-  // Reconcile the selection once contexts load: if the current pick isn't a
-  // real context in this tenant (e.g. no `default`), fall back to the first
-  // available. The common case (a `default` context exists) is a no-op, so
-  // there's no selection flip / double-fetch on load.
-  useEffect(() => {
-    if (contexts.length === 0) return;
-    if (!contexts.some((c) => c.contextId === selectedContext)) {
-      const first = contexts[0]?.contextId;
-      if (first) setSelectedContext(first);
-    }
-  }, [contexts, selectedContext]);
 
   // Derived validation — purely from `pendingFilters`. The Apply button
   // disables when any is true; inline error messages render adjacent to
@@ -385,8 +360,8 @@ export function LogsPage(): React.JSX.Element {
   }, [pendingFilters.startTime, pendingFilters.endTime]);
   const applyDisabled = keyIdInvalid || timeRangeInvalid;
 
-  // Keyed on the selected context too: switching contexts (a distinct bearer +
-  // a distinct slice of traffic) re-queries on its own once a fetch has run.
+  // Keyed on the selected context too: changing the context filter re-queries on
+  // its own once a fetch has run.
   const queryKey = ['adminLogs', tenant, selectedContext, appliedFilters] as const;
   const logsQuery = useQuery<AdminLogsResponse>({
     queryKey,
@@ -396,14 +371,12 @@ export function LogsPage(): React.JSX.Element {
         // satisfies the type checker.
         return Promise.reject(new Error('No applied filters'));
       }
-      // Mint the partner-API bearer for the SELECTED context so the backend
-      // returns THAT context's logs (a confined bearer is bound to its own
-      // context). Empty selection (before the list resolves) falls back to the
-      // admin context. `tenant` selects which tenant's token; the backend
-      // derives tenant + context from the token, so neither is in the body.
-      return vectrosApiClient(tenant, selectedContext || undefined).auth.getAdminLogs(
-        buildApiRequest(appliedFilters),
-      );
+      // Account-wide read via the owner-gated developer API: no context filter
+      // returns activity across every context; a selected context narrows to it.
+      return devApi.getAdminLogs({
+        ...buildApiRequest(appliedFilters),
+        ...(selectedContext ? { contextId: selectedContext } : {}),
+      });
     },
     enabled: appliedFilters !== null,
   });
@@ -514,10 +487,9 @@ export function LogsPage(): React.JSX.Element {
         </Typography>
 
         <Stack spacing={2}>
-          {/* Scope row — which context's traffic, over what time window. The
-              controls are self-labelled, so no section legends are needed; one
-              aligned row keeps the form calm. A browser bearer is confined to
-              one context, so the Context selector scopes the whole view. */}
+          {/* Scope row — an optional context filter (default: all contexts), over
+              what time window. The controls are self-labelled, so no section
+              legends are needed; one aligned row keeps the form calm. */}
           <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
             <FormControl size="small" sx={{ minWidth: 190 }}>
               <InputLabel id="logs-context-label">
@@ -527,13 +499,19 @@ export function LogsPage(): React.JSX.Element {
                 labelId="logs-context-label"
                 label={intl.formatMessage({ id: 'logs.contextLabel' })}
                 value={
+                  selectedContext === ALL_CONTEXTS ||
                   contexts.some((c) => c.contextId === selectedContext)
                     ? selectedContext
-                    : ''
+                    : ALL_CONTEXTS
                 }
                 onChange={(e) => setSelectedContext(e.target.value)}
-                disabled={contextsQuery.isLoading || contexts.length === 0}
+                disabled={contextsQuery.isLoading}
               >
+                <MenuItem value={ALL_CONTEXTS}>
+                  <em>
+                    <FormattedMessage id="logs.contextAll" />
+                  </em>
+                </MenuItem>
                 {contexts.map((c) => (
                   <MenuItem key={c.contextId ?? ''} value={c.contextId ?? ''}>
                     {c.contextId}

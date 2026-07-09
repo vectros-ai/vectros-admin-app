@@ -2,22 +2,22 @@
 // KeysPage — Scoped Keys (ssk_*) management surface.
 //
 // Functional scope (list view):
-//   - List scoped keys via `client.auth.listScopedKeys()` (partner-wide; the
-//     dev-portal source documents this — the response includes keys across
-//     both live + test tenants and a `tenantId` column surfaces which one).
-//     v1 doesn't filter by the active TenantSwitcher env — server-side
-//     filtering would need an SDK + backend param. Captured as a follow-up.
-//   - Revoke a key via `client.auth.revokeScopedKey({ keyId })`, gated by a
-//     confirmation dialog that surfaces the ~5-minute Rust-authorizer cache
-//     window so admins aren't surprised by lingering 401s.
+//   - List scoped keys via the account-wide developer API
+//     (`useDeveloperApi().listScopedKeys()`): every key across both environments
+//     and ALL app contexts. A context-pinned bearer only ever sees its own
+//     context's keys, so the account-wide view lives on the owner-gated developer
+//     API; the `tenantId` + `contextId` columns surface where each key lives.
+//   - Revoke a key via `devApi.revokeScopedKey(keyId)`, gated by a confirmation
+//     dialog that surfaces the ~5-minute authorizer cache window so admins aren't
+//     surprised by lingering 401s.
 //   - Per-row chips for user type (HUMAN / SERVICE) + key status (active /
-//     revoked), matching the dev-portal idioms partners will already know.
+//     revoked).
 //
 // Built on TanStack Query: useQuery for the list + useMutation for revoke.
 // Refresh button invalidates ['scopedKeys'].
 //
 // "Create scoped key" opens the 5-step <ScopedKeyCreateDialog> wizard
-// (user → key name → contexts → roles → review).
+// (user → key name → context → profile → review).
 // ---------------------------------------------------------------------------
 
 import { useState } from 'react';
@@ -50,34 +50,25 @@ import SmartToyIcon from '@mui/icons-material/SmartToy';
 import { FormattedMessage, useIntl } from 'react-intl';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { useActiveTenantId, useCurrentTenant } from '../../auth';
-import { vectrosApiClient } from '../../api/vectrosApi';
+import { useCurrentTenant } from '../../auth';
+import { useDeveloperApi } from '../../api/developerApi';
 import type { ScopedKeyResponse } from '../../api/vectrosApi';
 
 export function KeysPage(): React.JSX.Element {
   const intl = useIntl();
-  const tenant = useActiveTenantId();
   const { activeMembership } = useCurrentTenant();
+  const devApi = useDeveloperApi();
   const queryClient = useQueryClient();
 
-  // Server-state — partner-wide list of scoped keys. queryKey is
-  // intentionally NOT tenant-namespaced: the SDK's listScopedKeys()
-  // returns ALL keys across the partner (no tenant filter on the
-  // request). Adding `tenant` to the key would just refetch the SAME
-  // data into a different cache bucket when TenantSwitcher flips.
-  // The tenantId column on each row + the (future) tenant-scoped
-  // filter UI handle the "viewing live vs test" framing client-side.
-  // When the backend adds a server-side `?tenant=` param, add tenant to
-  // the queryKey here at the same time.
+  // Server-state — every scoped key in the account, across both environments and
+  // ALL app contexts. A context-pinned bearer only ever sees its own context's
+  // keys, so the list comes from the account-wide Developer API; the tenantId +
+  // contextId columns on each row surface where each key lives. The queryKey is
+  // intentionally NOT tenant-namespaced — the same account-wide list backs both
+  // environments, so switching the TenantSwitcher must not refetch a new bucket.
   const keysQuery = useQuery({
     queryKey: ['scopedKeys'],
-    // listScopedKeys returns the `{ data, nextCursor }` page but — unlike
-    // the context-scoped auth lists — exposes no startFrom/limit params in the
-    // SDK request surface, so it cannot be drained. We surface the first page.
-    // Follow-up: add pagination params to the listScopedKeys request so this
-    // can drain like the others (partners may hold more keys than one page).
-    queryFn: async () =>
-      (await vectrosApiClient(tenant).auth.listScopedKeys()).data ?? [],
+    queryFn: () => devApi.listScopedKeys(),
   });
   const keys = keysQuery.data ?? null;
 
@@ -91,8 +82,7 @@ export function KeysPage(): React.JSX.Element {
   const [createOpen, setCreateOpen] = useState(false);
 
   const revokeMutation = useMutation({
-    mutationFn: (vars: { keyId: string }) =>
-      vectrosApiClient(tenant).auth.revokeScopedKey({ keyId: vars.keyId }),
+    mutationFn: (vars: { keyId: string }) => devApi.revokeScopedKey(vars.keyId),
     onSuccess: () => {
       const keyName = revokeTarget?.keyName ?? '';
       setSuccessMessage(intl.formatMessage({ id: 'keys.revokeSuccess' }, { keyName }));

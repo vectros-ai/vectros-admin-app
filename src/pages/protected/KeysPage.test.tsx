@@ -19,9 +19,10 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TestIntlProvider } from '../../test/intl';
-import { pageOf } from '../../test/pageOf';
 import { vectrosApiClient, VectrosError } from '../../api/vectrosApi';
 import type * as VectrosApi from '../../api/vectrosApi';
+import { useDeveloperApi } from '../../api/developerApi';
+import type * as DevApi from '../../api/developerApi';
 import { TestTenantProvider } from '../../test/TestTenantProvider';
 import { KeysPage } from './KeysPage';
 
@@ -30,6 +31,14 @@ vi.mock('../../api/vectrosApi', async (importOriginal) => {
   return {
     ...actual,
     vectrosApiClient: vi.fn(),
+  };
+});
+
+vi.mock('../../api/developerApi', async (importOriginal) => {
+  const actual = await importOriginal<typeof DevApi>();
+  return {
+    ...actual,
+    useDeveloperApi: vi.fn(),
   };
 });
 
@@ -73,23 +82,31 @@ const SAMPLE_KEYS = [
   },
 ];
 
-function makeMockClient(overrides: {
+function makeMockDevApi(overrides: {
   listScopedKeys?: ReturnType<typeof vi.fn>;
   revokeScopedKey?: ReturnType<typeof vi.fn>;
 } = {}) {
   return {
-    auth: {
-      listScopedKeys:
-        overrides.listScopedKeys ?? vi.fn().mockResolvedValue(pageOf(SAMPLE_KEYS)),
-      revokeScopedKey:
-        overrides.revokeScopedKey ?? vi.fn().mockResolvedValue(undefined),
-    },
+    // Developer API returns the array directly (unwrapped from the page envelope).
+    listScopedKeys:
+      overrides.listScopedKeys ?? vi.fn().mockResolvedValue(SAMPLE_KEYS),
+    revokeScopedKey:
+      overrides.revokeScopedKey ?? vi.fn().mockResolvedValue(undefined),
+    // Other DeveloperApi methods the page subtree (ScopedKeyCreateDialog) may touch.
+    listAppContexts: vi.fn().mockResolvedValue({ data: [], nextCursor: null }),
+    createAppContext: vi.fn(),
+    deleteAppContext: vi.fn(),
+    getAdminLogs: vi.fn(),
   };
 }
 
-function renderPage(opts: { client?: ReturnType<typeof makeMockClient> } = {}) {
-  const client = opts.client ?? makeMockClient();
-  vi.mocked(vectrosApiClient).mockReturnValue(client as never);
+function renderPage(opts: { devApi?: ReturnType<typeof makeMockDevApi> } = {}) {
+  const devApi = opts.devApi ?? makeMockDevApi();
+  vi.mocked(useDeveloperApi).mockReturnValue(devApi as never);
+  // ScopedKeyCreateDialog (rendered by KeysPage) imports vectrosApiClient at
+  // module load; stub it so the dialog can mount. Its context-scoped calls only
+  // fire on later wizard steps the KeysPage tests don't reach.
+  vi.mocked(vectrosApiClient).mockReturnValue({ auth: {}, identity: {} } as never);
   const utils = render(
     <TestIntlProvider>
       <MemoryRouter>
@@ -99,7 +116,7 @@ function renderPage(opts: { client?: ReturnType<typeof makeMockClient> } = {}) {
       </MemoryRouter>
     </TestIntlProvider>,
   );
-  return { ...utils, client };
+  return { ...utils, devApi };
 }
 
 beforeEach(() => {
@@ -114,7 +131,7 @@ afterEach(() => {
 describe('KeysPage', () => {
   it('shows a loading spinner while keys are being fetched', () => {
     const listScopedKeys = vi.fn(() => new Promise(() => undefined)); // never resolves
-    renderPage({ client: makeMockClient({ listScopedKeys }) });
+    renderPage({ devApi: makeMockDevApi({ listScopedKeys }) });
     expect(screen.getByLabelText(/loading scoped keys/i)).toBeInTheDocument();
   });
 
@@ -133,7 +150,7 @@ describe('KeysPage', () => {
 
   it('renders the empty state when listScopedKeys returns []', async () => {
     renderPage({
-      client: makeMockClient({ listScopedKeys: vi.fn().mockResolvedValue(pageOf([])) }),
+      devApi: makeMockDevApi({ listScopedKeys: vi.fn().mockResolvedValue([]) }),
     });
     await waitFor(() =>
       expect(screen.getByText(/No scoped keys yet/i)).toBeInTheDocument(),
@@ -143,7 +160,7 @@ describe('KeysPage', () => {
   it('shows an error alert if listScopedKeys fails', async () => {
     const err = new VectrosError({ message: 'Backend unavailable', statusCode: 503 });
     renderPage({
-      client: makeMockClient({ listScopedKeys: vi.fn().mockRejectedValue(err) }),
+      devApi: makeMockDevApi({ listScopedKeys: vi.fn().mockRejectedValue(err) }),
     });
     await waitFor(() => {
       expect(
@@ -180,7 +197,7 @@ describe('KeysPage', () => {
 
   it('revoke flow — confirms then calls revokeScopedKey({ keyId }) and refreshes', async () => {
     const user = userEvent.setup();
-    const { client } = renderPage();
+    const { devApi } = renderPage();
     await screen.findByText('research-bot prod');
 
     // Open the confirmation dialog for the first row (ssk_alice).
@@ -195,10 +212,10 @@ describe('KeysPage', () => {
     await user.click(within(confirmDialog).getByRole('button', { name: /^revoke$/i }));
 
     await waitFor(() => {
-      expect(client.auth.revokeScopedKey).toHaveBeenCalledWith({ keyId: 'ssk_alice' });
+      expect(devApi.revokeScopedKey).toHaveBeenCalledWith('ssk_alice');
     });
     // List was re-fetched after revoke.
-    expect(client.auth.listScopedKeys).toHaveBeenCalledTimes(2);
+    expect(devApi.listScopedKeys).toHaveBeenCalledTimes(2);
   });
 
   it('renders the right user-type chip per row', async () => {
@@ -213,7 +230,7 @@ describe('KeysPage', () => {
 
   it('loading state uses the labeled LoadingBlock spinner (a11y)', () => {
     const listScopedKeys = vi.fn(() => new Promise(() => undefined)); // never resolves
-    renderPage({ client: makeMockClient({ listScopedKeys }) });
+    renderPage({ devApi: makeMockDevApi({ listScopedKeys }) });
     // The spinner carries an accessible name (LoadingBlock bakes aria-label
     // onto the CircularProgress) — never a bare unlabeled spinner.
     const block = screen.getByRole('progressbar', { name: /loading scoped keys/i });
@@ -227,7 +244,7 @@ describe('KeysPage', () => {
       body: { message: 'Backend unavailable', requestId: 'req_load_123' },
     });
     renderPage({
-      client: makeMockClient({ listScopedKeys: vi.fn().mockRejectedValue(err) }),
+      devApi: makeMockDevApi({ listScopedKeys: vi.fn().mockRejectedValue(err) }),
     });
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent(/Could not load scoped keys\..*Backend unavailable/i);
@@ -242,8 +259,8 @@ describe('KeysPage', () => {
       statusCode: 500,
       body: { message: 'revoke rejected', requestId: 'req_revoke_err' },
     });
-    const { client } = renderPage({
-      client: makeMockClient({
+    const { devApi } = renderPage({
+      devApi: makeMockDevApi({
         revokeScopedKey: vi.fn().mockRejectedValue(err),
       }),
     });
@@ -256,7 +273,7 @@ describe('KeysPage', () => {
     await user.click(within(confirmDialog).getByRole('button', { name: /^revoke$/i }));
 
     await waitFor(() =>
-      expect(client.auth.revokeScopedKey).toHaveBeenCalledWith({ keyId: 'ssk_alice' }),
+      expect(devApi.revokeScopedKey).toHaveBeenCalledWith('ssk_alice'),
     );
 
     // The dialog STAYS OPEN — the canonical "error behind the modal" bug is
@@ -274,7 +291,7 @@ describe('KeysPage', () => {
     const user = userEvent.setup();
     // A revoke that never resolves — pins the pending/disabled state.
     const revokeScopedKey = vi.fn(() => new Promise(() => undefined));
-    renderPage({ client: makeMockClient({ revokeScopedKey }) });
+    renderPage({ devApi: makeMockDevApi({ revokeScopedKey }) });
     await screen.findByText('research-bot prod');
 
     await user.click(screen.getAllByRole('button', { name: /^revoke$/i })[0]!);
@@ -292,7 +309,7 @@ describe('KeysPage', () => {
     const user = userEvent.setup();
     const err = new VectrosError({ message: 'boom', statusCode: 500 });
     renderPage({
-      client: makeMockClient({ revokeScopedKey: vi.fn().mockRejectedValue(err) }),
+      devApi: makeMockDevApi({ revokeScopedKey: vi.fn().mockRejectedValue(err) }),
     });
     await screen.findByText('research-bot prod');
 

@@ -14,3 +14,8 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+// Build id baked in by the versionManifest() plugin in vite.config.ts (the
+// short git SHA in a real build, 'dev' in the dev server). Consumed by
+// VersionUpdateBanner to detect a newer deployed build.
+declare const __APP_VERSION__: string;

@@ -27,23 +27,14 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { TestIntlProvider } from '../../test/intl';
-import { vectrosApiClient, VectrosError } from '../../api/vectrosApi';
-import type * as VectrosApi from '../../api/vectrosApi';
+import { VectrosError } from '../../api/vectrosApi';
 import { useDeveloperApi } from '../../api/developerApi';
 import type * as DeveloperApi from '../../api/developerApi';
 import { TestTenantProvider, TEST_TENANT_ID } from '../../test/TestTenantProvider';
 import { LogsPage } from './LogsPage';
 
-vi.mock('../../api/vectrosApi', async (importOriginal) => {
-  const actual = await importOriginal<typeof VectrosApi>();
-  return {
-    ...actual,
-    vectrosApiClient: vi.fn(),
-  };
-});
-
-// The context selector enumerates the tenant's contexts via the owner-gated
-// developer API; mock the hook so the selector is deterministic in tests.
+// Both the context selector AND the logs read go through the owner-gated
+// developer API; mock the hook so the whole page is deterministic in tests.
 vi.mock('../../api/developerApi', async (importOriginal) => {
   const actual = await importOriginal<typeof DeveloperApi>();
   return {
@@ -103,24 +94,26 @@ const SAMPLE_RESPONSE = {
 
 interface MockOverrides {
   getAdminLogs?: ReturnType<typeof vi.fn>;
+  listAppContexts?: ReturnType<typeof vi.fn>;
 }
 
-function makeMockClient(overrides: MockOverrides = {}) {
+function makeMockDevApi(overrides: MockOverrides = {}) {
   return {
-    auth: {
-      getAdminLogs:
-        overrides.getAdminLogs ?? vi.fn().mockResolvedValue(SAMPLE_RESPONSE),
-    },
+    getAdminLogs:
+      overrides.getAdminLogs ?? vi.fn().mockResolvedValue(SAMPLE_RESPONSE),
+    listAppContexts:
+      overrides.listAppContexts ??
+      vi.fn().mockResolvedValue({ data: CONTEXTS, nextCursor: null }),
+    createAppContext: vi.fn(),
+    deleteAppContext: vi.fn(),
+    listScopedKeys: vi.fn(),
+    revokeScopedKey: vi.fn(),
   };
 }
 
-function renderPage(opts: { client?: ReturnType<typeof makeMockClient> } = {}) {
-  const client = opts.client ?? makeMockClient();
-  vi.mocked(vectrosApiClient).mockReturnValue(client as never);
-  vi.mocked(useDeveloperApi).mockReturnValue({
-    listAppContexts: vi.fn().mockResolvedValue({ data: CONTEXTS, nextCursor: null }),
-    createAppContext: vi.fn(),
-  } as never);
+function renderPage(opts: { devApi?: ReturnType<typeof makeMockDevApi> } = {}) {
+  const devApi = opts.devApi ?? makeMockDevApi();
+  vi.mocked(useDeveloperApi).mockReturnValue(devApi as never);
   const utils = render(
     <TestIntlProvider>
       <MemoryRouter>
@@ -130,7 +123,7 @@ function renderPage(opts: { client?: ReturnType<typeof makeMockClient> } = {}) {
       </MemoryRouter>
     </TestIntlProvider>,
   );
-  return { ...utils, client };
+  return { ...utils, devApi };
 }
 
 afterEach(() => {
@@ -150,12 +143,12 @@ describe('LogsPage', () => {
   });
 
   it('shows the idle state and does NOT fire a query before Fetch is clicked', () => {
-    const { client } = renderPage();
+    const { devApi } = renderPage();
     expect(
       screen.getByText(/click fetch logs to query/i),
     ).toBeInTheDocument();
     // Query never fires on mount — explicit user action only.
-    expect(client.auth.getAdminLogs).not.toHaveBeenCalled();
+    expect(devApi.getAdminLogs).not.toHaveBeenCalled();
   });
 
   it('seeds the datetime pickers with the last-1h window', () => {
@@ -182,7 +175,7 @@ describe('LogsPage', () => {
 
   it('clicking the 6h preset widens the time window without firing a query', async () => {
     const user = userEvent.setup();
-    const { client } = renderPage();
+    const { devApi } = renderPage();
     const startTime = screen.getByLabelText(/^from$/i) as HTMLInputElement;
     const initialStart = startTime.value;
 
@@ -194,18 +187,18 @@ describe('LogsPage', () => {
     const endTime = screen.getByLabelText(/^to$/i) as HTMLInputElement;
     const gapMs = new Date(endTime.value).getTime() - new Date(newStart).getTime();
     expect(Math.abs(gapMs - 6 * 60 * 60 * 1000)).toBeLessThan(1000);
-    expect(client.auth.getAdminLogs).not.toHaveBeenCalled();
+    expect(devApi.getAdminLogs).not.toHaveBeenCalled();
   });
 
   it('clicking Fetch sends a request with the right shape — no tenantId', async () => {
     const user = userEvent.setup();
-    const { client } = renderPage();
+    const { devApi } = renderPage();
     await user.click(screen.getByRole('button', { name: /fetch logs/i }));
 
     await waitFor(() => {
-      expect(client.auth.getAdminLogs).toHaveBeenCalledTimes(1);
+      expect(devApi.getAdminLogs).toHaveBeenCalledTimes(1);
     });
-    const payload = (client.auth.getAdminLogs as ReturnType<typeof vi.fn>).mock
+    const payload = (devApi.getAdminLogs as ReturnType<typeof vi.fn>).mock
       .calls[0]?.[0] as Record<string, unknown>;
 
     // SDK 0.8.8: the request body carries NO tenantId — the backend
@@ -248,7 +241,7 @@ describe('LogsPage', () => {
   it('renders the empty state when entries is []', async () => {
     const user = userEvent.setup();
     renderPage({
-      client: makeMockClient({
+      devApi: makeMockDevApi({
         getAdminLogs: vi.fn().mockResolvedValue({
           ...SAMPLE_RESPONSE,
           entries: [],
@@ -270,7 +263,7 @@ describe('LogsPage', () => {
   it('renders the truncation banner when data.truncated is true', async () => {
     const user = userEvent.setup();
     renderPage({
-      client: makeMockClient({
+      devApi: makeMockDevApi({
         getAdminLogs: vi.fn().mockResolvedValue({
           ...SAMPLE_RESPONSE,
           truncated: true,
@@ -288,7 +281,7 @@ describe('LogsPage', () => {
     const user = userEvent.setup();
     const err = new VectrosError({ message: 'Not authorized', statusCode: 403 });
     renderPage({
-      client: makeMockClient({
+      devApi: makeMockDevApi({
         getAdminLogs: vi.fn().mockRejectedValue(err),
       }),
     });
@@ -311,7 +304,7 @@ describe('LogsPage', () => {
       body: { message: 'Not authorized', requestId: 'req-logs-abc123' },
     });
     renderPage({
-      client: makeMockClient({
+      devApi: makeMockDevApi({
         getAdminLogs: vi.fn().mockRejectedValue(err),
       }),
     });
@@ -333,7 +326,7 @@ describe('LogsPage', () => {
           resolveFetch = resolve;
         }),
     );
-    renderPage({ client: makeMockClient({ getAdminLogs }) });
+    renderPage({ devApi: makeMockDevApi({ getAdminLogs }) });
     await user.click(screen.getByRole('button', { name: /fetch logs/i }));
 
     // LoadingBlock renders a CircularProgress with an accessible label — a
@@ -376,7 +369,7 @@ describe('LogsPage', () => {
 
   it('errors-only toggle flips aria-pressed and applies as a filter', async () => {
     const user = userEvent.setup();
-    const { client } = renderPage();
+    const { devApi } = renderPage();
     const toggle = screen.getByRole('button', { name: /errors only/i });
     expect(toggle).toHaveAttribute('aria-pressed', 'false');
     await user.click(toggle);
@@ -384,34 +377,34 @@ describe('LogsPage', () => {
 
     await user.click(screen.getByRole('button', { name: /fetch logs/i }));
     await waitFor(() => {
-      expect(client.auth.getAdminLogs).toHaveBeenCalledTimes(1);
+      expect(devApi.getAdminLogs).toHaveBeenCalledTimes(1);
     });
-    const payload = (client.auth.getAdminLogs as ReturnType<typeof vi.fn>).mock
+    const payload = (devApi.getAdminLogs as ReturnType<typeof vi.fn>).mock
       .calls[0]?.[0] as Record<string, unknown>;
     expect(payload.errorsOnly).toBe(true);
   });
 
   it('Refresh is disabled in idle, enabled after Apply, and refetches on click', async () => {
     const user = userEvent.setup();
-    const { client } = renderPage();
+    const { devApi } = renderPage();
     const refresh = screen.getByRole('button', { name: /^refresh$/i });
     expect(refresh).toBeDisabled();
 
     await user.click(screen.getByRole('button', { name: /fetch logs/i }));
     await waitFor(() => {
-      expect(client.auth.getAdminLogs).toHaveBeenCalledTimes(1);
+      expect(devApi.getAdminLogs).toHaveBeenCalledTimes(1);
     });
     expect(refresh).toBeEnabled();
 
     await user.click(refresh);
     await waitFor(() => {
-      expect(client.auth.getAdminLogs).toHaveBeenCalledTimes(2);
+      expect(devApi.getAdminLogs).toHaveBeenCalledTimes(2);
     });
   });
 
   it('selecting a resource + method applies them as filters', async () => {
     const user = userEvent.setup();
-    const { client } = renderPage();
+    const { devApi } = renderPage();
     // Open the Resource Select and pick 'documents'.
     await user.click(screen.getByLabelText(/^resource$/i));
     await user.click(await screen.findByRole('option', { name: /^documents$/i }));
@@ -421,9 +414,9 @@ describe('LogsPage', () => {
 
     await user.click(screen.getByRole('button', { name: /fetch logs/i }));
     await waitFor(() => {
-      expect(client.auth.getAdminLogs).toHaveBeenCalledTimes(1);
+      expect(devApi.getAdminLogs).toHaveBeenCalledTimes(1);
     });
-    const payload = (client.auth.getAdminLogs as ReturnType<typeof vi.fn>).mock
+    const payload = (devApi.getAdminLogs as ReturnType<typeof vi.fn>).mock
       .calls[0]?.[0] as Record<string, unknown>;
     expect(payload.resource).toBe('documents');
     expect(payload.method).toBe('POST');
@@ -451,26 +444,26 @@ describe('LogsPage', () => {
 
   it('auto-refetches when a discrete filter changes after the first fetch', async () => {
     const user = userEvent.setup();
-    const { client } = renderPage();
+    const { devApi } = renderPage();
     await user.click(screen.getByRole('button', { name: /fetch logs/i }));
-    await waitFor(() => expect(client.auth.getAdminLogs).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(devApi.getAdminLogs).toHaveBeenCalledTimes(1));
 
     // A preset pick now re-queries immediately — no second Fetch press needed.
     await user.click(screen.getByRole('button', { name: '6h' }));
-    await waitFor(() => expect(client.auth.getAdminLogs).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(devApi.getAdminLogs).toHaveBeenCalledTimes(2));
 
     // So does toggling errors-only.
     await user.click(screen.getByRole('button', { name: /errors only/i }));
-    await waitFor(() => expect(client.auth.getAdminLogs).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(devApi.getAdminLogs).toHaveBeenCalledTimes(3));
   });
 
   it('does NOT auto-refetch on a filter change before the first fetch', async () => {
     const user = userEvent.setup();
-    const { client } = renderPage();
+    const { devApi } = renderPage();
     // No fetch yet — picking a preset updates the window but fires no query.
     await user.click(screen.getByRole('button', { name: '6h' }));
     await user.click(screen.getByRole('button', { name: /errors only/i }));
-    expect(client.auth.getAdminLogs).not.toHaveBeenCalled();
+    expect(devApi.getAdminLogs).not.toHaveBeenCalled();
   });
 
   it('renders the Context column with each entry’s contextId', async () => {
@@ -482,29 +475,31 @@ describe('LogsPage', () => {
     expect(within(table).getByText('vectros-admin')).toBeInTheDocument();
   });
 
-  it('defaults the context to the base `default` data context (not the admin context)', async () => {
+  it('defaults to ALL contexts — the first read carries no context filter', async () => {
     const user = userEvent.setup();
-    const { client } = renderPage();
+    const { devApi } = renderPage();
     await user.click(screen.getByRole('button', { name: /fetch logs/i }));
-    await waitFor(() => expect(client.auth.getAdminLogs).toHaveBeenCalledTimes(1));
-    // The logs bearer is minted for `default` — where data-plane traffic lands —
-    // rather than the admin context (which has almost none).
-    expect(vectrosApiClient).toHaveBeenCalledWith(TEST_TENANT_ID, 'default');
+    await waitFor(() => expect(devApi.getAdminLogs).toHaveBeenCalledTimes(1));
+    // Tenant-wide by default: no contextId is sent, so the read spans every
+    // context (the account-wide view the old per-context stopgap couldn't give).
+    const query = devApi.getAdminLogs.mock.calls[0]![0] as { contextId?: string };
+    expect(query.contextId).toBeUndefined();
   });
 
-  it('refetches with the chosen context’s bearer when the selector changes', async () => {
+  it('refetches with a contextId filter when the selector narrows to a context', async () => {
     const user = userEvent.setup();
-    const { client } = renderPage();
+    const { devApi } = renderPage();
     await user.click(screen.getByRole('button', { name: /fetch logs/i }));
-    await waitFor(() => expect(client.auth.getAdminLogs).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(devApi.getAdminLogs).toHaveBeenCalledTimes(1));
 
-    // Switch the Context selector to a different context.
+    // Narrow the Context selector to a single context.
     await user.click(screen.getByLabelText(/^context$/i));
     await user.click(await screen.findByRole('option', { name: /^engineering$/i }));
 
-    // The switch re-queries on its own (no second Fetch press) with a bearer
-    // minted for the newly-selected context.
-    await waitFor(() => expect(client.auth.getAdminLogs).toHaveBeenCalledTimes(2));
-    expect(vectrosApiClient).toHaveBeenCalledWith(TEST_TENANT_ID, 'engineering');
+    // The switch re-queries on its own (no second Fetch press), now filtered to
+    // that context (not a separate per-context credential).
+    await waitFor(() => expect(devApi.getAdminLogs).toHaveBeenCalledTimes(2));
+    const query = devApi.getAdminLogs.mock.calls[1]![0] as { contextId?: string };
+    expect(query.contextId).toBe('engineering');
   });
 });

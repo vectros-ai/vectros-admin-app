@@ -328,7 +328,8 @@
   "logs.queryDuration": "{ms}ms",
 
   "logs.contextLabel": "Context",
-  "logs.contextHelp": "API traffic is shown for one app context at a time. Switch contexts to inspect another's calls.",
+  "logs.contextAll": "All contexts",
+  "logs.contextHelp": "Activity is shown across every app context by default. Pick a context to narrow the view to it.",
   "logs.rangeLegend": "Time range",
   "logs.presetLast30m": "30m",
   "logs.presetLast1h": "1h",
@@ -453,7 +454,13 @@
   "access.contexts.editDialog.title": "Edit app context",
   "access.contexts.editDialog.saveError": "Could not save app context. {message}",
 
-  "access.contexts.deleteUnavailable": "Deleting an app context isn't available here yet — context teardown is coming soon.",
+  "access.contexts.deleteConfirm.title": "Delete app context {contextId}?",
+  "access.contexts.deleteConfirm.body": "This permanently deletes the app context and everything in it — every record, document, folder, schema, role, and access profile. Scoped API keys for this context are revoked and stop working within ~5 minutes. This cannot be undone.",
+  "access.contexts.deleteConfirm.bodyCounts": "Right now it contains {roles, plural, one {# role} other {# roles}} and {profiles, plural, one {# access profile} other {# access profiles}}.",
+  "access.contexts.deleteConfirm.confirmLabel": "Context ID",
+  "access.contexts.deleteConfirm.confirmHelper": "Type {contextId} to confirm.",
+  "access.contexts.deleteConfirm.cta": "Delete app context",
+  "access.contexts.purging": "Deleting…",
   "access.contexts.editDetails": "Edit name & description",
 
   "access.roles.title": "Roles",

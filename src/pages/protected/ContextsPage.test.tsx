@@ -13,15 +13,20 @@
 //   6. Table renders when N>1, one row per context.
 //   7. Per-row role + profile counts surface as numbers when their
 //      queries resolve; "…" placeholder while loading.
-//   8. Every row shows Edit (enabled) + a DISABLED Delete (context teardown is
-//      a root-authority op the browser can't perform — surfaced as "coming",
-//      not a 403 dead-end).
+//   8. Delete affordance: non-reserved rows show an enabled Delete; the
+//      reserved vectros-admin (and default) rows hide it entirely (the server
+//      refuses them unconditionally); rows already tearing down hide it too
+//      and carry the "Deleting…" marker.
 //   9. Create dialog opens, validates ID format inline, calls the developer
 //      API's createAppContext, closes on success, invalidates the list.
 //  10. Edit dialog opens with prefilled fields, contextId disabled,
 //      calls updateAppContext with the SDK's `{contextId, body}` envelope.
 //  11. Row click routes to /access/contexts/:id (excluding action cell
 //      clicks, which are stopped).
+//  12. Delete dialog: typed-echo arming (CTA disabled until the contextId is
+//      typed exactly), calls the developer API's deleteAppContext on submit,
+//      closes on success; failure surfaces an in-dialog role="alert" and the
+//      dialog stays open.
 // ---------------------------------------------------------------------------
 
 import {
@@ -93,6 +98,8 @@ interface MockOverrides {
   listAppContexts?: ReturnType<typeof vi.fn>;
   /** Developer-API create. */
   createAppContext?: ReturnType<typeof vi.fn>;
+  /** Developer-API delete (owner-gated teardown). */
+  deleteAppContext?: ReturnType<typeof vi.fn>;
   /** Partner-SDK per-context calls (counts, edit). */
   listRoles?: ReturnType<typeof vi.fn>;
   listAccessProfiles?: ReturnType<typeof vi.fn>;
@@ -118,13 +125,14 @@ function makeMockClient(o: MockOverrides = {}) {
   };
 }
 
-/** Developer-API hook mock: tenant-wide list + owner-gated create. */
+/** Developer-API hook mock: tenant-wide list + owner-gated create/delete. */
 function makeMockDeveloperApi(o: MockOverrides = {}) {
   return {
     listAppContexts:
       o.listAppContexts ??
       vi.fn().mockResolvedValue(pageOf([VECTROS_ADMIN_CTX, ENGINEERING_CTX])),
     createAppContext: o.createAppContext ?? vi.fn().mockResolvedValue({ contextId: 'new-ctx' }),
+    deleteAppContext: o.deleteAppContext ?? vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -233,7 +241,7 @@ describe('ContextsPage', () => {
     expect(screen.getAllByText('0').length).toBeGreaterThanOrEqual(2);
   });
 
-  it('shows a disabled Delete action on every row (teardown not available here yet)', async () => {
+  it('shows Delete on non-reserved rows only (reserved contexts hide it)', async () => {
     renderPage();
     // Wait for the table to actually render (not the subtitle's vectros-admin).
     await screen.findByRole('table');
@@ -241,13 +249,42 @@ describe('ContextsPage', () => {
     // rows[0] is the header.
     const adminRow = rows[1]!;
     const engRow = rows[2]!;
-    // Every row shows Edit (enabled) + Delete (disabled — context teardown is a
-    // root-authority op the browser can't perform, surfaced as a "coming" state
-    // rather than a 403 dead-end or a hidden control).
+    // Every row shows Edit (enabled). The reserved vectros-admin row hides
+    // Delete entirely (the server refuses reserved-context teardown
+    // unconditionally); the plain engineering row offers it enabled.
     for (const row of [adminRow, engRow]) {
       expect(within(row).getByRole('button', { name: /edit name & description/i })).toBeEnabled();
-      expect(within(row).getByRole('button', { name: /^delete$/i })).toBeDisabled();
     }
+    expect(within(adminRow).queryByRole('button', { name: /^delete$/i })).not.toBeInTheDocument();
+    expect(within(engRow).getByRole('button', { name: /^delete$/i })).toBeEnabled();
+  });
+
+  it('the reserved default row hides Delete too (server refuses it unconditionally)', async () => {
+    renderPage({
+      listAppContexts: vi.fn().mockResolvedValue(
+        pageOf([
+          VECTROS_ADMIN_CTX,
+          { id: 'tnt_test#default', contextId: 'default', name: 'Default' },
+          ENGINEERING_CTX,
+        ]),
+      ),
+    });
+    await screen.findByRole('table');
+    const defaultRow = screen.getAllByRole('row')[2]!;
+    expect(within(defaultRow).getByText('default')).toBeInTheDocument();
+    expect(within(defaultRow).queryByRole('button', { name: /^delete$/i })).not.toBeInTheDocument();
+  });
+
+  it('a context already tearing down hides Delete and shows the Deleting… marker', async () => {
+    renderPage({
+      listAppContexts: vi.fn().mockResolvedValue(
+        pageOf([VECTROS_ADMIN_CTX, { ...ENGINEERING_CTX, status: 'purging' }]),
+      ),
+    });
+    await screen.findByRole('table');
+    const engRow = screen.getAllByRole('row')[2]!;
+    expect(within(engRow).getByText(/deleting…/i)).toBeInTheDocument();
+    expect(within(engRow).queryByRole('button', { name: /^delete$/i })).not.toBeInTheDocument();
   });
 
   it('clicking a row navigates to that context detail', async () => {
@@ -423,6 +460,102 @@ describe('ContextsPage', () => {
     await user.type(within(dialog).getByRole('textbox', { name: /name/i }), 'TaskFlow');
     await user.click(within(dialog).getByRole('button', { name: /^create$/i }));
     expect(await within(dialog).findByText(/req_abc123/)).toBeInTheDocument();
+  });
+
+  // ---- delete dialog (typed-echo teardown) --------------------------
+
+  /** Open the delete dialog for the engineering row. */
+  async function openDeleteDialog(
+    user: ReturnType<typeof userEvent.setup>,
+  ): Promise<HTMLElement> {
+    await screen.findByRole('table');
+    const engRow = screen.getAllByRole('row')[2]!;
+    await user.click(within(engRow).getByRole('button', { name: /^delete$/i }));
+    return screen.findByRole('dialog', { name: /delete app context engineering/i });
+  }
+
+  it('Delete dialog: CTA stays disabled until the contextId is typed exactly', async () => {
+    const user = userEvent.setup();
+    const { developerApi } = renderPage();
+    const dialog = await openDeleteDialog(user);
+
+    const cta = within(dialog).getByRole('button', { name: /delete app context/i });
+    expect(cta).toBeDisabled();
+
+    const confirmInput = within(dialog).getByLabelText(/context id/i);
+    await user.type(confirmInput, 'engineerin');   // near-miss must not arm it
+    expect(cta).toBeDisabled();
+    await user.type(confirmInput, 'g');            // exact echo arms it
+    expect(cta).toBeEnabled();
+
+    await user.click(cta);
+    await waitFor(() => {
+      expect(developerApi.deleteAppContext).toHaveBeenCalledWith('engineering');
+    });
+    // Success closes the dialog.
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('dialog', { name: /delete app context engineering/i }),
+      ).not.toBeInTheDocument();
+    });
+    // ...and invalidates the contexts list so the row re-renders in its
+    // transitional "Deleting…" state (the initial load + the post-delete
+    // refetch = at least two list calls).
+    await waitFor(() => {
+      expect(developerApi.listAppContexts.mock.calls.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  it('Delete dialog: reopening after cancel starts disarmed (typed echo reset)', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    let dialog = await openDeleteDialog(user);
+
+    // Arm it, then cancel without deleting.
+    await user.type(within(dialog).getByLabelText(/context id/i), 'engineering');
+    expect(within(dialog).getByRole('button', { name: /delete app context/i })).toBeEnabled();
+    await user.click(within(dialog).getByRole('button', { name: /cancel/i }));
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('dialog', { name: /delete app context engineering/i }),
+      ).not.toBeInTheDocument();
+    });
+
+    // Reopen: the echo must be cleared and the destructive CTA disarmed —
+    // a stale echo would leave one un-typed click between the user and an
+    // irreversible cascade.
+    dialog = await openDeleteDialog(user);
+    expect(
+      (within(dialog).getByLabelText(/context id/i) as HTMLInputElement).value,
+    ).toBe('');
+    expect(within(dialog).getByRole('button', { name: /delete app context/i })).toBeDisabled();
+  });
+
+  it('Delete dialog: shows the live role/profile counts in the warning body', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    const dialog = await openDeleteDialog(user);
+    // Engineering has 1 role + 2 profiles (the count-query fixtures).
+    expect(
+      await within(dialog).findByText(/1 role and 2 access profiles/i),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByText(/cannot be undone/i)).toBeInTheDocument();
+  });
+
+  it('Delete dialog: stays open with an in-dialog role="alert" when the delete rejects', async () => {
+    const user = userEvent.setup();
+    const err = new VectrosError({ message: 'boom', statusCode: 500 });
+    renderPage({ deleteAppContext: vi.fn().mockRejectedValue(err) });
+    const dialog = await openDeleteDialog(user);
+
+    await user.type(within(dialog).getByLabelText(/context id/i), 'engineering');
+    await user.click(within(dialog).getByRole('button', { name: /delete app context/i }));
+
+    const alert = await within(dialog).findByRole('alert');
+    expect(alert).toHaveTextContent(/could not delete the app context/i);
+    expect(
+      screen.getByRole('dialog', { name: /delete app context engineering/i }),
+    ).toBeInTheDocument();
   });
 
   it('keyboard: Enter on a focused context row opens its detail page', async () => {

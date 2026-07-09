@@ -17,12 +17,18 @@
 //   - Create context Dialog — three-field form (contextId, name,
 //     description) with ID format validation mirroring the backend's
 //     `^[a-z][a-z0-9-]{2,30}$` rule.
-//   - Edit + Delete Dialogs operate within the target context, so they use a
-//     bearer minted for it. Edit shares the create form's shape (contextId
-//     disabled — immutable). Delete is strict-refusal-when-non-zero: it shows
-//     live role + profile counts and enables Delete only when both are zero. The
-//     reserved admin context's row hides Delete entirely (the server refuses it
-//     unconditionally — surfacing the action would set a false expectation).
+//   - Edit Dialog operates within the target context, so it uses a bearer
+//     minted for it. It shares the create form's shape (contextId disabled —
+//     immutable).
+//   - Delete Dialog goes through the owner-gated developer API (like create:
+//     teardown authority is held server-side; no browser credential can do it).
+//     Deletion cascades — the context and everything in it is permanently
+//     erased — so the dialog shows the live role + profile counts and requires
+//     typing the contextId to confirm, mirroring the server's own `confirm`
+//     echo contract. The reserved contexts' rows hide Delete entirely (the
+//     server refuses them unconditionally — surfacing the action would set a
+//     false expectation). Teardown is asynchronous: a deleted context lingers
+//     with a "Deleting…" status marker until the backend finishes draining it.
 //
 // Built on TanStack Query; queryKeys come from `accessQueryKeys` so list /
 // detail / invalidation paths stay in lockstep. Tenant + context resolution is
@@ -37,6 +43,7 @@ import {
   Dialog,
   DialogActions,
   DialogContent,
+  DialogContentText,
   DialogTitle,
   IconButton,
   Paper,
@@ -86,6 +93,12 @@ import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
 
 /** The reserved, auto-seeded admin context that backs the control-plane pages. */
 const RESERVED_VECTROS_ADMIN_CONTEXT_ID = 'vectros-admin';
+
+/** The reserved base context every tenant keeps — the server refuses to delete it. */
+const RESERVED_DEFAULT_CONTEXT_ID = 'default';
+
+/** Lifecycle statuses of a context whose asynchronous teardown is under way. */
+const TEARDOWN_STATUSES = new Set(['purging', 'deleted']);
 
 /**
  * App context / role ID format: lowercase letter, then 2-30 chars of
@@ -178,9 +191,10 @@ export function ContextsPage(): React.JSX.Element {
     return result;
   }, [contexts, countQueries]);
 
-  // Create / edit dialog state.
+  // Create / edit / delete dialog state.
   const [createOpen, setCreateOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<AppContextSummary | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<AppContextSummary | null>(null);
 
   const handleRefresh = (): void => {
     void queryClient.invalidateQueries({ queryKey: accessQueryKeys.appContexts() });
@@ -295,6 +309,7 @@ export function ContextsPage(): React.JSX.Element {
                     context={ctx}
                     counts={ctx.contextId ? counts[ctx.contextId] : undefined}
                     onEdit={() => setEditTarget(ctx)}
+                    onDelete={() => setDeleteTarget(ctx)}
                   />
                 ))}
               </TableBody>
@@ -313,6 +328,13 @@ export function ContextsPage(): React.JSX.Element {
           setEditTarget(null);
         }}
       />
+
+      {/* Delete confirmation (typed contextId echo). */}
+      <ContextDeleteDialog
+        target={deleteTarget}
+        counts={deleteTarget?.contextId ? counts[deleteTarget.contextId] : undefined}
+        onClose={() => setDeleteTarget(null)}
+      />
     </Stack>
   );
 }
@@ -327,14 +349,24 @@ function ContextRow({
   context,
   counts,
   onEdit,
+  onDelete,
 }: {
   context: AppContextSummary;
   counts: { roles: number | null; profiles: number | null } | undefined;
   onEdit: () => void;
+  onDelete: () => void;
 }): React.JSX.Element {
   const intl = useIntl();
   const navigate = useNavigate();
   const id = context.contextId ?? '';
+  // The reserved contexts can never be deleted (the server refuses them
+  // unconditionally), so their rows hide the Delete action rather than offer a
+  // guaranteed failure. A context already tearing down hides it too — there is
+  // nothing further to delete.
+  const reserved =
+    id === RESERVED_VECTROS_ADMIN_CONTEXT_ID || id === RESERVED_DEFAULT_CONTEXT_ID;
+  const tearingDown = TEARDOWN_STATUSES.has(context.status ?? '');
+  const deletable = Boolean(id) && !reserved && !tearingDown;
 
   const open = (): void => {
     if (id) navigate(`/access/contexts/${id}`);
@@ -383,6 +415,14 @@ function ContextRow({
     >
       <TableCell sx={{ fontFamily: 'monospace', fontSize: 13 }}>
         {context.contextId ?? '—'}
+        {/* Teardown is asynchronous — the row lingers while the backend drains
+            the context, so mark it rather than leave a just-deleted context
+            looking untouched. */}
+        {tearingDown && (
+          <Box component="span" sx={{ ml: 1, color: 'text.disabled', fontFamily: 'inherit' }}>
+            <FormattedMessage id="access.contexts.purging" />
+          </Box>
+        )}
       </TableCell>
       <TableCell>{context.name ?? '—'}</TableCell>
       <TableCell sx={{ color: 'text.secondary' }}>
@@ -411,23 +451,22 @@ function ContextRow({
             <EditIcon fontSize="small" />
           </IconButton>
         </Tooltip>
-        {/* Delete is disabled here: context teardown is a root-authority
-            operation that no browser-held credential can perform, so the
-            developer API doesn't yet expose it. Surfaced as a disabled control
-            with an explanatory tooltip (rather than hidden) so the capability
-            reads as "coming", not "impossible". The disabled IconButton needs a
-            <span> wrapper for the Tooltip to receive hover events. */}
-        <Tooltip title={intl.formatMessage({ id: 'access.contexts.deleteUnavailable' })}>
-          <span>
+        {/* Delete goes through the owner-gated developer API (teardown
+            authority is server-side — see the module header). Hidden on the
+            reserved contexts and on rows already tearing down: the server
+            refuses those unconditionally, so offering the action would only
+            promise a failure. */}
+        {deletable && (
+          <Tooltip title={intl.formatMessage({ id: 'access.shared.delete' })}>
             <IconButton
               size="small"
-              disabled
+              onClick={onDelete}
               aria-label={intl.formatMessage({ id: 'access.shared.delete' })}
             >
               <DeleteOutlineIcon fontSize="small" />
             </IconButton>
-          </span>
-        </Tooltip>
+          </Tooltip>
+        )}
       </TableCell>
       {/* Trailing chevron — the affordance that the row itself opens detail
           (kept OUT of the stop-propagation actions cell so it follows the row
@@ -592,6 +631,140 @@ function ContextEditorDialog({
           <FormattedMessage
             id={mode === 'create' ? 'access.contexts.createDialog.create' : 'access.shared.save'}
           />
+        </SubmitButton>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ContextDeleteDialog — typed-confirmation teardown. Deletion cascades (the
+// context and ALL of its contents are permanently erased), so instead of the
+// old strict-refusal-when-non-zero rule this dialog surfaces the live role +
+// profile counts as a "here's what you're deleting" warning and requires the
+// user to type the contextId — the same echo the server itself demands via the
+// `confirm` parameter before starting the cascade.
+// ---------------------------------------------------------------------------
+
+function ContextDeleteDialog({
+  target,
+  counts,
+  onClose,
+}: {
+  target: AppContextSummary | null;
+  counts: { roles: number | null; profiles: number | null } | undefined;
+  onClose: () => void;
+}): React.JSX.Element {
+  const intl = useIntl();
+  const queryClient = useQueryClient();
+  const devApi = useDeveloperApi();
+  const titleElementId = useId();
+  const confirmHelperId = useId();
+
+  const [typedId, setTypedId] = useState('');
+
+  const mutation = useMutation({
+    mutationFn: () => {
+      if (!target?.contextId) return Promise.reject(new Error('No target'));
+      // Teardown is an owner-gated act like create — developer API, not the
+      // context-pinned partner bearer.
+      return devApi.deleteAppContext(target.contextId);
+    },
+    onSuccess: () => {
+      // The list refetch shows the context in its transitional "Deleting…"
+      // state until the asynchronous cascade finishes draining it.
+      void queryClient.invalidateQueries({ queryKey: accessQueryKeys.appContexts() });
+      onClose();
+    },
+  });
+
+  // Reset the typed echo + any prior failure whenever the dialog closes so
+  // reopening (possibly for a different context) starts clean.
+  useEffect(() => {
+    if (target === null) {
+      setTypedId('');
+      mutation.reset();
+    }
+    // `mutation` is stable; only the target gate matters here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target]);
+
+  const roleCount = counts?.roles ?? null;
+  const profileCount = counts?.profiles ?? null;
+  const countsLoaded = roleCount != null && profileCount != null;
+  // The destructive CTA arms only when the typed echo matches exactly —
+  // mirroring the server's own confirm contract.
+  const canDelete = target?.contextId != null && typedId === target.contextId;
+
+  const handleClose = (): void => {
+    if (!mutation.isPending) onClose();
+  };
+
+  return (
+    <Dialog
+      open={target !== null}
+      onClose={handleClose}
+      maxWidth="sm"
+      fullWidth
+      aria-labelledby={titleElementId}
+    >
+      <DialogTitle id={titleElementId}>
+        <FormattedMessage
+          id="access.contexts.deleteConfirm.title"
+          values={{ contextId: target?.contextId ?? '' }}
+        />
+      </DialogTitle>
+      <DialogContent>
+        <Stack spacing={2}>
+          {mutation.isError && (
+            <ApiErrorAlert error={mutation.error}>
+              <FormattedMessage id="access.contexts.deleteConfirm.error.friendly" />
+            </ApiErrorAlert>
+          )}
+          <DialogContentText component="div">
+            <FormattedMessage id="access.contexts.deleteConfirm.body" />
+            {/* Live counts, when loaded, make the blast radius concrete. */}
+            {countsLoaded && (roleCount > 0 || profileCount > 0) && (
+              <>
+                {' '}
+                <FormattedMessage
+                  id="access.contexts.deleteConfirm.bodyCounts"
+                  values={{ roles: roleCount, profiles: profileCount }}
+                />
+              </>
+            )}
+          </DialogContentText>
+          <TextField
+            label={intl.formatMessage({ id: 'access.contexts.deleteConfirm.confirmLabel' })}
+            value={typedId}
+            onChange={(e) => setTypedId(e.target.value)}
+            helperText={
+              <FormattedMessage
+                id="access.contexts.deleteConfirm.confirmHelper"
+                values={{ contextId: <code>{target?.contextId ?? ''}</code> }}
+              />
+            }
+            FormHelperTextProps={{ id: confirmHelperId }}
+            inputProps={{
+              spellCheck: false,
+              'aria-describedby': confirmHelperId,
+            }}
+            sx={{ '& input': { fontFamily: 'monospace' } }}
+          />
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} disabled={mutation.isPending}>
+          <FormattedMessage id="access.shared.cancel" />
+        </Button>
+        <SubmitButton
+          color="error"
+          variant="contained"
+          onClick={() => mutation.mutate()}
+          disabled={!canDelete}
+          pending={mutation.isPending}
+        >
+          <FormattedMessage id="access.contexts.deleteConfirm.cta" />
         </SubmitButton>
       </DialogActions>
     </Dialog>
