@@ -20,10 +20,14 @@
 //     role's edit page (triggers dirty-state guard if any).
 //   - **ScopeEditor reuse** (inline source branch): same component as
 //     RoleEditor, with the same readonly-array boundary conversion.
-//   - **Identity overrides** — expandable section. The backend allow-list
-//     is only `orgId` + `clientId`. Two TextFields, both
-//     optional. Expanded by default when the loaded profile has any
-//     overrides set; collapsed otherwise (the "Show advanced" pattern).
+//   - **Identity overrides** — expandable section. Ownership dimensions are
+//     namespaced (`scope:org`, `scope:client`, and custom `scope:<ns>`); the
+//     built-in org/client get dedicated fields and any custom namespace is an
+//     "additional scopes" row. Values round-trip through the canonical form —
+//     the legacy flat `orgId`/`clientId` keys are still accepted as write sugar
+//     but read back namespaced. An owned identity may carry at
+//     most two scope namespaces. Expanded by default when the loaded profile has
+//     any overrides set; collapsed otherwise (the "Show advanced" pattern).
 //   - **Sticky save bar** matching RoleEditor.
 //   - **Clone Dialog** with "Materialize role into inline scopes"
 //     toggle (default OFF — preserves role ref). Toggle ON copies
@@ -54,6 +58,7 @@ import {
   DialogTitle,
   FormControlLabel,
   FormLabel,
+  IconButton,
   Link,
   Radio,
   RadioGroup,
@@ -61,8 +66,10 @@ import {
   Switch,
   TextField,
   Toolbar,
+  Tooltip,
   Typography,
 } from '@mui/material';
+import AddIcon from '@mui/icons-material/Add';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
@@ -93,6 +100,20 @@ import type {
 } from '../../api/vectrosApi';
 import type { UserResponse } from '../../api/vectrosApi';
 import { accessQueryKeys } from '../../lib/accessQueryKeys';
+import {
+  emptyIdentityOverrides,
+  parseIdentityOverrides,
+  serializeIdentityOverrides,
+  canonicalOverridesKey,
+  canonicalOverridesKeyOfModel,
+  countOverrideNamespaces,
+  validateIdentityOverrides,
+} from '../../lib/identityOverrides';
+import type {
+  IdentityOverridesModel,
+  IdentityOverridesValidationError,
+} from '../../lib/identityOverrides';
+import { MAX_SCOPE_NAMESPACES } from '../../lib/scopeNamespace';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
 import { statusCodeOf } from '../../lib/apiError';
 import { useBeforeNavigate } from '../../lib/useBeforeNavigate';
@@ -111,12 +132,48 @@ const PRINCIPAL_ID_PATTERN = /^(usr|key)_[A-Za-z0-9_-]+$/;
 type SourceType = 'role' | 'inline';
 
 /**
- * Identity-overrides allow-list. The server rejects any key not in this set:
- * only the ownership identity (orgId / clientId) is overrideable, and the
- * user's audit identity is always preserved. The UI surfaces these two
- * TextFields and only sends non-empty values.
+ * Default formatter for an {@link IdentityOverridesValidationError} — one
+ * user-facing string via the message catalog.
  */
-const OVERRIDE_KEYS = ['orgId', 'clientId'] as const;
+function formatOverridesValidationError(
+  error: IdentityOverridesValidationError,
+  intl: ReturnType<typeof useIntl>,
+): string {
+  switch (error.code) {
+    case 'tooManyNamespaces':
+      return intl.formatMessage(
+        { id: 'access.profiles.editor.identityOverridesTooMany' },
+        { max: error.max },
+      );
+    case 'extraBuiltin':
+      return intl.formatMessage(
+        { id: 'access.profiles.editor.identityOverrideNamespaceBuiltin' },
+        { namespace: error.namespace },
+      );
+    case 'extraDuplicate':
+      return intl.formatMessage(
+        { id: 'access.profiles.editor.identityOverrideNamespaceDuplicate' },
+        { namespace: error.namespace },
+      );
+    case 'extraMissingValue':
+      return intl.formatMessage({
+        id: 'access.profiles.editor.identityOverrideValueRequired',
+      });
+    case 'extraNamespace':
+      switch (error.error.code) {
+        case 'reserved':
+          return intl.formatMessage(
+            { id: 'access.profiles.editor.identityOverrideNamespaceReserved' },
+            { namespace: error.error.namespace },
+          );
+        case 'empty':
+        case 'grammar':
+          return intl.formatMessage({
+            id: 'access.profiles.editor.identityOverrideNamespaceInvalid',
+          });
+      }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // ProfileEditor
@@ -144,8 +201,11 @@ export function ProfileEditor(): React.JSX.Element {
   const [sourceType, setSourceType] = useState<SourceType>('role');
   const [roleRef, setRoleRef] = useState<string>('');
   const [scopes, setScopes] = useState<ScopeClause[]>(() => [emptyClause()]);
-  const [orgId, setOrgId] = useState('');
-  const [clientId, setClientId] = useState('');
+  // Namespaced identity overrides — dedicated org/client + custom-namespace
+  // `extras`, with any unmodellable wire key preserved in `passthrough`.
+  const [overrides, setOverrides] = useState<IdentityOverridesModel>(
+    emptyIdentityOverrides,
+  );
   const [overridesExpanded, setOverridesExpanded] = useState(false);
   // Raw save error (null when none) — kept as the thrown error so
   // <ApiErrorAlert> can surface the requestId. A 409 on create is a
@@ -206,15 +266,18 @@ export function ProfileEditor(): React.JSX.Element {
       setRoleRef('');
       setScopes(normalizeScopes(loaded.scopes));
     }
-    // Flatten identityOverrides at the read boundary — backend stores
-    // these as flat-string values despite the SDK's nested-Record typing.
-    const overrides = (loaded.identityOverrides ?? {}) as Record<string, unknown>;
-    setOrgId(String(overrides.orgId ?? ''));
-    setClientId(String(overrides.clientId ?? ''));
+    // Read identityOverrides through the canonical model so a `scope:org`-keyed
+    // override (0.34 read-back) is visible + preserved, not silently dropped.
+    // Custom namespaces populate `extras`; org/client fill their fields.
+    const parsed = parseIdentityOverrides(
+      loaded.identityOverrides as Record<string, unknown> | undefined,
+    );
+    setOverrides(parsed);
     setOverridesExpanded(
-      Object.keys(overrides).some((k) =>
-        (OVERRIDE_KEYS as readonly string[]).includes(k) && overrides[k] != null,
-      ),
+      parsed.org.trim() !== '' ||
+        parsed.client.trim() !== '' ||
+        parsed.extras.length > 0 ||
+        Object.keys(parsed.passthrough).length > 0,
     );
     setBaseline(loaded);
   }, [isCreate, profileQuery.data]);
@@ -246,6 +309,30 @@ export function ProfileEditor(): React.JSX.Element {
     applySourceSwitch(next);
   };
 
+  // ── Identity-override mutators ─────────────────────────────────────────
+  const setOverrideOrg = (v: string): void =>
+    setOverrides((o) => ({ ...o, org: v }));
+  const setOverrideClient = (v: string): void =>
+    setOverrides((o) => ({ ...o, client: v }));
+  const addOverrideExtra = (): void =>
+    setOverrides((o) => ({
+      ...o,
+      extras: [...o.extras, { namespace: '', value: '' }],
+    }));
+  const updateOverrideExtra = (
+    index: number,
+    patch: Partial<{ namespace: string; value: string }>,
+  ): void =>
+    setOverrides((o) => ({
+      ...o,
+      extras: o.extras.map((e, i) => (i === index ? { ...e, ...patch } : e)),
+    }));
+  const removeOverrideExtra = (index: number): void =>
+    setOverrides((o) => ({
+      ...o,
+      extras: o.extras.filter((_, i) => i !== index),
+    }));
+
   // ── Dirty-state ────────────────────────────────────────────────────────
   const dirty = useMemo<boolean>(() => {
     if (isCreate) {
@@ -253,14 +340,10 @@ export function ProfileEditor(): React.JSX.Element {
         principalId !== '' ||
         roleRef !== '' ||
         scopes.some((c) => c.allowed_actions.length > 0) ||
-        orgId !== '' ||
-        clientId !== ''
+        countOverrideNamespaces(overrides) > 0
       );
     }
     if (!baseline) return false;
-    const baseOverrides = (baseline.identityOverrides ?? {}) as Record<string, unknown>;
-    const baseOrg = String(baseOverrides.orgId ?? '');
-    const baseClient = String(baseOverrides.clientId ?? '');
     const baseSourceIsRole = !!baseline.roleId;
     if (baseSourceIsRole !== (sourceType === 'role')) return true;
     if (sourceType === 'role' && roleRef !== (baseline.roleId ?? '')) {
@@ -275,7 +358,16 @@ export function ProfileEditor(): React.JSX.Element {
     ) {
       return true;
     }
-    return orgId !== baseOrg || clientId !== baseClient;
+    // Compare identity overrides through the canonical normal form so a
+    // freshly-loaded profile (whose overrides may read back as `scope:org` or
+    // legacy `orgId`) is never spuriously dirty, and a real edit to ANY
+    // namespace — not just org/client — is detected.
+    return (
+      canonicalOverridesKeyOfModel(overrides) !==
+      canonicalOverridesKey(
+        baseline.identityOverrides as Record<string, unknown> | undefined,
+      )
+    );
   }, [
     isCreate,
     baseline,
@@ -283,8 +375,7 @@ export function ProfileEditor(): React.JSX.Element {
     sourceType,
     roleRef,
     scopes,
-    orgId,
-    clientId,
+    overrides,
   ]);
 
   useBeforeNavigate(dirty);
@@ -305,9 +396,23 @@ export function ProfileEditor(): React.JSX.Element {
   );
   const sourceValid =
     sourceType === 'role' ? roleRef !== '' : scopeError === null;
+  // Identity-overrides validation is independent of the source XOR — it applies
+  // to role- and inline-source profiles alike.
+  const overridesError = useMemo(
+    () => validateIdentityOverrides(overrides),
+    [overrides],
+  );
+  const overridesErrorMessage = useMemo(
+    () =>
+      overridesError !== null
+        ? formatOverridesValidationError(overridesError, intl)
+        : null,
+    [overridesError, intl],
+  );
   const canSubmit =
     (isCreate ? principalId !== '' && !principalIdInvalid : true) &&
     sourceValid &&
+    overridesError === null &&
     dirty;
 
   // Plain-language summary of what the profile currently grants — so the grant
@@ -339,12 +444,11 @@ export function ProfileEditor(): React.JSX.Element {
 
   // ── Save ───────────────────────────────────────────────────────────────
   const buildBody = () => {
-    // identityOverrides — only include non-empty values; cast to SDK's
-    // nested Record typing at the boundary (runtime values are flat strings).
-    const overrides: Record<string, string> = {};
-    if (orgId.trim()) overrides.orgId = orgId.trim();
-    if (clientId.trim()) overrides.clientId = clientId.trim();
-    const hasOverrides = Object.keys(overrides).length > 0;
+    // identityOverrides — canonical `scope:<ns>` wire form; blanks omitted;
+    // unmodellable keys preserved. Cast to the SDK's nested-Record typing at the
+    // boundary (runtime override values are flat strings).
+    const overridesWire = serializeIdentityOverrides(overrides);
+    const hasOverrides = Object.keys(overridesWire).length > 0;
     return {
       principalId: isCreate ? principalId : principalIdFromUrl,
       ...(sourceType === 'role'
@@ -356,7 +460,7 @@ export function ProfileEditor(): React.JSX.Element {
             })),
           }),
       ...(hasOverrides
-        ? { identityOverrides: overrides as unknown as Record<string, Record<string, unknown>> }
+        ? { identityOverrides: overridesWire as unknown as Record<string, Record<string, unknown>> }
         : {}),
     };
   };
@@ -681,28 +785,112 @@ export function ProfileEditor(): React.JSX.Element {
               />
             </Button>
             <Collapse in={overridesExpanded}>
-              <Stack spacing={2} sx={{ mt: 1.5, maxWidth: 480 }}>
+              <Stack spacing={2.5} sx={{ mt: 1.5, maxWidth: 560 }}>
                 <Typography variant="body2" color="text.secondary">
                   <FormattedMessage id="access.profiles.editor.identityOverridesHelp" />
                 </Typography>
-                <TextField
-                  size="small"
-                  label={intl.formatMessage({
-                    id: 'access.profiles.editor.identityOverrideOrgId',
-                  })}
-                  value={orgId}
-                  onChange={(e) => setOrgId(e.target.value)}
-                  inputProps={{ spellCheck: false }}
-                />
-                <TextField
-                  size="small"
-                  label={intl.formatMessage({
-                    id: 'access.profiles.editor.identityOverrideClientId',
-                  })}
-                  value={clientId}
-                  onChange={(e) => setClientId(e.target.value)}
-                  inputProps={{ spellCheck: false }}
-                />
+                <Stack spacing={2} sx={{ maxWidth: 480 }}>
+                  <TextField
+                    size="small"
+                    label={intl.formatMessage({
+                      id: 'access.profiles.editor.identityOverrideOrgId',
+                    })}
+                    value={overrides.org}
+                    onChange={(e) => setOverrideOrg(e.target.value)}
+                    inputProps={{ spellCheck: false }}
+                  />
+                  <TextField
+                    size="small"
+                    label={intl.formatMessage({
+                      id: 'access.profiles.editor.identityOverrideClientId',
+                    })}
+                    value={overrides.client}
+                    onChange={(e) => setOverrideClient(e.target.value)}
+                    inputProps={{ spellCheck: false }}
+                  />
+                </Stack>
+
+                {/* Additional (custom-namespace) scope overrides. */}
+                <Box>
+                  <Typography variant="overline" color="text.secondary" component="div">
+                    <FormattedMessage id="access.profiles.editor.identityOverrideExtrasLegend" />
+                  </Typography>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    component="div"
+                    sx={{ mb: overrides.extras.length ? 1.5 : 0.5 }}
+                  >
+                    <FormattedMessage id="access.profiles.editor.identityOverrideExtrasHelp" />
+                  </Typography>
+                  <Stack spacing={1}>
+                    {overrides.extras.map((extra, i) => (
+                      <Stack key={i} direction="row" spacing={1} alignItems="flex-start">
+                        <TextField
+                          size="small"
+                          label={intl.formatMessage({
+                            id: 'access.profiles.editor.identityOverrideNamespaceLabel',
+                          })}
+                          placeholder={intl.formatMessage({
+                            id: 'access.profiles.editor.identityOverrideNamespacePlaceholder',
+                          })}
+                          value={extra.namespace}
+                          onChange={(e) =>
+                            updateOverrideExtra(i, { namespace: e.target.value })
+                          }
+                          inputProps={{ spellCheck: false }}
+                          sx={{ width: 200, '& input': { fontFamily: 'monospace' } }}
+                        />
+                        <TextField
+                          size="small"
+                          label={intl.formatMessage({
+                            id: 'access.profiles.editor.identityOverrideValueLabel',
+                          })}
+                          value={extra.value}
+                          onChange={(e) =>
+                            updateOverrideExtra(i, { value: e.target.value })
+                          }
+                          inputProps={{ spellCheck: false }}
+                          sx={{ flex: 1 }}
+                        />
+                        <Tooltip
+                          title={intl.formatMessage({
+                            id: 'access.profiles.editor.identityOverrideRemoveScope',
+                          })}
+                        >
+                          <IconButton
+                            size="small"
+                            onClick={() => removeOverrideExtra(i)}
+                            aria-label={intl.formatMessage({
+                              id: 'access.profiles.editor.identityOverrideRemoveScope',
+                            })}
+                            sx={{ mt: 0.5 }}
+                          >
+                            <DeleteOutlineIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </Stack>
+                    ))}
+                  </Stack>
+                  <Button
+                    size="small"
+                    variant="text"
+                    startIcon={<AddIcon />}
+                    onClick={addOverrideExtra}
+                    disabled={
+                      countOverrideNamespaces(overrides) >= MAX_SCOPE_NAMESPACES
+                    }
+                    sx={{ textTransform: 'none', mt: overrides.extras.length ? 1 : 0.5 }}
+                  >
+                    <FormattedMessage id="access.profiles.editor.identityOverrideAddScope" />
+                  </Button>
+                </Box>
+
+                {overridesErrorMessage && (
+                  <Typography variant="body2" color="error.main" role="alert">
+                    {overridesErrorMessage}
+                  </Typography>
+                )}
               </Stack>
             </Collapse>
           </Box>

@@ -321,7 +321,54 @@ describe('ProfileEditor — create mode', () => {
     const call = client.auth.createAccessProfile.mock.calls[0]?.[0] as {
       body: { identityOverrides?: Record<string, unknown> };
     };
-    expect(call.body.identityOverrides).toEqual({ orgId: 'org_field' });
+    // Written in the canonical `scope:<ns>` form; `orgId` sugar is accepted on
+    // read but the save normalizes to `scope:org`.
+    expect(call.body.identityOverrides).toEqual({ 'scope:org': 'org_field' });
+  });
+
+  it('authors a custom-namespace scope override; save emits scope:<ns>', async () => {
+    const user = userEvent.setup();
+    const { client } = renderEditor();
+    await screen.findByRole('heading', { level: 1, name: /create access profile/i });
+
+    await user.type(screen.getByRole('combobox', { name: /user/i }), 'usr_dana');
+    const tplInput = screen.getByRole('combobox', { name: /^role/i });
+    await user.click(tplInput);
+    await user.click(await screen.findByRole('option', { name: /analyst/i }));
+
+    await user.click(screen.getByRole('button', { name: /show advanced/i }));
+    // Add a custom-namespace override row.
+    await user.click(screen.getByRole('button', { name: /add scope/i }));
+    await user.type(screen.getByRole('textbox', { name: /namespace/i }), 'group');
+    await user.type(screen.getByRole('textbox', { name: /^value$/i }), 'eng-team');
+
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() =>
+      expect(client.auth.createAccessProfile).toHaveBeenCalledTimes(1),
+    );
+    const call = client.auth.createAccessProfile.mock.calls[0]?.[0] as {
+      body: { identityOverrides?: Record<string, unknown> };
+    };
+    expect(call.body.identityOverrides).toEqual({ 'scope:group': 'eng-team' });
+  });
+
+  it('blocks save + shows an error for a reserved override namespace', async () => {
+    const user = userEvent.setup();
+    renderEditor();
+    await screen.findByRole('heading', { level: 1, name: /create access profile/i });
+
+    await user.type(screen.getByRole('combobox', { name: /user/i }), 'usr_dana');
+    const tplInput = screen.getByRole('combobox', { name: /^role/i });
+    await user.click(tplInput);
+    await user.click(await screen.findByRole('option', { name: /analyst/i }));
+
+    await user.click(screen.getByRole('button', { name: /show advanced/i }));
+    await user.click(screen.getByRole('button', { name: /add scope/i }));
+    await user.type(screen.getByRole('textbox', { name: /namespace/i }), 'tenant');
+    await user.type(screen.getByRole('textbox', { name: /^value$/i }), 'x');
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/reserved/i);
+    expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
   });
 });
 
@@ -443,6 +490,86 @@ describe('ProfileEditor — dirty-state regression', () => {
     // The loaded inline scope is records:r; granting Update on Records edits it.
     await user.click(await screen.findByRole('checkbox', { name: /update records/i }));
     await waitFor(() => expect(saveBtn).toBeEnabled());
+  });
+});
+
+// Canonical 0.34 read-back: org via `scope:org`, plus a custom `scope:group`.
+// Before the fix these were invisible (read via `overrides.orgId`) and dropped
+// on save.
+const PROFILE_CANONICAL_OVERRIDES = {
+  contextId: 'engineering',
+  principalId: 'usr_alice',
+  roleId: 'eng-member',
+  identityOverrides: {
+    'scope:org': 'org_canon',
+    'scope:group': 'eng-team',
+  } as Record<string, unknown>,
+};
+
+describe('ProfileEditor — identity-override round-trip', () => {
+  it('renders org + custom-namespace overrides from the canonical read-back', async () => {
+    renderEditor({
+      client: makeMockClient({
+        getAccessProfile: vi.fn().mockResolvedValue(PROFILE_CANONICAL_OVERRIDES),
+      }),
+      initialUrl: '/access/contexts/engineering/profiles/usr_alice',
+    });
+    // Org field reads the `scope:org` value (previously undefined → blank).
+    const orgInput = (await screen.findByRole('textbox', {
+      name: /org id/i,
+    })) as HTMLInputElement;
+    expect(orgInput.value).toBe('org_canon');
+    // The custom `scope:group` override renders as a namespace/value row.
+    expect(
+      (screen.getByRole('textbox', { name: /namespace/i }) as HTMLInputElement).value,
+    ).toBe('group');
+    expect(
+      (screen.getByRole('textbox', { name: /^value$/i }) as HTMLInputElement).value,
+    ).toBe('eng-team');
+  });
+
+  it('stays clean on load (no spurious dirty) with canonical overrides', async () => {
+    renderEditor({
+      client: makeMockClient({
+        getAccessProfile: vi.fn().mockResolvedValue(PROFILE_CANONICAL_OVERRIDES),
+      }),
+      initialUrl: '/access/contexts/engineering/profiles/usr_alice',
+    });
+    await screen.findByRole('textbox', { name: /namespace/i });
+    expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
+  });
+
+  it('survives edit→save with zero loss — the custom namespace is preserved', async () => {
+    const user = userEvent.setup();
+    const { client } = renderEditor({
+      client: makeMockClient({
+        getAccessProfile: vi.fn().mockResolvedValue(PROFILE_CANONICAL_OVERRIDES),
+        updateAccessProfile: vi
+          .fn()
+          .mockResolvedValue(PROFILE_CANONICAL_OVERRIDES),
+      }),
+      initialUrl: '/access/contexts/engineering/profiles/usr_alice',
+    });
+    // Edit only the org override; the custom scope must ride through untouched.
+    const orgInput = await screen.findByRole('textbox', { name: /org id/i });
+    await user.clear(orgInput);
+    await user.type(orgInput, 'org_next');
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled(),
+    );
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(client.auth.updateAccessProfile).toHaveBeenCalledTimes(1),
+    );
+    const call = client.auth.updateAccessProfile.mock.calls[0]?.[0] as {
+      body: { identityOverrides?: Record<string, unknown> };
+    };
+    expect(call.body.identityOverrides).toEqual({
+      'scope:org': 'org_next',
+      'scope:group': 'eng-team',
+    });
   });
 });
 

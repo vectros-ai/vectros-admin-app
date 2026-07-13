@@ -25,7 +25,7 @@
 // non-React contexts — mutation builders, tests — can validate the same shape.
 // ---------------------------------------------------------------------------
 
-import { memo } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import {
   Accordion,
   AccordionDetails,
@@ -33,10 +33,12 @@ import {
   Alert,
   Autocomplete,
   Box,
+  Button,
   Checkbox,
   FormControlLabel,
   IconButton,
   Paper,
+  Stack,
   Table,
   TableBody,
   TableCell,
@@ -52,6 +54,16 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { FormattedMessage, useIntl } from 'react-intl';
 import type { IntlShape } from 'react-intl';
+
+import {
+  parseDataScope,
+  serializeDataScope,
+  validateDataScope,
+  canonicalDataScopeKey,
+  countDataScopeNamespaces,
+} from '../lib/dataScope';
+import type { DataScopeDimension } from '../lib/dataScope';
+import { MAX_SCOPE_NAMESPACES, SCOPE_BUILTIN_NAMESPACES } from '../lib/scopeNamespace';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -86,6 +98,26 @@ export type ScopeClauseValidationError =
       readonly code: 'blankAction';
       readonly clauseIndex: number;
       readonly actionIndex: number;
+    }
+  | {
+      readonly code: 'dataScopeNamespace';
+      readonly clauseIndex: number;
+    }
+  | {
+      readonly code: 'dataScopeReserved';
+      readonly clauseIndex: number;
+      readonly namespace: string;
+    }
+  | {
+      readonly code: 'dataScopeDuplicate';
+      readonly clauseIndex: number;
+      readonly namespace: string;
+    }
+  | { readonly code: 'dataScopeNoValues'; readonly clauseIndex: number }
+  | {
+      readonly code: 'dataScopeTooMany';
+      readonly clauseIndex: number;
+      readonly max: number;
     };
 
 interface ScopeEditorProps {
@@ -281,6 +313,34 @@ export function validateClauses(
         return { code: 'blankAction', clauseIndex: i, actionIndex: j };
       }
     }
+    // Row-level data-scope filters (namespaced ownership) — validate the same
+    // shape the platform enforces, mapping to a clause-indexed error.
+    const dsError = validateDataScope(
+      parseDataScope(c.data_scope as Record<string, unknown> | undefined),
+    );
+    if (dsError) {
+      switch (dsError.code) {
+        case 'tooManyNamespaces':
+          return { code: 'dataScopeTooMany', clauseIndex: i, max: dsError.max };
+        case 'duplicate':
+          return {
+            code: 'dataScopeDuplicate',
+            clauseIndex: i,
+            namespace: dsError.namespace,
+          };
+        case 'noValues':
+          return { code: 'dataScopeNoValues', clauseIndex: i };
+        case 'namespace':
+          if (dsError.error.code === 'reserved') {
+            return {
+              code: 'dataScopeReserved',
+              clauseIndex: i,
+              namespace: dsError.error.namespace,
+            };
+          }
+          return { code: 'dataScopeNamespace', clauseIndex: i };
+      }
+    }
   }
   return null;
 }
@@ -307,6 +367,31 @@ export function formatScopeClauseValidationError(
         { id: 'scopeEditor.validationBlankAction' },
         { clauseN: error.clauseIndex + 1, actionN: error.actionIndex + 1 },
       );
+    case 'dataScopeNamespace':
+      return intl.formatMessage(
+        { id: 'scopeEditor.validationDataScopeNamespace' },
+        { clauseN: error.clauseIndex + 1 },
+      );
+    case 'dataScopeReserved':
+      return intl.formatMessage(
+        { id: 'scopeEditor.validationDataScopeReserved' },
+        { clauseN: error.clauseIndex + 1, namespace: error.namespace },
+      );
+    case 'dataScopeDuplicate':
+      return intl.formatMessage(
+        { id: 'scopeEditor.validationDataScopeDuplicate' },
+        { clauseN: error.clauseIndex + 1, namespace: error.namespace },
+      );
+    case 'dataScopeNoValues':
+      return intl.formatMessage(
+        { id: 'scopeEditor.validationDataScopeNoValues' },
+        { clauseN: error.clauseIndex + 1 },
+      );
+    case 'dataScopeTooMany':
+      return intl.formatMessage(
+        { id: 'scopeEditor.validationDataScopeTooMany' },
+        { clauseN: error.clauseIndex + 1, max: error.max },
+      );
   }
 }
 
@@ -328,6 +413,13 @@ export const ScopeEditor = memo(function ScopeEditor({
 
   const setClauseActions = (idx: number, actions: string[]): void => {
     onChange(clauses.map((c, i) => (i === idx ? { ...c, allowed_actions: actions } : c)));
+  };
+
+  const setClauseDataScope = (
+    idx: number,
+    dataScope: Record<string, unknown>,
+  ): void => {
+    onChange(clauses.map((c, i) => (i === idx ? { ...c, data_scope: dataScope } : c)));
   };
 
   const addClause = (): void => {
@@ -365,6 +457,7 @@ export const ScopeEditor = memo(function ScopeEditor({
           disabled={disabled}
           showRemove={clauses.length > 1}
           onChangeActions={(actions) => setClauseActions(idx, actions)}
+          onChangeDataScope={(ds) => setClauseDataScope(idx, ds)}
           onRemove={() => removeClause(idx)}
         />
       ))}
@@ -411,6 +504,7 @@ function ClauseCard({
   disabled,
   showRemove,
   onChangeActions,
+  onChangeDataScope,
   onRemove,
 }: {
   index: number;
@@ -418,6 +512,7 @@ function ClauseCard({
   disabled: boolean;
   showRemove: boolean;
   onChangeActions: (actions: string[]) => void;
+  onChangeDataScope: (dataScope: Record<string, unknown>) => void;
   onRemove: () => void;
 }): React.JSX.Element {
   const intl = useIntl();
@@ -558,7 +653,203 @@ function ClauseCard({
           </Accordion>
         </>
       )}
+
+      <DataScopeSection
+        dataScope={clause.data_scope as Record<string, unknown> | undefined}
+        disabled={disabled}
+        onChange={onChangeDataScope}
+      />
     </Paper>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// DataScopeSection — per-clause row-level ownership filters (`data_scope`).
+//
+// Each dimension is a `scope:<namespace>` allow-list; the null opt-in ALSO
+// matches rows with no value in that dimension. The section is collapsed by
+// default (row-level filtering is the exception, not the norm) but expands
+// automatically when the loaded clause already carries filters. `userId` and
+// any other unmodellable key ride through `passthrough` verbatim.
+//
+// It owns local dimension state so an IN-PROGRESS row (blank namespace/value)
+// survives — those serialize away, so a fully-controlled model couldn't hold
+// them. State re-seeds only on an EXTERNAL change to the wire form (a profile
+// load / reset), detected by comparing the canonical key against our own last
+// emit; our own emits never trigger a resync (which would drop the blank row
+// or steal focus).
+// ---------------------------------------------------------------------------
+
+function DataScopeSection({
+  dataScope,
+  disabled,
+  onChange,
+}: {
+  dataScope: Record<string, unknown> | undefined;
+  disabled: boolean;
+  onChange: (dataScope: Record<string, unknown>) => void;
+}): React.JSX.Element {
+  const intl = useIntl();
+
+  const [dims, setDims] = useState<DataScopeDimension[]>(
+    () => parseDataScope(dataScope).dimensions as DataScopeDimension[],
+  );
+  const passthroughRef = useRef<Record<string, unknown>>(
+    parseDataScope(dataScope).passthrough,
+  );
+  // Canonical key of the wire form our own state last produced.
+  const selfKeyRef = useRef<string>(canonicalDataScopeKey(dataScope));
+
+  // Resync from an external change (load/reset) — skip our own emits.
+  useEffect(() => {
+    const incomingKey = canonicalDataScopeKey(dataScope);
+    if (incomingKey !== selfKeyRef.current) {
+      const parsed = parseDataScope(dataScope);
+      setDims(parsed.dimensions as DataScopeDimension[]);
+      passthroughRef.current = parsed.passthrough;
+      selfKeyRef.current = incomingKey;
+    }
+  }, [dataScope]);
+
+  const commit = (next: DataScopeDimension[]): void => {
+    setDims(next);
+    const wire = serializeDataScope({
+      dimensions: next,
+      passthrough: passthroughRef.current,
+    });
+    selfKeyRef.current = canonicalDataScopeKey(wire);
+    onChange(wire);
+  };
+
+  const addDimension = (): void => {
+    commit([...dims, { namespace: '', values: [], includeNull: false }]);
+  };
+  const updateDimension = (
+    index: number,
+    patch: Partial<{ namespace: string; values: string[]; includeNull: boolean }>,
+  ): void => {
+    commit(dims.map((d, i) => (i === index ? { ...d, ...patch } : d)));
+  };
+  const removeDimension = (index: number): void => {
+    commit(dims.filter((_, i) => i !== index));
+  };
+
+  const atLimit =
+    countDataScopeNamespaces({ dimensions: dims, passthrough: passthroughRef.current }) >=
+    MAX_SCOPE_NAMESPACES;
+
+  return (
+    <Accordion
+      disableGutters
+      elevation={0}
+      defaultExpanded={dims.length > 0}
+      sx={{ mt: 1.5, '&:before': { display: 'none' }, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}
+    >
+      <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+        <Typography variant="caption" sx={{ fontWeight: 600 }}>
+          <FormattedMessage id="scopeEditor.dataScopeTitle" />
+        </Typography>
+      </AccordionSummary>
+      <AccordionDetails>
+        <Typography variant="caption" color="text.secondary" component="p" sx={{ mb: 1.5 }}>
+          <FormattedMessage id="scopeEditor.dataScopeHelp" />
+        </Typography>
+        <Stack spacing={2}>
+          {dims.map((dim, i) => (
+            <Stack
+              key={i}
+              direction={{ xs: 'column', sm: 'row' }}
+              spacing={1}
+              alignItems="flex-start"
+            >
+              <Autocomplete
+                freeSolo
+                disabled={disabled}
+                options={[...SCOPE_BUILTIN_NAMESPACES]}
+                value={dim.namespace}
+                onInputChange={(_evt, v) => updateDimension(i, { namespace: v })}
+                sx={{ width: { xs: '100%', sm: 200 } }}
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    label={intl.formatMessage({ id: 'scopeEditor.dataScopeNamespaceLabel' })}
+                    placeholder={intl.formatMessage({
+                      id: 'scopeEditor.dataScopeNamespacePlaceholder',
+                    })}
+                    size="small"
+                    inputProps={{
+                      ...params.inputProps,
+                      spellCheck: false,
+                      style: { fontFamily: 'monospace' },
+                    }}
+                  />
+                )}
+              />
+              <Box sx={{ flex: 1, minWidth: 0, width: '100%' }}>
+                <Autocomplete
+                  multiple
+                  freeSolo
+                  autoSelect
+                  disabled={disabled}
+                  options={[]}
+                  value={[...dim.values]}
+                  onChange={(_evt, v) => updateDimension(i, { values: v as string[] })}
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      label={intl.formatMessage({ id: 'scopeEditor.dataScopeValuesLabel' })}
+                      placeholder={intl.formatMessage({
+                        id: 'scopeEditor.dataScopeValuesPlaceholder',
+                      })}
+                      size="small"
+                    />
+                  )}
+                />
+                <FormControlLabel
+                  sx={{ mt: 0.5 }}
+                  control={
+                    <Checkbox
+                      size="small"
+                      checked={dim.includeNull}
+                      disabled={disabled}
+                      onChange={(e) => updateDimension(i, { includeNull: e.target.checked })}
+                    />
+                  }
+                  label={
+                    <Typography variant="caption" color="text.secondary">
+                      <FormattedMessage id="scopeEditor.dataScopeIncludeNull" />
+                    </Typography>
+                  }
+                />
+              </Box>
+              <Tooltip title={intl.formatMessage({ id: 'scopeEditor.dataScopeRemoveFilter' })}>
+                <span>
+                  <IconButton
+                    size="small"
+                    onClick={() => removeDimension(i)}
+                    disabled={disabled}
+                    aria-label={intl.formatMessage({ id: 'scopeEditor.dataScopeRemoveFilter' })}
+                    sx={{ mt: 0.5 }}
+                  >
+                    <DeleteIcon fontSize="small" />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </Stack>
+          ))}
+        </Stack>
+        <Button
+          size="small"
+          variant="text"
+          startIcon={<AddIcon />}
+          onClick={addDimension}
+          disabled={disabled || atLimit}
+          sx={{ textTransform: 'none', mt: dims.length ? 1 : 0 }}
+        >
+          <FormattedMessage id="scopeEditor.dataScopeAddFilter" />
+        </Button>
+      </AccordionDetails>
+    </Accordion>
   );
 }
 

@@ -124,7 +124,7 @@ afterEach(() => {
 });
 
 describe('App nav scope-gating (real gate, shipping ADMIN_NAV_ITEMS)', () => {
-  const GATED = [/members/i, /scoped keys/i, /^logs$/i, /app contexts/i] as const;
+  const GATED = [/members/i, /scoped keys/i, /^logs$/i, /disclosures/i, /app contexts/i] as const;
 
   // The gated nav reveals only after the async mint→decode→gate settles, which
   // can lag the page body on a contended runner (the full suite saturates CPU).
@@ -237,6 +237,20 @@ describe('App nav scope-gating (real gate, shipping ADMIN_NAV_ITEMS)', () => {
         .length,
     ).toBeGreaterThan(0);
     expect(screen.queryByRole('link', { name: /members/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /^logs$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /app contexts/i })).not.toBeInTheDocument();
+  });
+
+  it('grants access-log:r ONLY the Disclosures link (single-scope sub-user)', async () => {
+    registerScope(['access-log:r']);
+    renderApp(mockAdapter());
+
+    expect(
+      (await screen.findAllByRole('link', { name: /disclosures/i }, { timeout: GATE_SETTLE_MS }))
+        .length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByRole('link', { name: /members/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /scoped keys/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /^logs$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /app contexts/i })).not.toBeInTheDocument();
   });

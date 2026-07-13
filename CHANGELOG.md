@@ -3,6 +3,56 @@
 All notable changes to the Vectros Admin App are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.9.0 — 2026-07-11
+
+### Fixed
+
+- **Identity overrides no longer disappear on save** — an access profile whose
+  org or client override was stored in the newer namespaced form showed a blank
+  override field in the editor and lost the override when the profile was saved.
+  Overrides in every scope — org, client, and custom scopes — are now read,
+  shown, and preserved through an edit.
+
+### Added
+
+- **Custom ownership scopes for access profiles and roles** — identity overrides
+  now support custom scope namespaces (such as `group`) alongside org and
+  client, up to two per profile. Scope clauses on roles and inline profiles can
+  narrow a grant to specific owners with optional row-level data filters: an
+  allow-list of values per scope, with a switch to also include items that carry
+  no value in that scope. The profiles table lists each profile's override
+  scopes instead of just a count.
+
+## 0.8.1 — 2026-07-10
+
+### Changed
+
+- **Dependency maintenance** — updated `aws-amplify`, `vite`, `vitest`, and the
+  Vectros SDK to their current releases and cleared known advisories in
+  transitive dependencies. No functional changes.
+
+## 0.8.0 — 2026-07-10
+
+### Added
+
+- **Accounting of disclosures** — a new Disclosures page lets an account owner
+  look up who has read a given subject's protected data within an app context:
+  when, which action (read, list, lookup, search, or RAG), against which record,
+  and whether any sensitive value was actually revealed in plaintext. Results
+  are paged. Because read-access logging is opt-in and off by default, the page
+  is explicit that an empty result means "no recorded disclosures" — which is
+  not the same as "no one accessed this subject" when logging is not enabled for
+  the relevant context or record types.
+
+## 0.7.1 — 2026-07-09
+
+### Changed
+
+- **Scoped API keys** now list only the keys for the selected Live/Test
+  environment, matching the environment switcher at the top of the app. Switch
+  environments to see the keys in the other one. Creating and revoking keys is
+  unchanged.
+
 ## 0.7.0 — 2026-07-08
 
 ### Added

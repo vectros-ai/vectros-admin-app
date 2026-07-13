@@ -3,14 +3,23 @@
 //
 // Pinning:
 //   1. Loading spinner while listScopedKeys is in flight.
-//   2. Renders the table after load with correct fields per row.
-//   3. Empty state when listScopedKeys returns [].
+//   2. Renders the table after load with correct fields per row — scoped to the
+//      active environment (only the active tenant's keys show).
+//   3. Empty state when the account has no scoped keys at all.
 //   4. Error alert on listScopedKeys failure.
 //   5. "Create scoped key" opens the ScopedKeyCreateDialog wizard.
 //   6. Revoke icon disabled for keys whose status !== 'active'.
 //   7. Revoke flow — opens confirmation, confirming calls
 //      `auth.revokeScopedKey({ keyId })` and refetches the list.
 //   8. User type chip renders the right verb per userType (HUMAN / SERVICE).
+//
+// Environment scoping:
+//   The developer API returns the account-wide list across BOTH environments;
+//   the page filters the rendered rows to the TenantSwitcher's active environment
+//   (Live/Test). These tests seed live + test keys and assert only the active
+//   env's keys render, that switching the active tenant flips the visible set,
+//   and that an active env with no keys (while the other has some) shows the
+//   "no keys in this environment" empty state (not the account-empty prompt).
 // ---------------------------------------------------------------------------
 
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -24,6 +33,8 @@ import type * as VectrosApi from '../../api/vectrosApi';
 import { useDeveloperApi } from '../../api/developerApi';
 import type * as DevApi from '../../api/developerApi';
 import { TestTenantProvider } from '../../test/TestTenantProvider';
+import { useCurrentTenant } from '../../auth';
+import type { TenantId, TenantMembership } from '../../auth';
 import { KeysPage } from './KeysPage';
 
 vi.mock('../../api/vectrosApi', async (importOriginal) => {
@@ -42,11 +53,37 @@ vi.mock('../../api/developerApi', async (importOriginal) => {
   };
 });
 
+// Two environments: a Live tenant and a Test tenant. The active TenantSwitcher
+// environment selects which of these keys render.
+const LIVE_TENANT_ID: TenantId = 'tnt_live_001';
+const KEYS_TEST_TENANT_ID: TenantId = 'tnt_test_001';
+
+// Both memberships so the switcher can flip between environments.
+const KEY_MEMBERSHIPS: ReadonlyArray<TenantMembership> = [
+  {
+    tenantId: LIVE_TENANT_ID,
+    tenantName: 'Acme (Live)',
+    tenantKind: 'live',
+    role: 'OWNER',
+    status: 'ACTIVE',
+    partnerId: 'ptr_live_0001',
+  },
+  {
+    tenantId: KEYS_TEST_TENANT_ID,
+    tenantName: 'Acme (Test)',
+    tenantKind: 'test',
+    role: 'OWNER',
+    status: 'ACTIVE',
+    partnerId: 'ptr_test_0001',
+  },
+];
+
+// alice + old live in the LIVE tenant; bot lives in the TEST tenant.
 const SAMPLE_KEYS = [
   {
     keyId: 'ssk_alice',
     keyName: 'research-bot prod',
-    tenantId: 'tnt_live_001',
+    tenantId: LIVE_TENANT_ID,
     contextId: 'vectros-admin',
     userId: 'u_alice',
     userType: 'HUMAN',
@@ -58,7 +95,7 @@ const SAMPLE_KEYS = [
   {
     keyId: 'ssk_bot',
     keyName: 'ci-runner test',
-    tenantId: 'tnt_test_001',
+    tenantId: KEYS_TEST_TENANT_ID,
     contextId: 'vectros-admin',
     userId: 'u_bot',
     userType: 'SERVICE',
@@ -70,7 +107,7 @@ const SAMPLE_KEYS = [
   {
     keyId: 'ssk_old',
     keyName: 'expired-key',
-    tenantId: 'tnt_live_001',
+    tenantId: LIVE_TENANT_ID,
     contextId: 'vectros-admin',
     userId: 'u_alice',
     userType: 'HUMAN',
@@ -100,7 +137,23 @@ function makeMockDevApi(overrides: {
   };
 }
 
-function renderPage(opts: { devApi?: ReturnType<typeof makeMockDevApi> } = {}) {
+// A tiny probe that drives the TenantSwitcher from within the provider — the
+// real switcher lives in the app layout, so tests trigger the env flip through
+// the same `setTenant` the switcher calls.
+function TenantSwitchProbe({ to }: { to: TenantId }): React.JSX.Element {
+  const { setTenant } = useCurrentTenant();
+  return <button onClick={() => void setTenant(to)}>switch-env</button>;
+}
+
+function renderPage(
+  opts: {
+    devApi?: ReturnType<typeof makeMockDevApi>;
+    // Active TenantSwitcher environment; defaults to the Live tenant.
+    activeTenant?: TenantId;
+    // Render an env-switch probe alongside the page (flip test).
+    withSwitch?: boolean;
+  } = {},
+) {
   const devApi = opts.devApi ?? makeMockDevApi();
   vi.mocked(useDeveloperApi).mockReturnValue(devApi as never);
   // ScopedKeyCreateDialog (rendered by KeysPage) imports vectrosApiClient at
@@ -110,7 +163,11 @@ function renderPage(opts: { devApi?: ReturnType<typeof makeMockDevApi> } = {}) {
   const utils = render(
     <TestIntlProvider>
       <MemoryRouter>
-        <TestTenantProvider>
+        <TestTenantProvider
+          tenant={opts.activeTenant ?? LIVE_TENANT_ID}
+          memberships={KEY_MEMBERSHIPS}
+        >
+          {opts.withSwitch && <TenantSwitchProbe to={KEYS_TEST_TENANT_ID} />}
           <KeysPage />
         </TestTenantProvider>
       </MemoryRouter>
@@ -135,20 +192,22 @@ describe('KeysPage', () => {
     expect(screen.getByLabelText(/loading scoped keys/i)).toBeInTheDocument();
   });
 
-  it('renders the keys table after load', async () => {
+  it('renders the active-env keys table after load', async () => {
+    // Active env = Live → only the Live tenant's keys render.
     renderPage();
     expect(await screen.findByText('research-bot prod')).toBeInTheDocument();
-    expect(screen.getByText('ci-runner test')).toBeInTheDocument();
     expect(screen.getByText('expired-key')).toBeInTheDocument();
-    // userId in monospace cell.
+    // The Test-tenant key is filtered out.
+    expect(screen.queryByText('ci-runner test')).not.toBeInTheDocument();
+    // userId in monospace cell — u_alice (Live), never u_bot (Test).
     expect(screen.getAllByText('u_alice').length).toBeGreaterThan(0);
-    expect(screen.getByText('u_bot')).toBeInTheDocument();
-    // tenantId column.
+    expect(screen.queryByText('u_bot')).not.toBeInTheDocument();
+    // tenantId column shows only the active env's tenant.
     expect(screen.getAllByText('tnt_live_001').length).toBeGreaterThan(0);
-    expect(screen.getByText('tnt_test_001')).toBeInTheDocument();
+    expect(screen.queryByText('tnt_test_001')).not.toBeInTheDocument();
   });
 
-  it('renders the empty state when listScopedKeys returns []', async () => {
+  it('renders the account-empty state when listScopedKeys returns []', async () => {
     renderPage({
       devApi: makeMockDevApi({ listScopedKeys: vi.fn().mockResolvedValue([]) }),
     });
@@ -189,10 +248,11 @@ describe('KeysPage', () => {
     renderPage();
     await screen.findByText('expired-key');
     const revokeButtons = screen.getAllByRole('button', { name: /^revoke$/i });
-    // 3 keys → 3 revoke buttons. The third row (expired-key) is revoked.
-    expect(revokeButtons[2]).toBeDisabled();
+    // Active env = Live → 2 visible keys (research-bot prod active, expired-key
+    // revoked). The revoked row's button is disabled.
+    expect(revokeButtons).toHaveLength(2);
     expect(revokeButtons[0]).toBeEnabled();
-    expect(revokeButtons[1]).toBeEnabled();
+    expect(revokeButtons[1]).toBeDisabled();
   });
 
   it('revoke flow — confirms then calls revokeScopedKey({ keyId }) and refreshes', async () => {
@@ -219,11 +279,71 @@ describe('KeysPage', () => {
   });
 
   it('renders the right user-type chip per row', async () => {
+    // Active env = Live → both visible rows are HUMAN; the SERVICE key lives in
+    // the Test env and is filtered out.
     renderPage();
     await screen.findByText('research-bot prod');
-    // SAMPLE_KEYS has 2 HUMAN rows + 1 SERVICE row.
     expect(screen.getAllByText('Human').length).toBe(2);
-    expect(screen.getAllByText('Service').length).toBe(1);
+    expect(screen.queryByText('Service')).not.toBeInTheDocument();
+  });
+
+  // --- Environment scoping -------------------------------------------
+
+  describe('environment scoping', () => {
+    it('shows only the Live tenant keys when the active env is Live', async () => {
+      renderPage({ activeTenant: LIVE_TENANT_ID });
+      expect(await screen.findByText('research-bot prod')).toBeInTheDocument();
+      expect(screen.getByText('expired-key')).toBeInTheDocument();
+      expect(screen.queryByText('ci-runner test')).not.toBeInTheDocument();
+    });
+
+    it('shows only the Test tenant keys when the active env is Test', async () => {
+      renderPage({ activeTenant: KEYS_TEST_TENANT_ID });
+      expect(await screen.findByText('ci-runner test')).toBeInTheDocument();
+      // The SERVICE chip belongs to the Test-env key.
+      expect(screen.getByText('Service')).toBeInTheDocument();
+      // Live-env keys are filtered out.
+      expect(screen.queryByText('research-bot prod')).not.toBeInTheDocument();
+      expect(screen.queryByText('expired-key')).not.toBeInTheDocument();
+    });
+
+    it('flips the visible set when the active tenant switches', async () => {
+      const user = userEvent.setup();
+      renderPage({ activeTenant: LIVE_TENANT_ID, withSwitch: true });
+
+      // Start on Live.
+      expect(await screen.findByText('research-bot prod')).toBeInTheDocument();
+      expect(screen.queryByText('ci-runner test')).not.toBeInTheDocument();
+
+      // Switch to Test — the visible set flips without a new fetch bucket.
+      await user.click(screen.getByRole('button', { name: /switch-env/i }));
+
+      expect(await screen.findByText('ci-runner test')).toBeInTheDocument();
+      await waitFor(() =>
+        expect(screen.queryByText('research-bot prod')).not.toBeInTheDocument(),
+      );
+    });
+
+    it('shows the "no keys in this environment" state when the active env is empty but another has keys', async () => {
+      // Account has keys (all Live), but the active env is Test → the env-empty
+      // state, NOT the account-empty create prompt.
+      const liveOnly = SAMPLE_KEYS.filter((k) => k.tenantId === LIVE_TENANT_ID);
+      renderPage({
+        activeTenant: KEYS_TEST_TENANT_ID,
+        devApi: makeMockDevApi({
+          listScopedKeys: vi.fn().mockResolvedValue(liveOnly),
+        }),
+      });
+      await waitFor(() =>
+        expect(
+          screen.getByText(/No scoped keys in this environment/i),
+        ).toBeInTheDocument(),
+      );
+      // Not the account-empty prompt.
+      expect(screen.queryByText(/No scoped keys yet/i)).not.toBeInTheDocument();
+      // And no key rows leak across environments.
+      expect(screen.queryByText('research-bot prod')).not.toBeInTheDocument();
+    });
   });
 
   // --- Hardening -----------------------------------------------------

@@ -64,6 +64,7 @@ import type {
 } from '../../api/vectrosApi';
 import { ApiErrorAlert } from '../../components/ApiErrorAlert';
 import { accessQueryKeys } from '../../lib/accessQueryKeys';
+import { describeIdentityOverrides } from '../../lib/identityOverrides';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
 import { usePrincipalDirectory } from '../../lib/usePrincipalDirectory';
 import type { ResolvedPrincipal } from '../../lib/usePrincipalDirectory';
@@ -471,7 +472,7 @@ function ProfilesTab({ ctxId }: { ctxId: string }): React.JSX.Element {
                 <TableCell sx={{ fontWeight: 600 }}>
                   <FormattedMessage id="access.profiles.columnSource" />
                 </TableCell>
-                <TableCell sx={{ fontWeight: 600 }} align="right">
+                <TableCell sx={{ fontWeight: 600 }}>
                   <FormattedMessage id="access.profiles.columnOverrides" />
                 </TableCell>
                 <TableCell sx={{ fontWeight: 600 }}>
@@ -515,12 +516,12 @@ function ProfileRow({
   const isKey = principal.kind === 'key';
   const sourceIsRole = !!profile.roleId;
   const updated = profile.lastModified ?? profile.createdAt;
-  // identityOverrides shape per the SDK is `Record<string, Record<string, unknown>>`
-  // but at runtime it's a flat `Record<string, string>` with only orgId /
-  // clientId keys (the backend allow-list). Count the flat keys.
-  const overridesCount = profile.identityOverrides
-    ? Object.keys(profile.identityOverrides).length
-    : 0;
+  // Surface the canonical namespaced override VALUES (scope:org / scope:client /
+  // custom scope:<ns>), not just a count — `orgId`/`clientId` are read back
+  // namespaced under 0.34.
+  const overrides = describeIdentityOverrides(
+    profile.identityOverrides as Record<string, unknown> | undefined,
+  );
 
   const open = (): void => {
     if (pid) navigate(`/access/contexts/${ctxId}/profiles/${encodeURIComponent(pid)}`);
@@ -617,7 +618,25 @@ function ProfileRow({
           />
         )}
       </TableCell>
-      <TableCell align="right">{overridesCount}</TableCell>
+      <TableCell>
+        {overrides.length === 0 ? (
+          <Typography component="span" variant="body2" color="text.secondary">
+            —
+          </Typography>
+        ) : (
+          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+            {overrides.map((o) => (
+              <Chip
+                key={o.namespace}
+                size="small"
+                variant="outlined"
+                label={`${o.namespace}: ${o.value}`}
+                sx={{ fontFamily: 'monospace', maxWidth: 220 }}
+              />
+            ))}
+          </Stack>
+        )}
+      </TableCell>
       <TableCell sx={{ color: 'text.secondary', fontSize: 13 }}>
         {updated ? new Date(updated).toLocaleDateString() : '—'}
       </TableCell>

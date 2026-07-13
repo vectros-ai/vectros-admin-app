@@ -181,6 +181,16 @@ export type CreateInviteRequest = Parameters<_Auth['createInvite']>[0];
 export type CreateScopedKeyRequest = Parameters<_Auth['createScopedKey']>[0];
 export type GetAdminLogsRequest = Parameters<_Auth['getAdminLogs']>[0];
 
+// Read-access (accounting-of-disclosures) log — GET /v1/admin/access-log. The
+// subject-scoped §164.528 query: who read a subject's data, when, and whether
+// any sensitive value was actually revealed. The request carries the query axes
+// (subject / context / optional filters + time window + cursor); the response is
+// the `{ data, nextCursor }` page envelope.
+export type GetAccessLogRequest = NonNullable<Parameters<_Auth['getAccessLog']>[0]>;
+export type ReadAccessLogPage = Awaited<ReturnType<_Auth['getAccessLog']>>;
+/** A single read-access row from `ReadAccessLogPage.data[]`. */
+export type ReadAccessLogRow = NonNullable<ReadAccessLogPage['data']>[number];
+
 // Typed status-coded error subclasses (ConflictError, BadRequestError, etc.)
 // live under the `Vectros` namespace — see the SDK's index.d.ts. Consumer
 // pages dispatch on `err instanceof VectrosError && err.statusCode === N`

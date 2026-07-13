@@ -290,15 +290,16 @@ describe('ContextDetailPage', () => {
     expect(within(table).getByText(/inline \(1 clause\)/i)).toBeInTheDocument();
   });
 
-  it('Profiles tab: identityOverrides count and User/Key chip', async () => {
+  it('Profiles tab: identityOverrides namespaced values and User/Key chip', async () => {
     renderPage({ initialUrl: '/access/contexts/engineering?tab=profiles' });
     const table = await screen.findByRole('table', { name: /access profiles/i });
     const rows = within(table).getAllByRole('row');
     const aliceRow = rows[1]!;
     const botRow = rows[2]!;
-    // Alice has 1 override (orgId), bot has 0.
-    expect(within(aliceRow).getByText('1')).toBeInTheDocument();
-    expect(within(botRow).getByText('0')).toBeInTheDocument();
+    // Alice's `orgId: org_eng` override reads back canonically as `org: org_eng`;
+    // bot has none, shown as an em dash.
+    expect(within(aliceRow).getByText('org: org_eng')).toBeInTheDocument();
+    expect(within(botRow).getByText('—')).toBeInTheDocument();
     // Principal-type chips.
     expect(within(aliceRow).getByText(/^user$/i)).toBeInTheDocument();
     expect(within(botRow).getByText(/^key$/i)).toBeInTheDocument();

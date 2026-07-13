@@ -12,6 +12,7 @@
 //      Add / Remove controls correctly wire to onChange.
 // ---------------------------------------------------------------------------
 
+import { useState } from 'react';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
@@ -432,5 +433,150 @@ describe('<ScopeEditor> permission matrix', () => {
     expect(screen.getByRole('checkbox', { name: /read search/i })).toBeInTheDocument();
     expect(screen.queryByRole('checkbox', { name: /create search/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('checkbox', { name: /delete search/i })).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// <ScopeEditor> — data_scope (row-level ownership) authoring
+// ---------------------------------------------------------------------------
+
+describe('<ScopeEditor> data-scope filters', () => {
+  it('renders an existing scope:<ns> filter (expanded) with its value + null opt-in', () => {
+    const clauses: ScopeClause[] = [
+      {
+        allowed_actions: ['records:r'],
+        data_scope: { 'scope:org': ['org_a', null] },
+      },
+    ];
+    render(
+      <TestIntlProvider>
+        <ScopeEditor value={clauses} onChange={() => {}} />
+      </TestIntlProvider>,
+    );
+    // The namespace + value chip render, and the null opt-in is checked.
+    expect(
+      (screen.getByRole('combobox', { name: /scope/i }) as HTMLInputElement).value,
+    ).toBe('org');
+    expect(screen.getByText('org_a')).toBeInTheDocument();
+    expect(
+      screen.getByRole('checkbox', { name: /include rows with no value/i }),
+    ).toBeChecked();
+  });
+
+  it('adding a filter emits a scope:<ns> allow-list on the clause', async () => {
+    const user = userEvent.setup();
+    // ScopeEditor is fully controlled — a stateful harness feeds edits back so a
+    // multi-step interaction (add row → type namespace → add value) renders.
+    const seen: { value: ScopeClause[] } = {
+      value: [{ allowed_actions: ['records:r'], data_scope: {} }],
+    };
+    function Harness(): React.JSX.Element {
+      const [value, setValue] = useState<ScopeClause[]>(seen.value);
+      return (
+        <ScopeEditor
+          value={value}
+          onChange={(v) => {
+            seen.value = v;
+            setValue(v);
+          }}
+        />
+      );
+    }
+    render(
+      <TestIntlProvider>
+        <Harness />
+      </TestIntlProvider>,
+    );
+    // The filters accordion is collapsed for a clause with no filters — open it.
+    await user.click(
+      screen.getByRole('button', { name: /row-level data filters/i }),
+    );
+    await user.click(screen.getByRole('button', { name: /add filter/i }));
+
+    // Fill the namespace + a value.
+    await user.type(screen.getByRole('combobox', { name: /scope/i }), 'org');
+    await user.type(
+      screen.getByRole('combobox', { name: /allowed values/i }),
+      'org_acme{enter}',
+    );
+
+    expect(seen.value[0]?.data_scope).toEqual({ 'scope:org': ['org_acme'] });
+  });
+
+  it('preserves a userId data_scope while adding a namespaced filter', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <TestIntlProvider>
+        <ScopeEditor
+          value={[
+            {
+              allowed_actions: ['records:r'],
+              data_scope: { userId: 'usr_1', 'scope:org': ['org_a'] },
+            },
+          ]}
+          onChange={onChange}
+        />
+      </TestIntlProvider>,
+    );
+    // Toggle the null opt-in on the existing org filter.
+    await user.click(
+      screen.getByRole('checkbox', { name: /include rows with no value/i }),
+    );
+    const last = onChange.mock.calls.at(-1)?.[0] as ScopeClause[];
+    // userId survives; org gains the null opt-in.
+    expect(last[0]?.data_scope).toEqual({
+      userId: 'usr_1',
+      'scope:org': ['org_a', null],
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// validateClauses() — data_scope branch
+// ---------------------------------------------------------------------------
+
+describe('validateClauses() — data_scope', () => {
+  it('rejects a reserved data_scope namespace', () => {
+    expect(
+      validateClauses([
+        { allowed_actions: ['records:r'], data_scope: { 'scope:tenant': ['x'] } },
+      ]),
+    ).toEqual({ code: 'dataScopeReserved', clauseIndex: 0, namespace: 'tenant' });
+  });
+
+  it('rejects a data_scope filter with no values and no null opt-in', () => {
+    // An empty allow-list array is a started-but-valueless filter.
+    expect(
+      validateClauses([
+        { allowed_actions: ['records:r'], data_scope: { 'scope:org': [] } },
+      ]),
+    ).toEqual({ code: 'dataScopeNoValues', clauseIndex: 0 });
+  });
+
+  it('rejects more than two data_scope namespaces on a clause', () => {
+    expect(
+      validateClauses([
+        {
+          allowed_actions: ['records:r'],
+          data_scope: {
+            'scope:org': ['a'],
+            'scope:client': ['b'],
+            'scope:group': ['c'],
+          },
+        },
+      ]),
+    ).toEqual({ code: 'dataScopeTooMany', clauseIndex: 0, max: 2 });
+  });
+
+  it('accepts a well-formed data_scope filter', () => {
+    expect(
+      validateClauses([
+        {
+          allowed_actions: ['records:r'],
+          data_scope: { 'scope:org': ['org_a', null] },
+        },
+      ]),
+    ).toBeNull();
   });
 });

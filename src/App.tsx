@@ -25,6 +25,7 @@ import VpnKeyIcon from '@mui/icons-material/VpnKey';
 import ArticleIcon from '@mui/icons-material/Article';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import BarChartIcon from '@mui/icons-material/BarChart';
+import VisibilityIcon from '@mui/icons-material/Visibility';
 
 import { AppLayout, RequireAuth, RequireScope } from '@vectros-ai/react';
 import type { NavItemSpec } from '@vectros-ai/react';
@@ -33,6 +34,7 @@ import { TenantSwitcher } from './components/TenantSwitcher';
 import { AccountPage } from './pages/protected/AccountPage';
 import { ContextDetailPage } from './pages/protected/ContextDetailPage';
 import { ContextsPage } from './pages/protected/ContextsPage';
+import { AccessLogPage } from './pages/protected/AccessLogPage';
 import { KeysPage } from './pages/protected/KeysPage';
 import { LogsPage } from './pages/protected/LogsPage';
 import { MembersPage } from './pages/protected/MembersPage';
@@ -54,6 +56,9 @@ const ADMIN_ACTIONS = {
   members: 'admin:users',
   keys: 'admin:keys',
   logs: 'admin:logs',
+  // Accounting-of-disclosures gates on the SAME literal the backend enforces on
+  // GET /v1/admin/access-log (`access-log:r`; an owner's wildcard covers it).
+  accessLog: 'access-log:r',
   contexts: 'admin:profiles',
   // Usage gates on the SAME literal the backend enforces on GET /v1/usage
   // (`billing:r` on scoped tokens; an owner's wildcard covers it).
@@ -68,6 +73,7 @@ const ADMIN_NAV_ITEMS: ReadonlyArray<NavItemSpec> = [
   { to: '/members', labelId: 'layout.navMembers', gateAction: ADMIN_ACTIONS.members, icon: <PeopleIcon fontSize="small" /> },
   { to: '/keys', labelId: 'layout.navKeys', gateAction: ADMIN_ACTIONS.keys, icon: <VpnKeyIcon fontSize="small" /> },
   { to: '/logs', labelId: 'layout.navLogs', gateAction: ADMIN_ACTIONS.logs, icon: <ArticleIcon fontSize="small" /> },
+  { to: '/disclosures', labelId: 'accessLog.nav', gateAction: ADMIN_ACTIONS.accessLog, icon: <VisibilityIcon fontSize="small" /> },
   { to: '/usage', labelId: 'layout.navUsage', gateAction: ADMIN_ACTIONS.usage, icon: <BarChartIcon fontSize="small" /> },
   { to: '/access/contexts', labelId: 'access.nav', gateAction: ADMIN_ACTIONS.contexts, icon: <AdminPanelSettingsIcon fontSize="small" /> },
 ];
@@ -112,6 +118,10 @@ export default function App(): React.JSX.Element {
         <Route
           path="/logs"
           element={<RequireScope action={ADMIN_ACTIONS.logs}><LogsPage /></RequireScope>}
+        />
+        <Route
+          path="/disclosures"
+          element={<RequireScope action={ADMIN_ACTIONS.accessLog}><AccessLogPage /></RequireScope>}
         />
         <Route
           path="/usage"

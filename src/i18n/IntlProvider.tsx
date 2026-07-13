@@ -21,6 +21,7 @@ import keysEn from './hardening/keys.en.json';
 import rolesEn from './hardening/roles.en.json';
 import accountEn from './hardening/account.en.json';
 import authShellEn from './hardening/authShell.en.json';
+import accessLogEn from './hardening/accessLog.en.json';
 
 // Re-export so existing call sites keep importing the locale constant from the
 // app's i18n module rather than reaching into the library.
@@ -39,6 +40,7 @@ const MESSAGES_BY_LOCALE: MessagesByLocale = {
     ...rolesEn,
     ...accountEn,
     ...authShellEn,
+    ...accessLogEn,
   },
 };
 

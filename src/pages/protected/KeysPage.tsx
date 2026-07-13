@@ -3,10 +3,16 @@
 //
 // Functional scope (list view):
 //   - List scoped keys via the account-wide developer API
-//     (`useDeveloperApi().listScopedKeys()`): every key across both environments
-//     and ALL app contexts. A context-pinned bearer only ever sees its own
-//     context's keys, so the account-wide view lives on the owner-gated developer
-//     API; the `tenantId` + `contextId` columns surface where each key lives.
+//     (`useDeveloperApi().listScopedKeys()`), which returns every key across both
+//     environments and ALL app contexts. The rendered rows are then scoped to the
+//     TenantSwitcher's ACTIVE environment (Live/Test) client-side, so switching
+//     environments narrows the list the same way the sibling admin pages do. The
+//     fetch stays account-wide (the developer API has no server-side environment
+//     filter); the filter is pure presentation over the caller's own, already-
+//     bounded and context-confined list. A context-pinned bearer only ever sees
+//     its own context's keys, so the account-wide view lives on the owner-gated
+//     developer API; the `tenantId` + `contextId` columns surface where each
+//     visible key lives.
 //   - Revoke a key via `devApi.revokeScopedKey(keyId)`, gated by a confirmation
 //     dialog that surfaces the ~5-minute authorizer cache window so admins aren't
 //     surprised by lingering 401s.
@@ -50,27 +56,35 @@ import SmartToyIcon from '@mui/icons-material/SmartToy';
 import { FormattedMessage, useIntl } from 'react-intl';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { useCurrentTenant } from '../../auth';
+import { useActiveTenantId, useCurrentTenant } from '../../auth';
 import { useDeveloperApi } from '../../api/developerApi';
 import type { ScopedKeyResponse } from '../../api/vectrosApi';
 
 export function KeysPage(): React.JSX.Element {
   const intl = useIntl();
   const { activeMembership } = useCurrentTenant();
+  const activeTenantId = useActiveTenantId();
   const devApi = useDeveloperApi();
   const queryClient = useQueryClient();
 
   // Server-state — every scoped key in the account, across both environments and
-  // ALL app contexts. A context-pinned bearer only ever sees its own context's
-  // keys, so the list comes from the account-wide Developer API; the tenantId +
-  // contextId columns on each row surface where each key lives. The queryKey is
+  // ALL app contexts. The list comes from the account-wide Developer API (a
+  // context-pinned bearer only ever sees its own context's keys). The queryKey is
   // intentionally NOT tenant-namespaced — the same account-wide list backs both
-  // environments, so switching the TenantSwitcher must not refetch a new bucket.
+  // environments, so switching the TenantSwitcher re-derives the visible rows
+  // (below) without refetching a new bucket.
   const keysQuery = useQuery({
     queryKey: ['scopedKeys'],
     queryFn: () => devApi.listScopedKeys(),
   });
   const keys = keysQuery.data ?? null;
+
+  // Scope the RENDERED rows to the TenantSwitcher's active environment (Live/Test).
+  // The fetch above is env-agnostic, so this filter is pure presentation over the
+  // caller's own, already-bounded list — leak-safe, and reactive to the switcher
+  // (activeTenantId changes → the filtered set recomputes on the next render).
+  const visibleKeys =
+    keys === null ? null : keys.filter((key) => key.tenantId === activeTenantId);
 
   // UI state (correct domain — stays as useState).
   const [revokeTarget, setRevokeTarget] = useState<ScopedKeyResponse | null>(null);
@@ -183,6 +197,7 @@ export function KeysPage(): React.JSX.Element {
         <LoadingBlock label={intl.formatMessage({ id: 'keys.loading' })} />
       )}
 
+      {/* Account has no scoped keys at all — the create-a-key prompt. */}
       {keys !== null && keys.length === 0 && !keysQuery.isError && (
         <Paper sx={{ p: 4, textAlign: 'center' }}>
           <Typography variant="body1" color="text.secondary">
@@ -191,7 +206,20 @@ export function KeysPage(): React.JSX.Element {
         </Paper>
       )}
 
-      {keys !== null && keys.length > 0 && (
+      {/* Keys exist, but none in the active environment — switching the
+          TenantSwitcher to the other environment surfaces the rest. */}
+      {visibleKeys !== null &&
+        keys!.length > 0 &&
+        visibleKeys.length === 0 &&
+        !keysQuery.isError && (
+          <Paper sx={{ p: 4, textAlign: 'center' }}>
+            <Typography variant="body1" color="text.secondary">
+              <FormattedMessage id="keys.emptyForEnv" />
+            </Typography>
+          </Paper>
+        )}
+
+      {visibleKeys !== null && visibleKeys.length > 0 && (
         <TableContainer component={Paper}>
           <Table aria-label={intl.formatMessage({ id: 'keys.title' })}>
             <TableHead>
@@ -220,7 +248,7 @@ export function KeysPage(): React.JSX.Element {
               </TableRow>
             </TableHead>
             <TableBody>
-              {keys.map((key) => {
+              {visibleKeys.map((key) => {
                 const isActive = key.status === 'active';
                 return (
                   <TableRow key={key.keyId ?? `${key.tenantId}#${key.contextId}#${key.userId}#${key.createdAt}`}>

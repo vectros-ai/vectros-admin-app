@@ -3,8 +3,8 @@
 // SEEDED tenant context, so it can call useCurrentTenant()/useActiveTenantId()
 // without hitting the network.
 //
-// Post-MR-#8-Phase-7, CurrentTenantProvider loads memberships from the auth
-// adapter (useAuth) — so a tenant-scoped page needs BOTH an <AuthProvider> and
+// CurrentTenantProvider loads memberships from the auth adapter (useAuth) — so
+// a tenant-scoped page needs BOTH an <AuthProvider> and
 // a CurrentTenantProvider. This helper supplies both: a no-op mock adapter +
 // CurrentTenantProvider seeded with `initialMemberships` (which skips the async
 // load). Page tests render `<TestTenantProvider><SomePage/></TestTenantProvider>`
