@@ -99,6 +99,8 @@ const RESOURCES = [
   'search',
   'schemas',
   'folders',
+  'entities',
+  'namespaces',
   'clients',
   'orgs',
   'users',
@@ -109,6 +111,8 @@ const RESOURCES = [
   'rag',
   'chat',
   'ask',
+  'erasure-requests',
+  'export',
 ] as const;
 type Resource = (typeof RESOURCES)[number];
 

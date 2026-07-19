@@ -3,11 +3,12 @@
 //
 // `data_scope` narrows the rows a clause applies to, keyed per ownership
 // dimension: the `userId` (authoring principal) plus namespaced scopes
-// `scope:<namespace>` (`scope:org`, `scope:client`, custom `scope:<ns>`).
-// `orgId` / `clientId` are accepted as shorthand and read back namespaced. Each
-// dimension's value is an allow-list; including `null` in that list ALSO grants
-// rows that carry NO value in that dimension. An empty map applies to all rows;
-// multiple dimensions AND together.
+// `scope:<namespace>` (`scope:org`, `scope:client`, custom `scope:<ns>`). Keys
+// are canonical `scope:<ns>` only — `org` and `client` are built-in namespace
+// values, not a dedicated wire vocabulary. Each dimension's value is an
+// allow-list; including `null` in that list ALSO grants rows that carry NO value
+// in that dimension. An empty map applies to all rows; multiple dimensions AND
+// together.
 //
 // The editor renders the namespaced scope dimensions; `userId` and anything the
 // model can't represent (a non-array value, an unexpected key) ride through
@@ -44,15 +45,6 @@ export function emptyDataScope(): DataScopeModel {
   return { dimensions: [], passthrough: {} };
 }
 
-/** Bare namespace for a data-scope key, honoring the `orgId`/`clientId` sugar. */
-function namespaceOfDataScopeKey(key: string): string | null {
-  const ns = namespaceFromScopeKey(key);
-  if (ns !== null) return ns;
-  if (key === 'orgId') return 'org';
-  if (key === 'clientId') return 'client';
-  return null;
-}
-
 /**
  * Parse a raw `data_scope` map into the editor form model. A key that resolves
  * to a namespace AND whose value is an array becomes a dimension (null entries
@@ -67,7 +59,7 @@ export function parseDataScope(
   const passthrough: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(src)) {
-    const ns = namespaceOfDataScopeKey(key);
+    const ns = namespaceFromScopeKey(key);
     if (ns !== null && Array.isArray(value)) {
       const values = value
         .filter((v) => v != null)

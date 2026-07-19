@@ -23,9 +23,8 @@
 //   - **Identity overrides** — expandable section. Ownership dimensions are
 //     namespaced (`scope:org`, `scope:client`, and custom `scope:<ns>`); the
 //     built-in org/client get dedicated fields and any custom namespace is an
-//     "additional scopes" row. Values round-trip through the canonical form —
-//     the legacy flat `orgId`/`clientId` keys are still accepted as write sugar
-//     but read back namespaced. An owned identity may carry at
+//     "additional scopes" row. Values round-trip through the canonical
+//     `scope:<ns>` form. An owned identity may carry at
 //     most two scope namespaces. Expanded by default when the loaded profile has
 //     any overrides set; collapsed otherwise (the "Show advanced" pattern).
 //   - **Sticky save bar** matching RoleEditor.
@@ -359,8 +358,8 @@ export function ProfileEditor(): React.JSX.Element {
       return true;
     }
     // Compare identity overrides through the canonical normal form so a
-    // freshly-loaded profile (whose overrides may read back as `scope:org` or
-    // legacy `orgId`) is never spuriously dirty, and a real edit to ANY
+    // freshly-loaded profile (whose overrides read back as `scope:<ns>` keys in
+    // arbitrary order) is never spuriously dirty, and a real edit to ANY
     // namespace — not just org/client — is detected.
     return (
       canonicalOverridesKeyOfModel(overrides) !==

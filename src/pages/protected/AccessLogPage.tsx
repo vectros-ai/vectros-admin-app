@@ -133,8 +133,6 @@ interface AccessLogFilters {
   readonly subjectType: SubjectType;
   /** Subject id whose disclosure history to return (required). */
   readonly subjectId: string;
-  /** Optional nested client/patient narrower. */
-  readonly clientId: string;
   /** Single-action filter, or '' for all actions. */
   readonly action: Action | '';
   /** Revealed-sensitive filter. */
@@ -152,7 +150,6 @@ function defaultPendingFilters(): AccessLogFilters {
     contextId: '',
     subjectType: 'user',
     subjectId: '',
-    clientId: '',
     action: '',
     revealed: 'any',
     from: '',
@@ -167,14 +164,12 @@ function defaultPendingFilters(): AccessLogFilters {
  * them. The tenant is derived server-side from the caller's token, never sent.
  */
 function buildApiRequest(filters: AccessLogFilters): GetAccessLogRequest {
-  const clientId = filters.clientId.trim();
   return {
     contextId: filters.contextId,
     subjectType: filters.subjectType,
     // Trimmed to match the Fetch gate (which trims before deciding "present")
     // and to avoid sending a trailing-space id the server would fail to match.
     subjectId: filters.subjectId.trim(),
-    ...(clientId ? { clientId } : {}),
     ...(filters.action ? { action: filters.action } : {}),
     ...(filters.revealed === 'revealed'
       ? { revealedSensitive: true }
@@ -446,18 +441,6 @@ export function AccessLogPage(): React.JSX.Element {
               sx={{ minWidth: 220 }}
               inputProps={{ spellCheck: false }}
             />
-
-            <TextField
-              size="small"
-              label={intl.formatMessage({ id: 'accessLog.clientIdLabel' })}
-              value={pendingFilters.clientId}
-              onChange={(e) =>
-                setPendingFilters((prev) => ({ ...prev, clientId: e.target.value }))
-              }
-              sx={{ minWidth: 200 }}
-              inputProps={{ spellCheck: false }}
-              helperText={<FormattedMessage id="accessLog.clientIdHelp" />}
-            />
           </Stack>
 
           <Divider />
@@ -627,9 +610,6 @@ export function AccessLogPage(): React.JSX.Element {
                   <TableCell sx={{ width: 160, fontWeight: 600 }}>
                     <FormattedMessage id="accessLog.columnCaller" />
                   </TableCell>
-                  <TableCell sx={{ width: 140, fontWeight: 600 }}>
-                    <FormattedMessage id="accessLog.columnClient" />
-                  </TableCell>
                   <TableCell sx={{ width: 150, fontWeight: 600 }}>
                     <FormattedMessage id="accessLog.columnRevealed" />
                   </TableCell>
@@ -714,20 +694,6 @@ function AccessLogTableRow({ row }: { row: ReadAccessLogRow }): React.JSX.Elemen
       >
         <Tooltip title={row.callerKeyId ?? ''}>
           <span>{row.callerKeyId ?? emDash}</span>
-        </Tooltip>
-      </TableCell>
-      <TableCell
-        sx={{
-          fontFamily: 'monospace',
-          fontSize: 12,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-          color: 'text.secondary',
-        }}
-      >
-        <Tooltip title={row.clientId ?? ''}>
-          <span>{row.clientId ?? emDash}</span>
         </Tooltip>
       </TableCell>
       <TableCell>

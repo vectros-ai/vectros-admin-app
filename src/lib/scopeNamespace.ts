@@ -4,9 +4,8 @@
 // An owned item carries its owning user plus up to two namespaced scope values.
 // A namespace is the key half of a `scope:<namespace>` dimension: 2–32 chars,
 // a lowercase letter first, then lowercase letters, digits, `_` or `-`.
-// `org` and `client` are the two built-in namespaces (`scope:org` / `scope:client`,
-// with `orgId` / `clientId` accepted as write-time shorthand); `user`, `self`,
-// `tenant`, `context`, and `scope` are reserved and rejected.
+// `org` and `client` are the two built-in namespaces (`scope:org` / `scope:client`);
+// `user`, `self`, `tenant`, `context`, and `scope` are reserved and rejected.
 //
 // Pure (no React) so mutation builders, the scope editors, and tests all
 // validate the exact same shape the platform enforces.
@@ -65,7 +64,7 @@ export function scopeKey(namespace: string): string {
 
 /**
  * Extract the bare namespace from a canonical `scope:<namespace>` key, or null
- * if the key isn't in that form. `scope:org` → `org`; `orgId` → null.
+ * if the key isn't in that form. `scope:org` → `org`; a bare `org` → null.
  */
 export function namespaceFromScopeKey(key: string): string | null {
   if (!key.startsWith(SCOPE_KEY_PREFIX)) return null;

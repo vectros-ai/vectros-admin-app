@@ -3,6 +3,31 @@
 All notable changes to the Vectros Admin App are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.10.0 — 2026-07-18
+
+### Changed
+
+- **Org and client are now built-in namespaces of the generic identity model,
+  not a separate concept.** Identity overrides and data-scope filters on access
+  profiles and roles are authored and shown through the same `scope:<namespace>`
+  path as any custom scope. When granting scope to a profile or role, the
+  **Identity entities** resource replaces the former separate Orgs and Clients
+  resources.
+- **Activity log** resource-type filters now include identity entities,
+  namespaces, erasure requests, and export.
+
+### Removed
+
+- **The disclosures view drops the nested Client filter and column.** A
+  read-access query is scoped by its subject (subject type + subject id); the
+  platform no longer supports a secondary client narrower.
+
+### Under the hood
+
+- Updated to `@vectros-ai/sdk` 0.35.0, which retires the `/v1/orgs` and
+  `/v1/clients` endpoints and the `orgId`/`clientId` wire fields in favor of the
+  generic `/v1/entities` API and the `scopes` array.
+
 ## 0.9.0 — 2026-07-11
 
 ### Fixed

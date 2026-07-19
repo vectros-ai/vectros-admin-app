@@ -22,6 +22,7 @@ import { TestIntlProvider } from '../test/intl';
 import { I18N_DEFAULT_LOCALE } from '../i18n/IntlProvider';
 import enMessages from '../i18n/messages.en.json';
 import {
+  RESOURCE_CATALOG,
   ScopeEditor,
   emptyClause,
   formatScopeClauseValidationError,
@@ -63,9 +64,9 @@ describe('normalizeScopes()', () => {
   });
 
   it('carries data_scope through (the dropped key that caused the bug)', () => {
-    const scope = { allowed_actions: ['read'], data_scope: { orgId: 'org_1' } };
+    const scope = { allowed_actions: ['read'], data_scope: { 'scope:org': ['org_1'] } };
     expect(normalizeScopes([scope])).toEqual([
-      { allowed_actions: ['read'], data_scope: { orgId: 'org_1' } },
+      { allowed_actions: ['read'], data_scope: { 'scope:org': ['org_1'] } },
     ]);
   });
 
@@ -224,6 +225,29 @@ describe('formatScopeClauseValidationError()', () => {
 // ---------------------------------------------------------------------------
 // <ScopeEditor>
 // ---------------------------------------------------------------------------
+
+describe('RESOURCE_CATALOG (grantable scope resources)', () => {
+  it('offers `entities` and NOT the retired org/client — nor the inert `namespaces`', () => {
+    const values = RESOURCE_CATALOG.map((r) => r.value);
+    // The generic IdentityEntityDB surface replaced the retired org/client routes.
+    expect(values).toContain('entities');
+    // `orgs`/`clients` are dead authority (routes 404) — no longer grantable.
+    expect(values).not.toContain('orgs');
+    expect(values).not.toContain('clients');
+    // `namespaces` is delisted as a grantable resource (registry reads are open,
+    // writes are root-key only) — a `namespaces:<verb>` grant would be inert, so
+    // the matrix must not offer it as a false affordance.
+    expect(values).not.toContain('namespaces');
+  });
+
+  it('has an i18n label for every catalog resource', () => {
+    for (const { value } of RESOURCE_CATALOG) {
+      expect(
+        (enMessages as Record<string, string>)[`scopeEditor.resource.${value}`],
+      ).toBeTruthy();
+    }
+  });
+});
 
 describe('<ScopeEditor>', () => {
   it('renders the empty-state Paper when value is []', () => {

@@ -18,7 +18,7 @@
 // entry the matrix can't represent, so loading never drops data.
 //
 // v1 scope: `data_scope` (row-level ownership filters) stays `{}` — narrowing a
-// clause to specific orgId/clientId rows is a later iteration. Apps needing
+// clause to specific `scope:<ns>` rows is a later iteration. Apps needing
 // it today can call the AccessProfile endpoint directly.
 //
 // Validation helpers are exported separately (no React dep) so callers in
@@ -78,7 +78,7 @@ export interface ScopeClause {
   readonly allowed_actions: readonly string[];
 
   /**
-   * Row-level data filters (orgId / clientId / etc.). The editor's v1 fixes
+   * Row-level data filters (`scope:<ns>` allow-lists). The editor's v1 fixes
    * this to `{}` (no UI); the AccessProfile create endpoint accepts richer
    * shapes. Typed as `Record<string, unknown>` to leave room for the v2
    * key/value picker without a breaking shape change.
@@ -158,8 +158,11 @@ export const RESOURCE_CATALOG: readonly ResourceSpec[] = [
   { value: 'app-contexts', group: 'management', ops: 'cru' },
   { value: 'logs', group: 'management', ops: 'r' },
   { value: 'users', group: 'management', ops: 'crud' },
-  { value: 'orgs', group: 'management', ops: 'crud' },
-  { value: 'clients', group: 'management', ops: 'crud' },
+  // `entities` (identity entities) replaces the retired `orgs`/`clients` grants;
+  // `entities:<verb>:<ns>` narrows to a namespace, unqualified = all namespaces.
+  // NOT `namespaces`: the backend delists it as a grantable resource (registry
+  // reads are open, writes need a root key), so `namespaces:<verb>` is inert.
+  { value: 'entities', group: 'management', ops: 'crud' },
 ];
 
 /** CRUD operation columns, in canonical order. */

@@ -2,13 +2,11 @@
 // identityOverrides — canonical read/write model for an access profile's
 // per-context identity overrides.
 //
-// Under SDK 0.34 the platform reads ownership dimensions back CANONICALLY as
-// `scope:<namespace>` keys — `scope:org`, `scope:client`, and open custom
-// namespaces like `scope:group`. The legacy `orgId` / `clientId` keys are still
-// accepted as write-time shorthand for `scope:org` / `scope:client`, but a
-// stored/minted profile reads them back namespaced. Editing UI that assumed the
-// flat `orgId` / `clientId` keys therefore saw `undefined` for a `scope:org`
-// override — the override was invisible in the form and dropped on save.
+// The platform expresses ownership dimensions as canonical `scope:<namespace>`
+// keys — `scope:org`, `scope:client`, and open custom namespaces like
+// `scope:group`. `org` and `client` are built-in namespace values, authored and
+// read back through the same `scope:<ns>` path as any other namespace — there is
+// no dedicated `orgId` / `clientId` wire vocabulary.
 //
 // This module is the single source of truth for turning the wire map into the
 // editor's form model and back, WITHOUT ever losing a dimension the UI doesn't
@@ -57,20 +55,18 @@ function stringifyOverrideValue(v: unknown): string {
 }
 
 /**
- * Parse a raw `identityOverrides` map into the editor form model. Accepts both
- * the canonical `scope:<ns>` keys and the legacy `orgId` / `clientId` shorthand;
- * `scope:org` / `scope:client` win over the legacy keys when (unusually) both
- * appear. Custom `scope:<ns>` dimensions land in `extras` in encounter order;
- * anything else is preserved verbatim in `passthrough`.
+ * Parse a raw `identityOverrides` map into the editor form model. Keys are the
+ * canonical `scope:<ns>` form; `scope:org` / `scope:client` populate the
+ * dedicated org / client fields and every other `scope:<ns>` dimension lands in
+ * `extras` in encounter order. Anything else is preserved verbatim in
+ * `passthrough`.
  */
 export function parseIdentityOverrides(
   raw: Record<string, unknown> | null | undefined,
 ): IdentityOverridesModel {
   const src = raw ?? {};
   let org = '';
-  let orgCanonical = false;
   let client = '';
-  let clientCanonical = false;
   const extras: IdentityOverrideExtra[] = [];
   const passthrough: Record<string, unknown> = {};
 
@@ -78,20 +74,10 @@ export function parseIdentityOverrides(
     const str = stringifyOverrideValue(value);
     if (key === 'scope:org') {
       org = str;
-      orgCanonical = true;
-      continue;
-    }
-    if (key === 'orgId') {
-      if (!orgCanonical) org = str;
       continue;
     }
     if (key === 'scope:client') {
       client = str;
-      clientCanonical = true;
-      continue;
-    }
-    if (key === 'clientId') {
-      if (!clientCanonical) client = str;
       continue;
     }
     const ns = namespaceFromScopeKey(key);
@@ -128,9 +114,9 @@ export function serializeIdentityOverrides(
 
 /**
  * A key-order-independent canonical string for a wire overrides map, for
- * dirty-comparison. Projects the map through parse→serialize (so the legacy and
- * canonical spellings of the same override compare equal) then stringifies with
- * sorted keys.
+ * dirty-comparison. Projects the map through parse→serialize (so a re-ordered or
+ * differently-spread map of the same overrides compares equal) then stringifies
+ * with sorted keys.
  */
 export function canonicalOverridesKey(
   raw: Record<string, unknown> | null | undefined,

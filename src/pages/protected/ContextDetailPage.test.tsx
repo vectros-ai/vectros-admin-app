@@ -89,7 +89,7 @@ const PROFILE_ALICE_ROLED = {
   principalId: 'usr_alice',
   roleId: 'eng-member',
   status: 'active',
-  identityOverrides: { orgId: 'org_eng' } as Record<string, unknown>,
+  identityOverrides: { 'scope:org': 'org_eng' } as Record<string, unknown>,
   createdAt: '2026-05-17T09:00:00Z',
 };
 
@@ -296,7 +296,7 @@ describe('ContextDetailPage', () => {
     const rows = within(table).getAllByRole('row');
     const aliceRow = rows[1]!;
     const botRow = rows[2]!;
-    // Alice's `orgId: org_eng` override reads back canonically as `org: org_eng`;
+    // Alice's `scope:org` override renders as `org: org_eng`;
     // bot has none, shown as an em dash.
     expect(within(aliceRow).getByText('org: org_eng')).toBeInTheDocument();
     expect(within(botRow).getByText('—')).toBeInTheDocument();

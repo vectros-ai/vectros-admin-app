@@ -340,7 +340,10 @@ describe('RoleEditor — clone dialog', () => {
       initialUrl: '/access/contexts/engineering/roles/eng-member',
     });
     await screen.findByRole('heading', { level: 1, name: /edit role eng-member/i });
-    await user.click(screen.getByRole('button', { name: /^clone$/i }));
+    // Clone is disabled until the role baseline loads — wait for enabled.
+    const cloneOpenBtn = screen.getByRole('button', { name: /^clone$/i });
+    await waitFor(() => expect(cloneOpenBtn).toBeEnabled());
+    await user.click(cloneOpenBtn);
 
     const dialog = await screen.findByRole('dialog', { name: /clone role/i });
     const idInput = within(dialog).getByRole('textbox', { name: /new role id/i }) as HTMLInputElement;
@@ -366,14 +369,17 @@ describe('RoleEditor — clone dialog', () => {
     const user = userEvent.setup();
     const ROLE_SCOPED = {
       ...ROLE_ENG_MEMBER,
-      scopes: [{ allowed_actions: ['records:r'], data_scope: { orgId: ['org_eng'] } }],
+      scopes: [{ allowed_actions: ['records:r'], data_scope: { 'scope:org': ['org_eng'] } }],
     };
     const { client } = renderEditor({
       client: makeMockClient({ getRole: vi.fn().mockResolvedValue(ROLE_SCOPED) }),
       initialUrl: '/access/contexts/engineering/roles/eng-member',
     });
     await screen.findByRole('heading', { level: 1, name: /edit role eng-member/i });
-    await user.click(screen.getByRole('button', { name: /^clone$/i }));
+    // Clone is disabled until the role baseline loads — wait for enabled.
+    const cloneOpenBtn = screen.getByRole('button', { name: /^clone$/i });
+    await waitFor(() => expect(cloneOpenBtn).toBeEnabled());
+    await user.click(cloneOpenBtn);
     const dialog = await screen.findByRole('dialog', { name: /clone role/i });
     await user.click(within(dialog).getByRole('button', { name: /^clone$/i }));
     await waitFor(() => expect(client.auth.createRole).toHaveBeenCalledTimes(1));
@@ -381,7 +387,7 @@ describe('RoleEditor — clone dialog', () => {
       body: { scopes: Array<{ allowed_actions: string[]; data_scope: unknown }> };
     };
     // The clause's row filter must survive — dropping it would widen to all rows.
-    expect(call.body.scopes[0]?.data_scope).toEqual({ orgId: ['org_eng'] });
+    expect(call.body.scopes[0]?.data_scope).toEqual({ 'scope:org': ['org_eng'] });
   });
 });
 

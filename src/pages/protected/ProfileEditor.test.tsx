@@ -86,7 +86,7 @@ const PROFILE_ALICE_ROLED = {
   contextId: 'engineering',
   principalId: 'usr_alice',
   roleId: 'eng-member',
-  identityOverrides: { orgId: 'org_eng' } as Record<string, unknown>,
+  identityOverrides: { 'scope:org': 'org_eng' } as Record<string, unknown>,
 };
 
 interface MockOverrides {
@@ -312,7 +312,7 @@ describe('ProfileEditor — create mode', () => {
       screen.getByRole('textbox', { name: /org id/i }),
       'org_field',
     );
-    // Leave clientId blank — should be omitted from the payload.
+    // Leave the client field blank — should be omitted from the payload.
 
     await user.click(screen.getByRole('button', { name: /^save$/i }));
     await waitFor(() => {
@@ -321,8 +321,7 @@ describe('ProfileEditor — create mode', () => {
     const call = client.auth.createAccessProfile.mock.calls[0]?.[0] as {
       body: { identityOverrides?: Record<string, unknown> };
     };
-    // Written in the canonical `scope:<ns>` form; `orgId` sugar is accepted on
-    // read but the save normalizes to `scope:org`.
+    // The org field is written in the canonical `scope:<ns>` form.
     expect(call.body.identityOverrides).toEqual({ 'scope:org': 'org_field' });
   });
 
@@ -420,7 +419,7 @@ describe('ProfileEditor — edit mode', () => {
     renderEditor({
       initialUrl: '/access/contexts/engineering/profiles/usr_alice',
     });
-    // Alice has orgId='org_eng' → overrides section is auto-expanded.
+    // Alice has a scope:org override → overrides section is auto-expanded.
     const orgInput = (await screen.findByRole('textbox', {
       name: /org id/i,
     })) as HTMLInputElement;
@@ -468,7 +467,7 @@ describe('ProfileEditor — dirty-state regression', () => {
       name: /use a role/i,
     })) as HTMLInputElement;
     expect(roleRadio.checked).toBe(true);
-    // The loaded orgId override is seeded; the form must still read clean.
+    // The loaded scope:org override is seeded; the form must still read clean.
     expect(
       (await screen.findByRole('textbox', { name: /org id/i }) as HTMLInputElement)
         .value,
@@ -493,9 +492,8 @@ describe('ProfileEditor — dirty-state regression', () => {
   });
 });
 
-// Canonical 0.34 read-back: org via `scope:org`, plus a custom `scope:group`.
-// Before the fix these were invisible (read via `overrides.orgId`) and dropped
-// on save.
+// Canonical overrides: org via `scope:org`, plus a custom `scope:group`. Both
+// must render in the editor and survive a save (the namespaced read/write path).
 const PROFILE_CANONICAL_OVERRIDES = {
   contextId: 'engineering',
   principalId: 'usr_alice',
@@ -603,7 +601,7 @@ describe('ProfileEditor — clone dialog', () => {
     expect(call.body.roleId).toBe('eng-member');
     expect(call.body.scopes).toBeUndefined();
     // identityOverrides copied verbatim from source.
-    expect(call.body.identityOverrides).toEqual({ orgId: 'org_eng' });
+    expect(call.body.identityOverrides).toEqual({ 'scope:org': 'org_eng' });
   });
 
   it('Materialize ON copies role scopes inline; roleId omitted', async () => {

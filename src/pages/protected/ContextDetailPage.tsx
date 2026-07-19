@@ -517,8 +517,8 @@ function ProfileRow({
   const sourceIsRole = !!profile.roleId;
   const updated = profile.lastModified ?? profile.createdAt;
   // Surface the canonical namespaced override VALUES (scope:org / scope:client /
-  // custom scope:<ns>), not just a count — `orgId`/`clientId` are read back
-  // namespaced under 0.34.
+  // custom scope:<ns>), not just a count — ownership dimensions are always
+  // expressed as `scope:<ns>` keys.
   const overrides = describeIdentityOverrides(
     profile.identityOverrides as Record<string, unknown> | undefined,
   );

@@ -16,7 +16,7 @@
 //   7. SDK error → error alert with the SDK message + the requestId.
 //   8. The revealed-sensitive filter sends revealedSensitive true/false, and
 //      'Any' omits it; the action filter sends `action`.
-//   9. Optional clientId + from/to flow through (from/to as ISO-8601 UTC).
+//   9. Optional from/to flow through (as ISO-8601 UTC).
 //  10. start >= end disables Fetch + shows the time-range message.
 //  11. Cursor pagination — "Load more" fetches the next page (with startFrom)
 //      and appends its rows.
@@ -75,14 +75,13 @@ const SAMPLE_ROWS = [
     action: 'search',
     resourceType: 'search',
     resourceId: 'rec_2',
-    clientId: 'client_x',
     revealedSensitive: false,
     createdAt: '2026-05-30T14:20:00.000Z',
   },
 ] satisfies ReadAccessLogRow[];
 
 // A sparse row — the accounting query legitimately returns rows with absent
-// optional fields (no resourceId, no caller, no client, undefined reveal). The
+// optional fields (no resourceId, no caller, undefined reveal). The
 // cell fallbacks (em dash + "No") must render for these.
 const SPARSE_ROW = {
   id: 'ral_sparse',
@@ -224,7 +223,6 @@ describe('AccessLogPage', () => {
     // Tenant is derived server-side from the token — never sent.
     expect(payload.tenantId).toBeUndefined();
     // Optional filters omitted entirely (not `undefined`) so no query param is sent.
-    expect(payload.clientId).toBeUndefined();
     expect(payload.action).toBeUndefined();
     expect(payload.revealedSensitive).toBeUndefined();
     expect(payload.from).toBeUndefined();
@@ -244,12 +242,14 @@ describe('AccessLogPage', () => {
     const table = await screen.findByRole('table', { name: /read-access disclosure rows/i });
     // Header + two data rows.
     expect(within(table).getAllByRole('row')).toHaveLength(SAMPLE_ROWS.length + 1);
+    // The retired nested-client narrower column is gone (subject is the query axis).
+    const headers = within(table).getAllByRole('columnheader').map((h) => h.textContent);
+    expect(headers).not.toContain('Client');
     // Resource cells (type:id).
     expect(within(table).getByText('intake_form:rec_1')).toBeInTheDocument();
     expect(within(table).getByText('search:rec_2')).toBeInTheDocument();
-    // Caller + client cells.
+    // Caller cell.
     expect(within(table).getByText('key_root')).toBeInTheDocument();
-    expect(within(table).getByText('client_x')).toBeInTheDocument();
     // revealedSensitive=true → a "Revealed" chip; the masked row shows "No".
     expect(within(table).getByText(/^revealed$/i)).toBeInTheDocument();
     expect(within(table).getByText(/^no$/i)).toBeInTheDocument();
@@ -321,11 +321,10 @@ describe('AccessLogPage', () => {
     expect(payload.revealedSensitive).toBe(false);
   });
 
-  it('sends the action filter and optional clientId', async () => {
+  it('sends the action filter', async () => {
     const user = userEvent.setup();
     const { client } = renderPage();
     await fillRequired(user);
-    await user.type(screen.getByLabelText(/client id/i), 'client_x');
     // Pick an action.
     await user.click(screen.getByLabelText(/^action$/i));
     await user.click(await screen.findByRole('option', { name: /^read$/i }));
@@ -334,7 +333,6 @@ describe('AccessLogPage', () => {
     await waitFor(() => expect(getAccessLogMock(client)).toHaveBeenCalled());
     const payload = getAccessLogMock(client).mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(payload.action).toBe('read');
-    expect(payload.clientId).toBe('client_x');
   });
 
   it('converts the from/to window to ISO-8601 UTC', async () => {

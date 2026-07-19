@@ -26,9 +26,12 @@ describe('parseDataScope', () => {
     expect(model.passthrough).toEqual({});
   });
 
-  it('accepts orgId/clientId shorthand keys', () => {
-    const model = parseDataScope({ orgId: ['o'], clientId: ['c'] });
-    expect(model.dimensions.map((d) => d.namespace)).toEqual(['org', 'client']);
+  it('routes a bare `orgId` key (not a canonical scope key) to passthrough', () => {
+    // `orgId`/`clientId` are NOT scope keys — only canonical `scope:<ns>` is
+    // modelled; a bare `orgId` rides through passthrough untouched.
+    const model = parseDataScope({ orgId: ['o'], 'scope:group': ['eng'] });
+    expect(model.dimensions.map((d) => d.namespace)).toEqual(['group']);
+    expect(model.passthrough).toEqual({ orgId: ['o'] });
   });
 
   it('preserves userId + non-array values in passthrough', () => {
@@ -102,12 +105,6 @@ describe('round-trip', () => {
   it('preserves a userId + namespaced filter with zero loss', () => {
     const raw = { userId: 'usr_1', 'scope:org': ['org_a', null] };
     expect(serializeDataScope(parseDataScope(raw))).toEqual(raw);
-  });
-
-  it('normalizes orgId shorthand to scope:org', () => {
-    expect(serializeDataScope(parseDataScope({ orgId: ['o'] }))).toEqual({
-      'scope:org': ['o'],
-    });
   });
 
   it('canonical key is order-independent', () => {

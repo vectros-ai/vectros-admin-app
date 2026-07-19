@@ -422,6 +422,23 @@ describe('LogsPage', () => {
     expect(payload.method).toBe('POST');
   });
 
+  it('offers the identity + generalized resource filters (matches the backend allow-list)', async () => {
+    const user = userEvent.setup();
+    const { devApi } = renderPage();
+    await user.click(screen.getByLabelText(/^resource$/i));
+    // The generic IdentityEntityDB surface + the previously-drifted resource types.
+    for (const r of ['entities', 'namespaces', 'erasure-requests', 'export']) {
+      expect(await screen.findByRole('option', { name: new RegExp(`^${r}$`) })).toBeInTheDocument();
+    }
+    // And a new value flows through to the request unchanged.
+    await user.click(await screen.findByRole('option', { name: /^entities$/ }));
+    await user.click(screen.getByRole('button', { name: /fetch logs/i }));
+    await waitFor(() => expect(devApi.getAdminLogs).toHaveBeenCalledTimes(1));
+    const payload = (devApi.getAdminLogs as ReturnType<typeof vi.fn>).mock
+      .calls[0]?.[0] as Record<string, unknown>;
+    expect(payload.resource).toBe('entities');
+  });
+
   // ---- dev-portal parity: horizon indicator, auto-refetch, context column ----
 
   it('shows the active time-horizon and updates it when a preset is picked', async () => {

@@ -1,9 +1,8 @@
 // ---------------------------------------------------------------------------
 // identityOverrides — parse / serialize / dirty-compare / validate.
 //
-// A `scope:org`-keyed override (the 0.34 canonical read-back) must be visible in
-// the form and survive a save, and a custom `scope:<ns>` override must
-// round-trip with zero loss.
+// A `scope:org`-keyed override must be visible in the form and survive a save,
+// and a custom `scope:<ns>` override must round-trip with zero loss.
 // ---------------------------------------------------------------------------
 
 import { describe, expect, it } from 'vitest';
@@ -19,7 +18,7 @@ import {
 } from './identityOverrides';
 
 describe('parseIdentityOverrides', () => {
-  it('reads org/client from the canonical scope:<ns> keys (the 0.34 read-back)', () => {
+  it('reads org/client from the canonical scope:<ns> keys', () => {
     const model = parseIdentityOverrides({
       'scope:org': 'org_123',
       'scope:client': 'cli_456',
@@ -30,16 +29,12 @@ describe('parseIdentityOverrides', () => {
     expect(model.passthrough).toEqual({});
   });
 
-  it('accepts the legacy orgId/clientId spelling as write sugar', () => {
-    const model = parseIdentityOverrides({ orgId: 'org_1', clientId: 'cli_1' });
-    expect(model.org).toBe('org_1');
-    expect(model.client).toBe('cli_1');
-  });
-
-  it('prefers the canonical scope:org over legacy orgId when both appear', () => {
-    // Insertion order deliberately puts the legacy key last.
+  it('does not treat a bare `orgId` key as an org override (canonical scope:<ns> only)', () => {
+    // `orgId`/`clientId` are not part of the wire vocabulary; `scope:org`
+    // populates the org field while a bare `orgId` rides through passthrough.
     const model = parseIdentityOverrides({ 'scope:org': 'canon', orgId: 'legacy' });
     expect(model.org).toBe('canon');
+    expect(model.passthrough).toEqual({ orgId: 'legacy' });
   });
 
   it('places custom namespaces in extras (in encounter order)', () => {
@@ -107,20 +102,9 @@ describe('round-trip (the zero-loss golden)', () => {
     const back = serializeIdentityOverrides(parseIdentityOverrides(raw));
     expect(back).toEqual(raw);
   });
-
-  it('a legacy orgId override normalizes to canonical scope:org on save', () => {
-    const back = serializeIdentityOverrides(parseIdentityOverrides({ orgId: 'org_x' }));
-    expect(back).toEqual({ 'scope:org': 'org_x' });
-  });
 });
 
 describe('canonical dirty-compare', () => {
-  it('legacy and canonical spellings of the same override compare equal', () => {
-    expect(canonicalOverridesKey({ orgId: 'o' })).toBe(
-      canonicalOverridesKey({ 'scope:org': 'o' }),
-    );
-  });
-
   it('is key-order independent', () => {
     expect(canonicalOverridesKey({ 'scope:org': 'o', 'scope:client': 'c' })).toBe(
       canonicalOverridesKey({ 'scope:client': 'c', 'scope:org': 'o' }),
