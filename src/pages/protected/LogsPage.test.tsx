@@ -54,6 +54,8 @@ const CONTEXTS = [
 // coloring + row backgrounds in one render.
 const SAMPLE_ENTRIES = [
   {
+    // An older row where requestId/errorCode serialized as the literal string
+    // "null" — must be normalized to "absent" and render nothing.
     timestamp: '2026-05-30T14:23:11.482Z',
     method: 'POST',
     resource: 'documents',
@@ -62,6 +64,8 @@ const SAMPLE_ENTRIES = [
     keyId: 'key_abc123',
     durationMs: 145,
     path: '/v1/documents',
+    requestId: 'null',
+    errorCode: 'null',
   },
   {
     timestamp: '2026-05-30T14:23:09.100Z',
@@ -71,6 +75,7 @@ const SAMPLE_ENTRIES = [
     keyId: 'key_abc123',
     durationMs: 22,
     path: '/v1/records/missing-id',
+    requestId: 'req_9f8e7d6c5b4a',
   },
   {
     timestamp: '2026-05-30T14:23:05.000Z',
@@ -80,6 +85,19 @@ const SAMPLE_ENTRIES = [
     keyId: 'key_xyz',
     durationMs: 3100,
     path: '/v1/records/some-id',
+  },
+  {
+    // A typed rejection (0.36+): the row carries both the correlation id and
+    // the machine-readable errorCode explaining the 429.
+    timestamp: '2026-05-30T14:23:01.000Z',
+    method: 'POST',
+    resource: 'chat',
+    status: 429,
+    keyId: 'key_abc123',
+    durationMs: 8,
+    path: '/v1/chat',
+    requestId: 'req_1a2b3c4d5e6f',
+    errorCode: 'RATE_LIMITED',
   },
 ];
 
@@ -236,6 +254,34 @@ describe('LogsPage', () => {
     // Latency cells.
     expect(within(table).getByText('145ms')).toBeInTheDocument();
     expect(within(table).getByText('3100ms')).toBeInTheDocument();
+  });
+
+  it('surfaces the per-row requestId and the typed errorCode (0.36+)', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole('button', { name: /fetch logs/i }));
+
+    const table = await screen.findByRole('table', { name: /api call log entries/i });
+    // The correlation id is shown for rows that carry one, and omitted otherwise.
+    expect(within(table).getByText(/Ref: req_9f8e7d6c5b4a/)).toBeInTheDocument();
+    expect(within(table).getByText(/Ref: req_1a2b3c4d5e6f/)).toBeInTheDocument();
+    // The typed rejection code appears under the status it explains.
+    expect(within(table).getByText('RATE_LIMITED')).toBeInTheDocument();
+  });
+
+  it('omits an absent, or literal-"null", requestId/errorCode', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole('button', { name: /fetch logs/i }));
+
+    const table = await screen.findByRole('table', { name: /api call log entries/i });
+    // Exactly two rows carry a real requestId (the 404 + 429); the literal-"null"
+    // row and the rows with no requestId contribute no "Ref:" caption.
+    expect(within(table).getAllByText(/^Ref:/)).toHaveLength(2);
+    expect(within(table).queryByText(/Ref: null/)).not.toBeInTheDocument();
+    // The literal-"null" errorCode is normalized away — only the real typed code
+    // (RATE_LIMITED) is shown, never the string "null".
+    expect(within(table).queryByText('null')).not.toBeInTheDocument();
   });
 
   it('renders the empty state when entries is []', async () => {

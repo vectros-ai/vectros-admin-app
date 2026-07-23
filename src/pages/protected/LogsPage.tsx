@@ -851,6 +851,12 @@ function LogRow({ entry }: { entry: LogEntry }): React.JSX.Element {
         ? 'warning.lighter'
         : 'inherit';
   const emDash = intl.formatMessage({ id: 'logs.cellEmpty' });
+  // `requestId`/`errorCode` (0.36+) can be null or the string "null" on rows
+  // predating them; normalize both to "absent" so we only render real values.
+  const requestId =
+    entry.requestId != null && entry.requestId !== 'null' ? entry.requestId : undefined;
+  const errorCode =
+    entry.errorCode != null && entry.errorCode !== 'null' ? entry.errorCode : undefined;
 
   return (
     <TableRow sx={{ bgcolor, '&:hover': { bgcolor: 'action.hover' } }}>
@@ -891,21 +897,40 @@ function LogRow({ entry }: { entry: LogEntry }): React.JSX.Element {
           <span>{entry.contextId && entry.contextId !== 'null' ? entry.contextId : emDash}</span>
         </Tooltip>
       </TableCell>
-      <TableCell
-        sx={{
-          fontFamily: 'monospace',
-          fontSize: 12,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}
-      >
+      <TableCell sx={{ maxWidth: 260 }}>
         <Tooltip title={entry.path ?? ''}>
-          <span>{entry.path ?? emDash}</span>
+          <Typography noWrap sx={{ fontFamily: 'monospace', fontSize: 12 }}>
+            {entry.path ?? emDash}
+          </Typography>
         </Tooltip>
+        {/* The correlation id to quote to support (0.36+) — recorded for every
+            call, most useful on a failure. Full id in the tooltip. */}
+        {requestId && (
+          <Tooltip title={requestId}>
+            <Typography
+              noWrap
+              variant="caption"
+              component="div"
+              sx={{ fontFamily: 'monospace', fontSize: 10, color: 'text.disabled' }}
+            >
+              <FormattedMessage id="logs.requestId" values={{ requestId }} />
+            </Typography>
+          </Tooltip>
+        )}
       </TableCell>
       <TableCell>
         <StatusChip status={entry.status} />
+        {/* The typed reason a call was rejected (0.36+), shown under the status
+            code it explains. */}
+        {errorCode && (
+          <Typography
+            variant="caption"
+            component="div"
+            sx={{ fontFamily: 'monospace', fontSize: 10, color: 'error.main', mt: 0.25 }}
+          >
+            {errorCode}
+          </Typography>
+        )}
       </TableCell>
       <TableCell
         sx={{

@@ -3,6 +3,20 @@
 All notable changes to the Vectros Admin App are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.11.0 — 2026-07-22
+
+### Added
+
+- **Activity log entries show the request reference id and, on failures, the
+  error code.** Each row carries the `requestId` to quote when contacting
+  support (the full id is shown on hover), and a call that was rejected with a
+  typed reason shows that `errorCode` beneath its status.
+
+### Security
+
+- Pin `fast-xml-parser` to a non-vulnerable version (`^5.10.1`) via an override —
+  above a published denial-of-service advisory in a transitive dependency.
+
 ## 0.10.0 — 2026-07-18
 
 ### Changed

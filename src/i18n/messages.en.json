@@ -378,6 +378,7 @@
   "logs.columnLatency": "Latency",
   "logs.columnKeyId": "Key ID",
   "logs.cellEmpty": "—",
+  "logs.requestId": "Ref: {requestId}",
 
   "layout.navUsage": "Usage",
 

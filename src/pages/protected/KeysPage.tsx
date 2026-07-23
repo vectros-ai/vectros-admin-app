@@ -7,8 +7,11 @@
 //     environments and ALL app contexts. The rendered rows are then scoped to the
 //     TenantSwitcher's ACTIVE environment (Live/Test) client-side, so switching
 //     environments narrows the list the same way the sibling admin pages do. The
-//     fetch stays account-wide (the developer API has no server-side environment
-//     filter); the filter is pure presentation over the caller's own, already-
+//     fetch stays account-wide DELIBERATELY: the endpoint does accept an optional
+//     `tenantId` environment filter, but requesting one environment would make the
+//     cached list env-specific and force a refetch on every switcher toggle. One
+//     account-wide list serving both environments is the cheaper shape here, and
+//     the filter below is then pure presentation over the caller's own, already-
 //     bounded and context-confined list. A context-pinned bearer only ever sees
 //     its own context's keys, so the account-wide view lives on the owner-gated
 //     developer API; the `tenantId` + `contextId` columns surface where each
@@ -80,9 +83,11 @@ export function KeysPage(): React.JSX.Element {
   const keys = keysQuery.data ?? null;
 
   // Scope the RENDERED rows to the TenantSwitcher's active environment (Live/Test).
-  // The fetch above is env-agnostic, so this filter is pure presentation over the
-  // caller's own, already-bounded list — leak-safe, and reactive to the switcher
-  // (activeTenantId changes → the filtered set recomputes on the next render).
+  // The fetch above is account-wide by choice (see the header note), so this filter
+  // is pure presentation over the caller's own, already-bounded list — leak-safe,
+  // and reactive to the switcher (activeTenantId changes → the filtered set
+  // recomputes on the next render). It is defense in depth, not the enforcement:
+  // every key here belongs to the caller's own account either way.
   const visibleKeys =
     keys === null ? null : keys.filter((key) => key.tenantId === activeTenantId);
 
