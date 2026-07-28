@@ -2,6 +2,8 @@
   "access.contexts.loadError.friendly": "Could not load your app contexts. Please try again.",
   "access.contexts.countLoading": "Loading count",
   "access.contexts.countPlaceholder": "—",
+  "access.contexts.metricsUnavailable": "Not available for the reserved control-plane context",
+  "access.contexts.detail.reservedUnavailable": "Roles and access profiles for the reserved control-plane context aren't manageable from this view.",
   "access.contexts.openRow": "Open app context {contextId}",
   "access.contexts.createDialog.createError.friendly": "Could not create the app context. Please review the details and try again.",
   "access.contexts.editDialog.saveError.friendly": "Could not save your changes. Please try again.",

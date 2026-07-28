@@ -86,6 +86,7 @@ import type {
 import { useDeveloperApi } from '../../api/developerApi';
 import type { AppContextSummary } from '../../api/developerApi';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
+import { RESERVED_VECTROS_ADMIN_CONTEXT_ID } from '../../lib/reservedContexts';
 import {
   ScopeEditor,
   emptyClause,
@@ -851,6 +852,11 @@ function ContextStep({
       drainPages<AppContextSummary>((startFrom) =>
         devApi.listAppContexts(startFrom, AUTH_PAGE_SIZE),
       ),
+    // A scoped key needs a data context to bind to; the reserved control-plane
+    // context is non-data-bearing and the partner API now rejects an explicit
+    // mint (and any access-profile read/write) pinned to it outright — never a
+    // meaningful pick here, so it's dropped before the picker ever sees it.
+    select: (contexts) => contexts.filter((c) => c.contextId !== RESERVED_VECTROS_ADMIN_CONTEXT_ID),
   });
 
   // Profile-existence probe. Fires only when both contextId AND principalId

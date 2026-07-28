@@ -1,11 +1,11 @@
 {
   "name": "vectros-admin-app",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "license": "Apache-2.0",
   "description": "Vectros Admin App — production admin UI for the Vectros platform and the canonical reference example for developers building on top of the Vectros API. Fork, re-brand via src/brand.ts, point at your own Cognito pool, and ship.",
   "type": "module",
   "engines": {
-    "node": "^20.19.0 || >=22.12.0",
+    "node": ">=22.22.0",
     "npm": ">=10.0.0"
   },
   "scripts": {
@@ -28,17 +28,17 @@
     "@mui/material": "7.3.11",
     "@tanstack/react-query": "5.100.14",
     "@tanstack/react-query-devtools": "5.100.14",
-    "@vectros-ai/sdk": "^0.36.0",
+    "@vectros-ai/sdk": "^0.37.0",
     "@zxcvbn-ts/core": "^3.0.4",
     "@zxcvbn-ts/language-common": "^3.0.4",
     "@zxcvbn-ts/language-en": "^3.0.2",
     "aws-amplify": "6.18.0",
     "jose": "^5.10.0",
     "qrcode.react": "^4.2.0",
-    "react": "19.2.6",
-    "react-dom": "19.2.6",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
     "react-intl": "^10.1.11",
-    "react-router": "^7.16.0",
+    "react-router": "^8.3.0",
     "@vectros-ai/react": "^0.6.1"
   },
   "overrides": {

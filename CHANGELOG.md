@@ -3,6 +3,55 @@
 All notable changes to the Vectros Admin App are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.12.0 — 2026-07-27
+
+### Security
+
+- Upgrade `react-router` to `^8.3.0`, clearing five published advisories that
+  covered every 6.x/7.x release and 8.x up to 8.2.0. Three of the five are
+  specific to server-side rendering and React Server Components, which this app
+  does not use; the two that can reach a browser-only app are an open redirect
+  via backslashes in link targets and inefficient route matching.
+
+  Note that the upgrade does **not** by itself make a link target safe: an
+  attacker-controlled value passed to `<Link to>` or `navigate()` can still
+  resolve off-origin. Validate any redirect target you accept from a URL or
+  from user input before routing to it — this app builds every navigation
+  target from a literal path, so it has no such input today.
+
+### Changed
+
+- **Minimum React and Node versions are now higher**, following the router
+  upgrade above. Forks need **React 19.2.7+** (this app pins 19.2.8) and
+  **Node 22.22.0+**; `engines.node` was narrowed to `>=22.22.0` to match.
+
+### Added
+
+- Route-matching regression tests over the access section's route table: which
+  route each URL resolves to — including the `/access` redirect, the nested
+  role and profile routes, and the fall-through to the catch-all — and that a
+  path parameter survives being encoded into a link and read back out,
+  including ids containing `+`, `@`, `:`, `/`, `?`, `#` and `%`.
+
+### Fixed
+
+- **Signing in could leave the whole app unusable — nav showing only "Welcome",
+  every other page blank.** The app minted its authorization token pinned to
+  the reserved `vectros-admin` context, which the API no longer accepts as an
+  explicit target for a token mint. Members, Scoped Keys, Activity Log, App
+  Contexts, and Usage never needed that context in the first place — they now
+  mint against the default context like everything else.
+- **The reserved context's row in App Contexts could show a stuck loading
+  spinner, and its Edit button always failed.** Its detail page now explains
+  plainly that roles and access profiles aren't manageable there, instead of
+  hanging or erroring.
+- **Creating a scoped key no longer offers the reserved context as a target.**
+  Picking it always failed to mint the key.
+
+### Under the hood
+
+- Updated to `@vectros-ai/sdk` 0.37.0.
+
 ## 0.11.0 — 2026-07-22
 
 ### Added

@@ -68,6 +68,7 @@ import { describeIdentityOverrides } from '../../lib/identityOverrides';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
 import { usePrincipalDirectory } from '../../lib/usePrincipalDirectory';
 import type { ResolvedPrincipal } from '../../lib/usePrincipalDirectory';
+import { RESERVED_VECTROS_ADMIN_CONTEXT_ID } from '../../lib/reservedContexts';
 
 // ---------------------------------------------------------------------------
 // Constants — recognized tab values. Anything else in `?tab=` falls back to
@@ -95,6 +96,11 @@ export function ContextDetailPage(): React.JSX.Element {
   const { ctxId = '' } = useParams<{ ctxId: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = parseTab(searchParams.get('tab'));
+  // The reserved control-plane context can't back a context-pinned bearer
+  // (the partner API rejects an explicit mint for it outright), so its
+  // metadata/roles/profiles are never fetched here — see the reservedNotice
+  // rendered below instead of the tabs.
+  const isReservedControlPlane = ctxId === RESERVED_VECTROS_ADMIN_CONTEXT_ID;
 
   // Context-meta query. Pre-warmed by no current page; first fetch happens
   // here. Tabs render even while this is in flight — the breadcrumb has
@@ -102,7 +108,7 @@ export function ContextDetailPage(): React.JSX.Element {
   const contextQuery = useQuery({
     queryKey: accessQueryKeys.appContext(ctxId),
     queryFn: () => vectrosApiClient(tenant, ctxId).auth.getAppContext({ contextId: ctxId }),
-    enabled: ctxId !== '',
+    enabled: ctxId !== '' && !isReservedControlPlane,
   });
 
   const handleTabChange = (_event: React.SyntheticEvent, newValue: TabValue): void => {
@@ -160,26 +166,34 @@ export function ContextDetailPage(): React.JSX.Element {
         </ApiErrorAlert>
       )}
 
-      {/* Tab strip — TabPanels (visibility-toggled containers) below. */}
-      <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-        <Tabs
-          value={activeTab}
-          onChange={handleTabChange}
-          aria-label={intl.formatMessage({ id: 'access.contexts.detail.tabsLabel' })}
-        >
-          <Tab
-            value="roles"
-            label={<FormattedMessage id="access.roles.title" />}
-          />
-          <Tab
-            value="profiles"
-            label={<FormattedMessage id="access.profiles.title" />}
-          />
-        </Tabs>
-      </Box>
+      {isReservedControlPlane ? (
+        <Alert severity="info">
+          <FormattedMessage id="access.contexts.detail.reservedUnavailable" />
+        </Alert>
+      ) : (
+        <>
+          {/* Tab strip — TabPanels (visibility-toggled containers) below. */}
+          <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+            <Tabs
+              value={activeTab}
+              onChange={handleTabChange}
+              aria-label={intl.formatMessage({ id: 'access.contexts.detail.tabsLabel' })}
+            >
+              <Tab
+                value="roles"
+                label={<FormattedMessage id="access.roles.title" />}
+              />
+              <Tab
+                value="profiles"
+                label={<FormattedMessage id="access.profiles.title" />}
+              />
+            </Tabs>
+          </Box>
 
-      {activeTab === 'roles' && <RolesTab ctxId={ctxId} />}
-      {activeTab === 'profiles' && <ProfilesTab ctxId={ctxId} />}
+          {activeTab === 'roles' && <RolesTab ctxId={ctxId} />}
+          {activeTab === 'profiles' && <ProfilesTab ctxId={ctxId} />}
+        </>
+      )}
     </Stack>
   );
 }

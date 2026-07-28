@@ -9,8 +9,8 @@
 // display as their id.
 //
 // The directory is tenant-wide (users are not context-partitioned), so it reads
-// through the tenant's admin-context client — the same source the Members page
-// uses — and is cached per tenant.
+// through the tenant's default (no-context) client — the same source the
+// Members page uses — and is cached per tenant.
 // ---------------------------------------------------------------------------
 
 import { useMemo } from 'react';

@@ -25,12 +25,12 @@
 //
 // **Why the optional `contextId`.** A minted bearer is pinned to a single app
 // context and may act ONLY within it (a non-root credential is context-confined
-// server-side). The control-plane pages (Members, Scoped Keys, Logs) operate in
-// the reserved admin context, so they omit `contextId` and get the default
-// admin-context bearer. The context-scoped pages (an app context's detail, its
-// roles and access profiles) MUST pass the context they're operating in, so the
-// bearer is minted for that context — otherwise every call naming a different
-// context fails closed with a 403. Listing or creating contexts themselves is a
+// server-side). A call site with no reason to operate in a specific context
+// omits `contextId` and gets a bearer minted against the base default context.
+// The context-scoped pages (an app context's detail, its roles and access
+// profiles) MUST pass the context they're operating in, so the bearer is
+// minted for that context — otherwise every call naming a different context
+// fails closed with a 403. Listing or creating contexts themselves is a
 // tenant-wide, owner-gated operation no single context-pinned bearer can
 // perform; those go through the developer API instead (see ./developerApi).
 //
@@ -70,7 +70,7 @@ function clientKey(tenantId: TenantId, contextId?: string): string {
  * Usage from pages:
  *
  *     const tenant = useActiveTenantId();
- *     // Control-plane page (reserved admin context) — omit the context:
+ *     // No specific context to operate in — omit it, get the default bearer:
  *     const users = await vectrosApiClient(tenant).identity.listUsers();
  *     // Context-scoped page (operating inside `ctxId`) — pass it:
  *     const roles = await vectrosApiClient(tenant, ctxId).auth.listRoles({ contextId: ctxId });

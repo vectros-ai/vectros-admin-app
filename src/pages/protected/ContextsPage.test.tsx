@@ -222,8 +222,9 @@ describe('ContextsPage', () => {
 
   it('renders the table with one row per context (N>1)', async () => {
     renderPage();
-    // Wait for the actual table — `vectros-admin` text also appears in the
-    // subtitle copy, so we anchor on the table to avoid the false positive.
+    // Wait for the actual table — the subtitle also references a context id
+    // (the RESERVED_DEFAULT_CONTEXT_ID, `default`), so anchor on the table to
+    // avoid a false positive against that copy.
     const table = await screen.findByRole('table');
     expect(within(table).getByText('vectros-admin')).toBeInTheDocument();
     expect(within(table).getByText('engineering')).toBeInTheDocument();
@@ -232,13 +233,24 @@ describe('ContextsPage', () => {
   });
 
   it('shows per-row role + profile counts when the parallel queries resolve', async () => {
-    renderPage();
+    const { client } = renderPage();
     await screen.findByText('engineering');
-    // Engineering: 1 role + 2 profiles. vectros-admin: 0/0.
+    // Engineering: 1 role + 2 profiles.
     await waitFor(() => expect(screen.getByText('1')).toBeInTheDocument());
     expect(screen.getByText('2')).toBeInTheDocument();
-    // Two zero-count cells (vectros-admin's roles + profiles).
-    expect(screen.getAllByText('0').length).toBeGreaterThanOrEqual(2);
+    // The reserved control-plane context can't back a context-pinned bearer
+    // (the partner API rejects an explicit mint for it outright) — its counts
+    // are never fetched, shown as "—" rather than a real (possibly zero) count.
+    expect(client.auth.listRoles).not.toHaveBeenCalledWith(
+      expect.objectContaining({ contextId: 'vectros-admin' }),
+    );
+    expect(client.auth.listAccessProfiles).not.toHaveBeenCalledWith(
+      expect.objectContaining({ contextId: 'vectros-admin' }),
+    );
+    const adminRow = screen.getAllByRole('row')[1]!;
+    expect(
+      within(adminRow).getAllByLabelText(/not available for the reserved control-plane context/i),
+    ).toHaveLength(2);
   });
 
   it('shows Delete on non-reserved rows only (reserved contexts hide it)', async () => {
@@ -249,12 +261,15 @@ describe('ContextsPage', () => {
     // rows[0] is the header.
     const adminRow = rows[1]!;
     const engRow = rows[2]!;
-    // Every row shows Edit (enabled). The reserved vectros-admin row hides
-    // Delete entirely (the server refuses reserved-context teardown
-    // unconditionally); the plain engineering row offers it enabled.
-    for (const row of [adminRow, engRow]) {
-      expect(within(row).getByRole('button', { name: /edit name & description/i })).toBeEnabled();
-    }
+    // The reserved vectros-admin row hides Delete entirely (the server
+    // refuses reserved-context teardown unconditionally) AND hides Edit (it
+    // would mint a context-pinned bearer the same way, which the partner API
+    // now rejects outright for this context). The plain engineering row
+    // offers both, enabled.
+    expect(
+      within(adminRow).queryByRole('button', { name: /edit name & description/i }),
+    ).not.toBeInTheDocument();
+    expect(within(engRow).getByRole('button', { name: /edit name & description/i })).toBeEnabled();
     expect(within(adminRow).queryByRole('button', { name: /^delete$/i })).not.toBeInTheDocument();
     expect(within(engRow).getByRole('button', { name: /^delete$/i })).toBeEnabled();
   });
@@ -303,8 +318,9 @@ describe('ContextsPage', () => {
         listRoles: vi.fn().mockResolvedValue(pageOf([])),
         listAccessProfiles: vi.fn().mockResolvedValue(pageOf([])),
       });
-    // The one context renders as a table row (anchored on the table — the id
-    // also appears in the subtitle copy) instead of being skipped past.
+    // The one context renders as a table row (anchored on the table — the
+    // subtitle also references a context id, RESERVED_DEFAULT_CONTEXT_ID)
+    // instead of being skipped past.
     const table = await screen.findByRole('table');
     expect(within(table).getByText('vectros-admin')).toBeInTheDocument();
     // And we do NOT auto-navigate to the detail — the location stays on the

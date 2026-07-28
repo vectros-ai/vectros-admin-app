@@ -26,8 +26,8 @@ import {
   AuthProvider,
   CognitoAuthProvider,
   CurrentTenantProvider,
-  setPartnerApiTokenMinter,
 } from './auth';
+import { wirePartnerApiTokenMinter } from './auth/wireTokenMinter';
 import { COGNITO_CONFIG, API_CONFIG } from './config';
 import { BRAND } from './brand';
 import { ErrorBoundary, VersionUpdateBanner } from '@vectros-ai/react';
@@ -78,25 +78,11 @@ const authProvider = new CognitoAuthProvider({
 // 5a. Wire the partner-API token cache's minter to the just-instantiated
 //     adapter. The cache (consumed by axios interceptors — non-React code that
 //     can't read `useAuth()`) stays provider-agnostic: it knows nothing about
-//     how a partner-API bearer is minted. CognitoAuthProvider.mintPartnerApiToken
-//     does the Vectros-specific work (developer-API scoped-token). A fork
-//     swaps the provider above + wires its own minter here. Done before React
-//     mounts so the first partner-API call never races this registration.
-//
-//     The admin app's control-plane pages (members, scoped keys, logs) live in
-//     the reserved `vectros-admin` AppContext, so their bearers must be minted
-//     in that context explicitly — an un-contexted mint resolves to the base
-//     `default` context, which has no control-plane access profile (→ 404s on
-//     /members etc.). The context-scoped pages (an app context's detail, roles,
-//     and access profiles) DO supply a context: a bearer pinned to one context
-//     may act only within it, so reading or editing another context requires a
-//     bearer minted for THAT context. The cache passes the caller's requested
-//     contextId through here; we default it to the control-plane context only
-//     when the caller asked for no specific one.
-const CONTROL_PLANE_CONTEXT = 'vectros-admin';
-setPartnerApiTokenMinter((tenantId, contextId) =>
-  authProvider.mintPartnerApiToken(tenantId, contextId ?? CONTROL_PLANE_CONTEXT),
-);
+//     how a partner-API bearer is minted. Extracted to wireTokenMinter.ts
+//     (with its own unit test) since this module mounts the whole app at
+//     import time and can't itself be unit-tested. Done before React mounts so
+//     the first partner-API call never races this registration.
+wirePartnerApiTokenMinter(authProvider);
 
 // Build id baked in by the versionManifest() plugin in vite.config.ts. The
 // `typeof` guard keeps this a safe read if the define ever fails to apply —

@@ -68,9 +68,14 @@ const SAMPLE_USERS = [
   { id: 'u_bot', externalId: 'research-bot', type: 'SERVICE', status: 'ACTIVE' },
 ];
 
+// The reserved control-plane context is deliberately absent here: it's never
+// a pickable target (a scoped key needs a data context, and the partner API
+// rejects an explicit mint pinned to the reserved context outright) — see
+// the "never offers the reserved context" test below, which simulates the
+// developer API still returning it and asserts the picker excludes it anyway.
 const SAMPLE_CONTEXTS = [
-  { contextId: 'vectros-admin', name: 'Vectros Admin' },
   { contextId: 'partner-api', name: 'Partner API' },
+  { contextId: 'data-eng', name: 'Data Engineering' },
 ];
 
 const SAMPLE_PROFILE = {
@@ -84,13 +89,13 @@ const SAMPLE_CREATED_KEY = {
   keyId: 'ssk_test_abc123',
   keyName: 'good-name',
   tenantId: 'test',
-  contextId: 'vectros-admin',
+  contextId: 'partner-api',
   userId: 'u_alice',
   userType: 'HUMAN',
   status: 'active',
   keyType: 'scoped',
   rawKey: 'ssk_test_RAW_SECRET_VALUE_xyz',
-  accessProfileRef: 'test#vectros-admin#usr_u_alice',
+  accessProfileRef: 'test#partner-api#usr_u_alice',
   createdAt: '2026-05-30T08:00:00Z',
 };
 
@@ -101,12 +106,12 @@ const SAMPLE_IDEMPOTENT_KEY = {
   keyId: 'ssk_test_existing',
   keyName: 'good-name',
   tenantId: 'test',
-  contextId: 'vectros-admin',
+  contextId: 'partner-api',
   userId: 'u_alice',
   userType: 'HUMAN',
   status: 'active',
   keyType: 'scoped',
-  accessProfileRef: 'test#vectros-admin#usr_u_alice',
+  accessProfileRef: 'test#partner-api#usr_u_alice',
   createdAt: '2026-05-29T10:00:00Z',
 };
 
@@ -206,16 +211,17 @@ async function advancePastBind(user: ReturnType<typeof userEvent.setup>): Promis
 /**
  * Walks the wizard from ContextStep into ReviewStep — assumes the wizard
  * is currently mounted at the context step (after advancePastBind has
- * been called). Opens the context dropdown, picks vectros-admin, waits
- * for the profile-exists alert to render, then clicks Next.
+ * been called). Opens the context dropdown, picks partner-api (the first
+ * SAMPLE_CONTEXTS entry), waits for the profile-exists alert to render,
+ * then clicks Next.
  *
- * Default mocked behavior: SAMPLE_CONTEXTS contains vectros-admin and the
+ * Default mocked behavior: SAMPLE_CONTEXTS contains partner-api and the
  * default getAccessProfile mock returns SAMPLE_PROFILE so the profile-
  * exists path fires immediately.
  */
 async function advancePastContext(
   user: ReturnType<typeof userEvent.setup>,
-  context: RegExp = /^vectros-admin/,
+  context: RegExp = /^partner-api/,
 ): Promise<void> {
   // Open MUI Select via its accessible role (combobox).
   await user.click(screen.getByRole('combobox', { name: /^app context$/i }));
@@ -567,8 +573,33 @@ describe('<ScopedKeyCreateDialog>', () => {
     // Open the Select via its combobox role.
     await user.click(screen.getByRole('combobox', { name: /^app context$/i }));
     const listbox = await screen.findByRole('listbox');
-    expect(within(listbox).getByText(/^vectros-admin/)).toBeInTheDocument();
     expect(within(listbox).getByText(/^partner-api/)).toBeInTheDocument();
+    expect(within(listbox).getByText(/^data-eng/)).toBeInTheDocument();
+  });
+
+  it('ContextStep — never offers the reserved control-plane context, even if the API still returns it', async () => {
+    const user = userEvent.setup();
+    renderDialog();
+    vi.mocked(useDeveloperApi).mockReturnValue({
+      listAppContexts: vi.fn().mockResolvedValue(
+        pageOf([{ contextId: 'vectros-admin', name: 'Vectros Admin' }, ...SAMPLE_CONTEXTS]),
+      ),
+      createAppContext: vi.fn(),
+      deleteAppContext: vi.fn(),
+      listScopedKeys: vi.fn(),
+      revokeScopedKey: vi.fn(),
+      getAdminLogs: vi.fn(),
+    } as never);
+    await advancePastBind(user);
+
+    await user.click(screen.getByRole('combobox', { name: /^app context$/i }));
+    const listbox = await screen.findByRole('listbox');
+    // The real, non-reserved contexts are still offered...
+    expect(within(listbox).getByText(/^partner-api/)).toBeInTheDocument();
+    // ...but the reserved control-plane context is never a pickable target: a
+    // scoped key needs a data context, and the partner API rejects an
+    // explicit mint pinned to the reserved context outright.
+    expect(within(listbox).queryByText(/^vectros-admin/)).not.toBeInTheDocument();
   });
 
   it('ContextStep — Next is disabled until a context is picked + profile resolved', async () => {
@@ -581,7 +612,7 @@ describe('<ScopedKeyCreateDialog>', () => {
 
     await user.click(screen.getByRole('combobox', { name: /^app context$/i }));
     const listbox = await screen.findByRole('listbox');
-    await user.click(within(listbox).getByText(/^vectros-admin/));
+    await user.click(within(listbox).getByText(/^partner-api/));
 
     // Existence check resolves to the SAMPLE_PROFILE → Next enables.
     await waitFor(() =>
@@ -595,7 +626,7 @@ describe('<ScopedKeyCreateDialog>', () => {
     await advancePastBind(user);
     await user.click(screen.getByRole('combobox', { name: /^app context$/i }));
     const listbox = await screen.findByRole('listbox');
-    await user.click(within(listbox).getByText(/^vectros-admin/));
+    await user.click(within(listbox).getByText(/^partner-api/));
 
     expect(
       await screen.findByText(/AccessProfile exists for this/i),
@@ -615,7 +646,7 @@ describe('<ScopedKeyCreateDialog>', () => {
     await advancePastBind(user);
     await user.click(screen.getByRole('combobox', { name: /^app context$/i }));
     const listbox = await screen.findByRole('listbox');
-    await user.click(within(listbox).getByText(/^vectros-admin/));
+    await user.click(within(listbox).getByText(/^partner-api/));
 
     expect(await screen.findByText(/no accessprofile yet/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /create profile/i })).toBeInTheDocument();
@@ -634,7 +665,7 @@ describe('<ScopedKeyCreateDialog>', () => {
     await advancePastBind(user);
     await user.click(screen.getByRole('combobox', { name: /^app context$/i }));
     const listbox = await screen.findByRole('listbox');
-    await user.click(within(listbox).getByText(/^vectros-admin/));
+    await user.click(within(listbox).getByText(/^partner-api/));
 
     expect(
       await screen.findByText(/could not check accessprofile\..*boom/i),
@@ -652,7 +683,7 @@ describe('<ScopedKeyCreateDialog>', () => {
     await advancePastBind(user);
     await user.click(screen.getByRole('combobox', { name: /^app context$/i }));
     const listbox = await screen.findByRole('listbox');
-    await user.click(within(listbox).getByText(/^vectros-admin/));
+    await user.click(within(listbox).getByText(/^partner-api/));
 
     await user.click(await screen.findByRole('button', { name: /create profile/i }));
     expect(
@@ -670,7 +701,7 @@ describe('<ScopedKeyCreateDialog>', () => {
     await advancePastBind(user);
     await user.click(screen.getByRole('combobox', { name: /^app context$/i }));
     const listbox = await screen.findByRole('listbox');
-    await user.click(within(listbox).getByText(/^vectros-admin/));
+    await user.click(within(listbox).getByText(/^partner-api/));
     await user.click(await screen.findByRole('button', { name: /create profile/i }));
 
     const subDialog = await screen.findByRole('dialog', { name: /create accessprofile/i });
@@ -686,7 +717,7 @@ describe('<ScopedKeyCreateDialog>', () => {
 
     await waitFor(() => {
       expect(client.auth.createAccessProfile).toHaveBeenCalledWith({
-        contextId: 'vectros-admin',
+        contextId: 'partner-api',
         body: {
           principalId: 'usr_u_alice',
           scopes: [{ allowed_actions: ['records:r'], data_scope: {} }],
@@ -713,7 +744,7 @@ describe('<ScopedKeyCreateDialog>', () => {
     await advancePastBind(user);
     await user.click(screen.getByRole('combobox', { name: /^app context$/i }));
     const listbox = await screen.findByRole('listbox');
-    await user.click(within(listbox).getByText(/^vectros-admin/));
+    await user.click(within(listbox).getByText(/^partner-api/));
     await user.click(await screen.findByRole('button', { name: /create profile/i }));
 
     const subDialog = await screen.findByRole('dialog', { name: /create accessprofile/i });
@@ -751,7 +782,7 @@ describe('<ScopedKeyCreateDialog>', () => {
     // the actual contract being pinned.)
     expect(screen.getByText('good-name')).toBeInTheDocument(); // key name
     expect(screen.getByText('u_alice')).toBeInTheDocument(); // user id
-    expect(screen.getByText('vectros-admin')).toBeInTheDocument(); // contextId
+    expect(screen.getByText('partner-api')).toBeInTheDocument(); // contextId
   });
 
   // ----- Create-key mutation + ConfirmationStep --------
@@ -770,7 +801,7 @@ describe('<ScopedKeyCreateDialog>', () => {
       expect(client.auth.createScopedKey).toHaveBeenCalledWith({
         keyName: 'good-name',
         tenantId: TEST_TENANT_ID,
-        contextId: 'vectros-admin',
+        contextId: 'partner-api',
         userId: 'u_alice',
       });
     });
@@ -783,21 +814,22 @@ describe('<ScopedKeyCreateDialog>', () => {
     const user = userEvent.setup();
     const { client } = renderDialog();
     await advancePastBind(user);
-    // Pick a NON-admin data context — the exact case the old vectros-admin
-    // bearer failed on (a key could only ever be made for vectros-admin).
-    await advancePastContext(user, /^partner-api/);
+    // Pick the SECOND data context (not the default the other tests use) —
+    // proves the bearer follows the actual selection, not just whichever
+    // context happens to be picked first.
+    await advancePastContext(user, /^data-eng/);
     await user.click(screen.getByRole('button', { name: /^create$/i }));
 
     // The mint carries the picked context...
     await waitFor(() =>
       expect(client.auth.createScopedKey).toHaveBeenCalledWith(
-        expect.objectContaining({ contextId: 'partner-api' }),
+        expect.objectContaining({ contextId: 'data-eng' }),
       ),
     );
     // ...and — the BUG-2 fix — the profile read AND the key mint ride a bearer
     // minted for THAT context (the second vectrosApiClient arg). Reverting any
     // context-scoped call to vectrosApiClient(tenant) would drop this arg.
-    expect(vectrosApiClient).toHaveBeenCalledWith(TEST_TENANT_ID, 'partner-api');
+    expect(vectrosApiClient).toHaveBeenCalledWith(TEST_TENANT_ID, 'data-eng');
   });
 
   it('operates in the ENV-selected tenant, not the active tenant, when they differ (#578)', async () => {
@@ -832,7 +864,7 @@ describe('<ScopedKeyCreateDialog>', () => {
       </TestIntlProvider>,
     );
     await advancePastBind(user);
-    await advancePastContext(user, /^partner-api/);
+    await advancePastContext(user, /^data-eng/);
     await user.click(screen.getByRole('button', { name: /^create$/i }));
     await waitFor(() => expect(client.auth.createScopedKey).toHaveBeenCalled());
 
@@ -840,8 +872,8 @@ describe('<ScopedKeyCreateDialog>', () => {
     expect(vi.mocked(useDeveloperApi)).toHaveBeenCalledWith('live');
     // ...and the profile probe + key mint ride the LIVE tenant, never the active
     // TEST tenant — profile-check and mint can no longer diverge across tenants.
-    expect(vectrosApiClient).toHaveBeenCalledWith(LIVE_TENANT, 'partner-api');
-    expect(vectrosApiClient).not.toHaveBeenCalledWith(TEST_TENANT_ID, 'partner-api');
+    expect(vectrosApiClient).toHaveBeenCalledWith(LIVE_TENANT, 'data-eng');
+    expect(vectrosApiClient).not.toHaveBeenCalledWith(TEST_TENANT_ID, 'data-eng');
   });
 
   it('ConfirmationStep — fresh create shows the rawKey + copy button + cache warning', async () => {

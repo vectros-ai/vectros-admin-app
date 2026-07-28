@@ -86,16 +86,14 @@ import type { AppContextSummary } from '../../api/developerApi';
 import { ApiErrorAlert } from '../../components/ApiErrorAlert';
 import { accessQueryKeys } from '../../lib/accessQueryKeys';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
+import {
+  RESERVED_VECTROS_ADMIN_CONTEXT_ID,
+  RESERVED_DEFAULT_CONTEXT_ID,
+} from '../../lib/reservedContexts';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
-
-/** The reserved, auto-seeded admin context that backs the control-plane pages. */
-const RESERVED_VECTROS_ADMIN_CONTEXT_ID = 'vectros-admin';
-
-/** The reserved base context every tenant keeps — the server refuses to delete it. */
-const RESERVED_DEFAULT_CONTEXT_ID = 'default';
 
 /** Lifecycle statuses of a context whose asynchronous teardown is under way. */
 const TEARDOWN_STATUSES = new Set(['purging', 'deleted']);
@@ -142,7 +140,11 @@ export function ContextsPage(): React.JSX.Element {
   const countQueries = useQueries({
     queries: contexts.flatMap((ctx) => {
       const id = ctx.contextId;
-      if (!id) return [];
+      // The reserved control-plane context can't back a context-pinned bearer
+      // (the partner API rejects an explicit mint for it outright), so a
+      // per-row count fetch for it would only ever fail — skip it rather than
+      // spin forever. Its row shows "—" instead (see ContextRow below).
+      if (!id || id === RESERVED_VECTROS_ADMIN_CONTEXT_ID) return [];
       return [
         {
           queryKey: accessQueryKeys.roles(id),
@@ -179,7 +181,10 @@ export function ContextsPage(): React.JSX.Element {
     let i = 0;
     for (const ctx of contexts) {
       const id = ctx.contextId;
-      if (!id) continue;
+      // No entry for the reserved context — it contributed no queries above,
+      // so there is nothing at countQueries[i] to consume for it. ContextRow
+      // renders "—" for a missing entry rather than the loading placeholder.
+      if (!id || id === RESERVED_VECTROS_ADMIN_CONTEXT_ID) continue;
       const tplQuery = countQueries[i];
       const profQuery = countQueries[i + 1];
       i += 2;
@@ -218,7 +223,7 @@ export function ContextsPage(): React.JSX.Element {
             <Typography variant="body1" color="text.secondary" sx={{ mt: 1 }}>
               <FormattedMessage
                 id="access.contexts.subtitle"
-                values={{ defaultContextId: <code>{RESERVED_VECTROS_ADMIN_CONTEXT_ID}</code> }}
+                values={{ defaultContextId: <code>{RESERVED_DEFAULT_CONTEXT_ID}</code> }}
               />
             </Typography>
           </Box>
@@ -367,6 +372,13 @@ function ContextRow({
     id === RESERVED_VECTROS_ADMIN_CONTEXT_ID || id === RESERVED_DEFAULT_CONTEXT_ID;
   const tearingDown = TEARDOWN_STATUSES.has(context.status ?? '');
   const deletable = Boolean(id) && !reserved && !tearingDown;
+  // The control-plane context can't back a context-pinned bearer (the partner
+  // API rejects an explicit mint for it outright), so its role/profile counts
+  // are never fetched (see ContextsPage's countQueries above) and its Edit
+  // action — which would mint the same way — would only ever fail. `default`
+  // has no such restriction and keeps both.
+  const metricsUnavailable = id === RESERVED_VECTROS_ADMIN_CONTEXT_ID;
+  const editable = Boolean(id) && !metricsUnavailable;
 
   const open = (): void => {
     if (id) navigate(`/access/contexts/${id}`);
@@ -429,10 +441,22 @@ function ContextRow({
         {context.description ?? '—'}
       </TableCell>
       <TableCell align="right">
-        {countCell(counts?.roles ?? null)}
+        {metricsUnavailable ? (
+          <Tooltip title={intl.formatMessage({ id: 'access.contexts.metricsUnavailable' })}>
+            <Box component="span" sx={{ color: 'text.disabled' }}>—</Box>
+          </Tooltip>
+        ) : (
+          countCell(counts?.roles ?? null)
+        )}
       </TableCell>
       <TableCell align="right">
-        {countCell(counts?.profiles ?? null)}
+        {metricsUnavailable ? (
+          <Tooltip title={intl.formatMessage({ id: 'access.contexts.metricsUnavailable' })}>
+            <Box component="span" sx={{ color: 'text.disabled' }}>—</Box>
+          </Tooltip>
+        ) : (
+          countCell(counts?.profiles ?? null)
+        )}
       </TableCell>
       <TableCell sx={{ color: 'text.secondary', fontSize: 13 }}>
         {context.createdAt ? new Date(context.createdAt).toLocaleDateString() : '—'}
@@ -442,15 +466,17 @@ function ContextRow({
           row click, which opens the context's detail. The tooltip names it
           explicitly so the two affordances don't read as the same thing. */}
       <TableCell align="right" onClick={(e) => e.stopPropagation()}>
-        <Tooltip title={intl.formatMessage({ id: 'access.contexts.editDetails' })}>
-          <IconButton
-            size="small"
-            onClick={onEdit}
-            aria-label={intl.formatMessage({ id: 'access.contexts.editDetails' })}
-          >
-            <EditIcon fontSize="small" />
-          </IconButton>
-        </Tooltip>
+        {editable && (
+          <Tooltip title={intl.formatMessage({ id: 'access.contexts.editDetails' })}>
+            <IconButton
+              size="small"
+              onClick={onEdit}
+              aria-label={intl.formatMessage({ id: 'access.contexts.editDetails' })}
+            >
+              <EditIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        )}
         {/* Delete goes through the owner-gated developer API (teardown
             authority is server-side — see the module header). Hidden on the
             reserved contexts and on rows already tearing down: the server
