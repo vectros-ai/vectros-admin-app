@@ -63,6 +63,34 @@ export function scopeKey(namespace: string): string {
 }
 
 /**
+ * Maximum length of a scope VALUE (the `<value>` half of a `scope:<namespace>: <value>`
+ * pair), in characters. Mirrors the platform's server-side scope-value grammar.
+ */
+export const MAX_SCOPE_VALUE_LENGTH = 128;
+
+/**
+ * A scope VALUE is a letter-or-digit start, then `[A-Za-z0-9_-]`, 1–{@link MAX_SCOPE_VALUE_LENGTH}
+ * chars total — mirrors what the platform enforces server-side. Wider than the namespace grammar on
+ * case (values are frequently UUIDs or partner free-strings) and on a leading digit, but —
+ * deliberately, like the namespace grammar — excludes `:` and every other punctuation: a value can be
+ * used as an identity-entity id in a storage key server-side, so a `:` is not merely cosmetically
+ * wrong, it can break key parsing.
+ */
+export const SCOPE_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+
+/** Structured scope-VALUE-grammar error. */
+export type ScopeValueError = { readonly code: 'grammar' };
+
+/**
+ * Validate a single, already-trimmed, non-blank scope VALUE against
+ * {@link SCOPE_VALUE_PATTERN}. Returns null when valid. Callers that also need to reject a blank
+ * value do that check themselves (the message differs: "required" vs. "invalid").
+ */
+export function validateScopeValue(value: string): ScopeValueError | null {
+  return SCOPE_VALUE_PATTERN.test(value) ? null : { code: 'grammar' };
+}
+
+/**
  * Extract the bare namespace from a canonical `scope:<namespace>` key, or null
  * if the key isn't in that form. `scope:org` → `org`; a bare `org` → null.
  */

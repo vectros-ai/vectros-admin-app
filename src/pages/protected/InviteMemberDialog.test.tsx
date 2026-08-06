@@ -19,6 +19,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { TestIntlProvider } from '../../test/intl';
 import { pageOf } from '../../test/pageOf';
+import {
+  expectContextBindingHolds,
+  makeBindingTrackedClient,
+} from '../../test/contextBinding';
+import type { ContextBindingRecord } from '../../test/contextBinding';
 import { AUTH_PAGE_SIZE } from '../../lib/drainPages';
 import { vectrosApiClient, VectrosError } from '../../api/vectrosApi';
 import type * as VectrosApi from '../../api/vectrosApi';
@@ -71,7 +76,7 @@ function renderDialog(opts: {
   const onClose = opts.onClose ?? vi.fn();
   const utils = render(
     <TestIntlProvider>
-      <TestTenantProvider>
+      <TestTenantProvider kind="live">
         <InviteMemberDialog
           open={opts.open ?? true}
           onClose={onClose}
@@ -100,7 +105,7 @@ describe('InviteMemberDialog', () => {
     const { client } = renderDialog();
     await waitFor(() => {
       expect(client.auth.listRoles).toHaveBeenCalledWith({
-        contextId: 'vectros-admin',
+        contextId: 'default',
         limit: AUTH_PAGE_SIZE,
       });
     });
@@ -159,7 +164,7 @@ describe('InviteMemberDialog', () => {
 
     expect(client.auth.createInvite).toHaveBeenCalledWith({
       email: 'newmember@example.com',
-      contextId: 'vectros-admin',
+      contextId: 'default',
       accessProfile: { roleId: 'tmpl-owner' },
       ttlSeconds: 7 * 86400,
       sendEmail: true,
@@ -322,5 +327,71 @@ describe('InviteMemberDialog', () => {
     expect(screen.getByLabelText(/raw invite token/i)).toHaveTextContent('inv_test_token_abc');
     expect(screen.getByRole('button', { name: /copy raw token/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /copy accept link/i })).toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // Tenant guard — repeated here rather than relying on MembersPage
+  // withholding the button, because this dialog is exported and a fork can
+  // mount it directly.
+  // -------------------------------------------------------------------------
+  it('refuses to submit on a test tenant and explains why', async () => {
+    const client = makeMockClient();
+    vi.mocked(vectrosApiClient).mockReturnValue(client as never);
+    render(
+      <TestIntlProvider>
+        <TestTenantProvider kind="test">
+          <InviteMemberDialog open onClose={vi.fn()} onSuccess={vi.fn()} />
+        </TestTenantProvider>
+      </TestIntlProvider>,
+    );
+
+    expect(
+      await screen.findByText(/invitations are always created in your live tenant/i),
+    ).toBeInTheDocument();
+
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(/email address/i), 'newmember@example.com');
+    await waitFor(() => expect(client.auth.listRoles).toHaveBeenCalled());
+
+    // Even with a complete, valid form the submit stays disabled.
+    expect(screen.getByRole('button', { name: /send invite/i })).toBeDisabled();
+    expect(client.auth.createInvite).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // Context binding — see the long note in MembersPage.test.tsx. Both of this
+  // dialog's calls are context-scoped, and the submit one is the whole invite
+  // flow: a bearer/request mismatch here 403s the only path a partner has to
+  // add a member.
+  // -------------------------------------------------------------------------
+  it('pins listRoles and createInvite to a bearer minted for the context they name', async () => {
+    const user = userEvent.setup();
+    const records: ContextBindingRecord[] = [];
+    vi.mocked(vectrosApiClient).mockImplementation(
+      makeBindingTrackedClient(() => makeMockClient(), records) as never,
+    );
+
+    render(
+      <TestIntlProvider>
+        <TestTenantProvider kind="live">
+          <InviteMemberDialog open onClose={vi.fn()} onSuccess={vi.fn()} />
+        </TestTenantProvider>
+      </TestIntlProvider>,
+    );
+
+    await waitFor(() =>
+      expect(records.some((r) => r.method === 'auth.listRoles')).toBe(true),
+    );
+
+    await user.type(screen.getByLabelText(/email address/i), 'newmember@example.com');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /send invite/i })).toBeEnabled(),
+    );
+    await user.click(screen.getByRole('button', { name: /send invite/i }));
+    await waitFor(() =>
+      expect(records.some((r) => r.method === 'auth.createInvite')).toBe(true),
+    );
+
+    expectContextBindingHolds(records, ['auth.listRoles', 'auth.createInvite']);
   });
 });

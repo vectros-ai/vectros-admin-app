@@ -13,5 +13,7 @@
   "access.roles.openRow": "Open role {roleId}",
   "access.profiles.loadError.friendly": "Could not load access profiles for this context. Please try again.",
   "access.profiles.openRow": "Open access profile for {principalId}",
-  "access.profiles.emptyFiltered": "No access profiles reference {roleId} in this context."
+  "access.profiles.emptyFiltered": "No access profiles reference {roleId} in this context.",
+  "access.contexts.countError": "Count unavailable — it couldn't be loaded",
+  "access.contexts.countErrorShort": "!"
 }

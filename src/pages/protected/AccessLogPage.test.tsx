@@ -116,9 +116,12 @@ function makeMockDevApi() {
   };
 }
 
-function renderPage(opts: { client?: ReturnType<typeof makeMockClient> } = {}) {
+function renderPage(opts: {
+  client?: ReturnType<typeof makeMockClient>;
+  devApi?: ReturnType<typeof makeMockDevApi>;
+} = {}) {
   const client = opts.client ?? makeMockClient();
-  const devApi = makeMockDevApi();
+  const devApi = opts.devApi ?? makeMockDevApi();
   vi.mocked(vectrosApiClient).mockReturnValue(client as never);
   vi.mocked(useDeveloperApi).mockReturnValue(devApi as never);
   const utils = render(
@@ -482,5 +485,21 @@ describe('AccessLogPage', () => {
     expect(within(table).getByText(/^no$/i)).toBeInTheDocument();
     // Absent resource / caller / client / timestamp render the em-dash fallback.
     expect(within(table).getAllByText('—').length).toBeGreaterThan(0);
+  });
+
+  it('surfaces a context-list failure instead of leaving Fetch silently gated', async () => {
+    // The selector's source is a drained list that now REFUSES to return a
+    // partial result. Before, a failure left the dropdown empty and Fetch
+    // disabled with nothing said — indistinguishable from an account with no
+    // contexts, and permanent.
+    const devApi = makeMockDevApi();
+    devApi.listAppContexts = vi.fn().mockRejectedValue(new Error('boom'));
+    renderPage({ devApi });
+
+    await waitFor(() =>
+      expect(
+        screen.getByText(/couldn't load your app contexts/i),
+      ).toBeInTheDocument(),
+    );
   });
 });

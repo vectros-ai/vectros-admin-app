@@ -27,10 +27,13 @@ import accessLogEn from './hardening/accessLog.en.json';
 // app's i18n module rather than reaching into the library.
 export { I18N_DEFAULT_LOCALE } from '@vectros-ai/react';
 
+// Exported for tests only (e.g. an ICU-message-validity sweep) — production
+// code should go through <IntlProvider>, never read this map directly.
+
 // Merge the package's component-string defaults (AppLayout chrome, PasswordField,
 // MFA) UNDER this app's catalog so we never hand-copy those keys (app keys win
 // on collision). This app's catalog carries only its own surfaces + overrides.
-const MESSAGES_BY_LOCALE: MessagesByLocale = {
+export const MESSAGES_BY_LOCALE: MessagesByLocale = {
   en: {
     ...baseMessagesEn,
     ...messagesEn,

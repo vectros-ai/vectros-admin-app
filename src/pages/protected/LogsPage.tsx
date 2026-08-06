@@ -509,7 +509,7 @@ export function LogsPage(): React.JSX.Element {
                     : ALL_CONTEXTS
                 }
                 onChange={(e) => setSelectedContext(e.target.value)}
-                disabled={contextsQuery.isLoading}
+                disabled={contextsQuery.isLoading || contextsQuery.isError}
               >
                 <MenuItem value={ALL_CONTEXTS}>
                   <em>
@@ -522,6 +522,11 @@ export function LogsPage(): React.JSX.Element {
                   </MenuItem>
                 ))}
               </Select>
+              {contextsQuery.isError && (
+                <ApiErrorAlert error={contextsQuery.error}>
+                  <FormattedMessage id="logs.contextsLoadError" />
+                </ApiErrorAlert>
+              )}
             </FormControl>
 
             {/* Exclusive preset group — the selected value is highlighted so the

@@ -27,14 +27,29 @@
 //     `scope:<ns>` form. An owned identity may carry at
 //     most two scope namespaces. Expanded by default when the loaded profile has
 //     any overrides set; collapsed otherwise (the "Show advanced" pattern).
+//     **Whether authoring is possible is a LIVE, per-SESSION question, not a
+//     fixed fact about this app** — the platform lets a caller confer exactly
+//     the identity value it itself holds (`sessionHoldsAnyIdentity` in
+//     `lib/identityOverrides.ts`, reading `useScopeGate().identity`): an
+//     owner session holds none, but a sub-user session bound to an identity
+//     often does. A session with none sees the fields shown-but-disabled with
+//     an inline explanation rather than a save that's guaranteed to fail;
+//     a session that holds some sees them enabled (still bounded per-key by
+//     the backend on save — this doesn't try to predict which exact VALUES
+//     would succeed, only whether authoring is categorically possible).
 //   - **Sticky save bar** matching RoleEditor.
 //   - **Clone Dialog** with "Materialize role into inline scopes"
 //     toggle (default OFF — preserves role ref). Toggle ON copies
 //     the source role's scopes into the clone's inline scopes,
-//     decoupling from future role changes.
-//   - **Delete Dialog** — unconditional (the server applies no cascade refusal
-//     for profiles). Copy mentions the ~5-min authorizer policy-cache window
-//     for scoped-key impact.
+//     decoupling from future role changes. Identity overrides copy across
+//     only when this session's identity exactly matches the source's
+//     (`sessionIdentityMatchesOverrides`) — same conferral rule as the editor
+//     above; otherwise the dialog warns and omits them.
+//   - **Delete Dialog** — blocked (with an explanation) when the profile has
+//     identity overrides this session doesn't hold — displacing (clearing)
+//     an override it doesn't hold fails the same conferral rule. Copy
+//     mentions the ~5-min authorizer policy-cache window for scoped-key
+//     impact.
 // ---------------------------------------------------------------------------
 
 import { useEffect, useId, useMemo, useState } from 'react';
@@ -44,6 +59,7 @@ import {
   useParams,
 } from 'react-router';
 import {
+  Alert,
   AppBar,
   Autocomplete,
   Box,
@@ -79,6 +95,7 @@ import {
   ConfirmDialog,
   LoadingBlock,
   SubmitButton,
+  useScopeGate,
 } from '@vectros-ai/react';
 
 import {
@@ -102,10 +119,12 @@ import { accessQueryKeys } from '../../lib/accessQueryKeys';
 import {
   emptyIdentityOverrides,
   parseIdentityOverrides,
-  serializeIdentityOverrides,
   canonicalOverridesKey,
   canonicalOverridesKeyOfModel,
   countOverrideNamespaces,
+  identityOverridesRequestValue,
+  sessionHoldsAnyIdentity,
+  sessionIdentityMatchesOverrides,
   validateIdentityOverrides,
 } from '../../lib/identityOverrides';
 import type {
@@ -158,6 +177,12 @@ function formatOverridesValidationError(
       return intl.formatMessage({
         id: 'access.profiles.editor.identityOverrideValueRequired',
       });
+    case 'extraInvalidValue':
+    case 'orgInvalidValue':
+    case 'clientInvalidValue':
+      return intl.formatMessage({
+        id: 'access.profiles.editor.identityOverrideValueInvalid',
+      });
     case 'extraNamespace':
       switch (error.error.code) {
         case 'reserved':
@@ -190,6 +215,17 @@ export function ProfileEditor(): React.JSX.Element {
   const principalIdFromUrl = decodeURIComponent(principalIdParam);
 
   const isCreate = principalIdParam === 'new';
+
+  // ── Identity-override authoring — LIVE, per session, not a fixed app fact.
+  // Whether this session's own credential holds any identity of its own
+  // (the platform's conferral rule lets a caller grant exactly the value it
+  // itself holds — an owner session holds none; a sub-user's often does).
+  // Fields render disabled during `identityLoading` too (sessionIdentity
+  // defaults to {}), consistent with the rest of this app's gates — but the
+  // EXPLANATION only shows once resolved, so a session that turns out to
+  // hold an identity never sees a wrong "can't be set" flash.
+  const { identity: sessionIdentity, loading: identityLoading } = useScopeGate();
+  const canAuthorIdentityOverrides = sessionHoldsAnyIdentity(sessionIdentity);
 
   // Tenant user directory — drives the assign-by-name picker (create) and the
   // human-readable label for the principal being edited.
@@ -249,6 +285,10 @@ export function ProfileEditor(): React.JSX.Element {
     () => rolesQuery.data ?? [],
     [rolesQuery.data],
   );
+  // A failed role load falls back to [] above, which renders as "this context
+  // has no roles" — indistinguishable from the real thing, and the drain now
+  // fails rather than returning a partial list. Surfaced instead of implied.
+  const rolesLoadFailed = rolesQuery.isError;
 
   // ── Baseline + prefill ─────────────────────────────────────────────────
   const [baseline, setBaseline] = useState<AccessProfileResponse | null>(null);
@@ -411,7 +451,11 @@ export function ProfileEditor(): React.JSX.Element {
   const canSubmit =
     (isCreate ? principalId !== '' && !principalIdInvalid : true) &&
     sourceValid &&
-    overridesError === null &&
+    // A stale, grammar-invalid stored override must NOT permanently block
+    // saving everything else on this profile when this session has no way
+    // to fix it (the fields are disabled) — only hold Save for it when the
+    // session could actually correct it.
+    (overridesError === null || !canAuthorIdentityOverrides) &&
     dirty;
 
   // Plain-language summary of what the profile currently grants — so the grant
@@ -443,11 +487,29 @@ export function ProfileEditor(): React.JSX.Element {
 
   // ── Save ───────────────────────────────────────────────────────────────
   const buildBody = () => {
-    // identityOverrides — canonical `scope:<ns>` wire form; blanks omitted;
-    // unmodellable keys preserved. Cast to the SDK's nested-Record typing at the
-    // boundary (runtime override values are flat strings).
-    const overridesWire = serializeIdentityOverrides(overrides);
-    const hasOverrides = Object.keys(overridesWire).length > 0;
+    // Only send identityOverrides when it's actually CHANGING — see
+    // identityOverridesRequestValue's own doc comment for why (in short:
+    // without this, a save that only touches an unrelated field on a
+    // profile that already has overrides would resend them untouched and
+    // fail for a reason the user never asked to change). This holds
+    // regardless of whether THIS session can author a non-empty override —
+    // when it can't, the fields are disabled below, so `overrides` never
+    // diverges from what was loaded anyway; when it can, this is what keeps
+    // a genuine edit correctly detected. Same canonical comparison the
+    // dirty-check above uses, so the two can never disagree about whether
+    // the overrides changed.
+    //
+    // A model CHANGED to empty (cleared) is distinguished from UNCHANGED-
+    // and-empty inside identityOverridesRequestValue: the former sends an
+    // explicit `{}` (a PATCH-omitted field means "leave as-is", so a real
+    // clear has to say so), the latter omits the field. A session with no
+    // identity can never reach the clear path anyway (its fields stay
+    // disabled below); one that holds an identity can.
+    const identityOverridesValue = identityOverridesRequestValue(
+      overrides,
+      baseline?.identityOverrides as Record<string, unknown> | undefined,
+      isCreate,
+    );
     return {
       principalId: isCreate ? principalId : principalIdFromUrl,
       ...(sourceType === 'role'
@@ -458,8 +520,8 @@ export function ProfileEditor(): React.JSX.Element {
               data_scope: c.data_scope as Record<string, Record<string, unknown>>,
             })),
           }),
-      ...(hasOverrides
-        ? { identityOverrides: overridesWire as unknown as Record<string, Record<string, unknown>> }
+      ...(identityOverridesValue
+        ? { identityOverrides: identityOverridesValue as unknown as Record<string, Record<string, unknown>> }
         : {}),
     };
   };
@@ -696,8 +758,14 @@ export function ProfileEditor(): React.JSX.Element {
           {/* Source body — exactly one visible at a time. */}
           {sourceType === 'role' && (
             <Stack spacing={1.5} sx={{ maxWidth: 720 }}>
+              {rolesLoadFailed && (
+                <ApiErrorAlert error={rolesQuery.error}>
+                  <FormattedMessage id="access.profiles.editor.roleRefLoadError" />
+                </ApiErrorAlert>
+              )}
               <Autocomplete
                 options={roles}
+                disabled={rolesLoadFailed}
                 getOptionLabel={(t) =>
                   t.name ? `${t.name} (${t.roleId})` : (t.roleId ?? '')
                 }
@@ -788,6 +856,18 @@ export function ProfileEditor(): React.JSX.Element {
                 <Typography variant="body2" color="text.secondary">
                   <FormattedMessage id="access.profiles.editor.identityOverridesHelp" />
                 </Typography>
+                {/* Suppress this while `identityLoading`, not just base the
+                    fields' disabled state on it — showing "can't be set"
+                    before the session's real identity resolves would flash
+                    the wrong copy at a session that turns out to hold one. */}
+                {!identityLoading && !canAuthorIdentityOverrides && (
+                  // role="status" (not the MUI default "alert"): informational,
+                  // not an error — and keeps this from colliding with a save
+                  // error's role="alert" when both render at once.
+                  <Alert severity="info" role="status">
+                    <FormattedMessage id="access.profiles.editor.identityOverridesUnavailable" />
+                  </Alert>
+                )}
                 <Stack spacing={2} sx={{ maxWidth: 480 }}>
                   <TextField
                     size="small"
@@ -796,6 +876,7 @@ export function ProfileEditor(): React.JSX.Element {
                     })}
                     value={overrides.org}
                     onChange={(e) => setOverrideOrg(e.target.value)}
+                    disabled={!canAuthorIdentityOverrides}
                     inputProps={{ spellCheck: false }}
                   />
                   <TextField
@@ -805,6 +886,7 @@ export function ProfileEditor(): React.JSX.Element {
                     })}
                     value={overrides.client}
                     onChange={(e) => setOverrideClient(e.target.value)}
+                    disabled={!canAuthorIdentityOverrides}
                     inputProps={{ spellCheck: false }}
                   />
                 </Stack>
@@ -837,6 +919,7 @@ export function ProfileEditor(): React.JSX.Element {
                           onChange={(e) =>
                             updateOverrideExtra(i, { namespace: e.target.value })
                           }
+                          disabled={!canAuthorIdentityOverrides}
                           inputProps={{ spellCheck: false }}
                           sx={{ width: 200, '& input': { fontFamily: 'monospace' } }}
                         />
@@ -849,6 +932,7 @@ export function ProfileEditor(): React.JSX.Element {
                           onChange={(e) =>
                             updateOverrideExtra(i, { value: e.target.value })
                           }
+                          disabled={!canAuthorIdentityOverrides}
                           inputProps={{ spellCheck: false }}
                           sx={{ flex: 1 }}
                         />
@@ -857,16 +941,19 @@ export function ProfileEditor(): React.JSX.Element {
                             id: 'access.profiles.editor.identityOverrideRemoveScope',
                           })}
                         >
-                          <IconButton
-                            size="small"
-                            onClick={() => removeOverrideExtra(i)}
-                            aria-label={intl.formatMessage({
-                              id: 'access.profiles.editor.identityOverrideRemoveScope',
-                            })}
-                            sx={{ mt: 0.5 }}
-                          >
-                            <DeleteOutlineIcon fontSize="small" />
-                          </IconButton>
+                          <span>
+                            <IconButton
+                              size="small"
+                              onClick={() => removeOverrideExtra(i)}
+                              disabled={!canAuthorIdentityOverrides}
+                              aria-label={intl.formatMessage({
+                                id: 'access.profiles.editor.identityOverrideRemoveScope',
+                              })}
+                              sx={{ mt: 0.5 }}
+                            >
+                              <DeleteOutlineIcon fontSize="small" />
+                            </IconButton>
+                          </span>
                         </Tooltip>
                       </Stack>
                     ))}
@@ -877,6 +964,7 @@ export function ProfileEditor(): React.JSX.Element {
                     startIcon={<AddIcon />}
                     onClick={addOverrideExtra}
                     disabled={
+                      !canAuthorIdentityOverrides ||
                       countOverrideNamespaces(overrides) >= MAX_SCOPE_NAMESPACES
                     }
                     sx={{ textTransform: 'none', mt: overrides.extras.length ? 1 : 0.5 }}
@@ -978,12 +1066,19 @@ export function ProfileEditor(): React.JSX.Element {
         source={baseline}
         ctxId={ctxId}
         roles={roles}
+        sessionIdentity={sessionIdentity}
       />
       <DeleteProfileDialog
         open={deleteOpen}
         onClose={() => setDeleteOpen(false)}
         ctxId={ctxId}
         principalId={principalIdFromUrl}
+        blockedByOverrides={
+          !sessionIdentityMatchesOverrides(
+            sessionIdentity,
+            baseline?.identityOverrides as Record<string, unknown> | undefined,
+          )
+        }
       />
     </Stack>
   );
@@ -999,12 +1094,16 @@ function CloneProfileDialog({
   source,
   ctxId,
   roles,
+  sessionIdentity,
 }: {
   open: boolean;
   onClose: () => void;
   source: AccessProfileResponse | null;
   ctxId: string;
   roles: RoleResponse[];
+  /** This session's own decoded identity claim — see ProfileEditor's own
+      `useScopeGate().identity`, threaded down rather than re-minted here. */
+  sessionIdentity: Readonly<Record<string, string>>;
 }): React.JSX.Element {
   const intl = useIntl();
   const navigate = useNavigate();
@@ -1027,6 +1126,19 @@ function CloneProfileDialog({
     newPrincipalId !== '' && !PRINCIPAL_ID_PATTERN.test(newPrincipalId);
   const canSubmit = newPrincipalId !== '' && !idInvalid;
   const sourceIsRole = !!source?.roleId;
+  const sourceOverridesRaw = (source?.identityOverrides ?? null) as Record<
+    string,
+    unknown
+  > | null;
+  const sourceHasIdentityOverrides =
+    sourceOverridesRaw != null && Object.keys(sourceOverridesRaw).length > 0;
+  // Same conferral rule the main editor applies: this session may confer
+  // identity overrides onto the clone only if it holds EXACTLY the source's
+  // values, key for key. True trivially when the source has none.
+  const sessionCanConferSourceOverrides = sessionIdentityMatchesOverrides(
+    sessionIdentity,
+    sourceOverridesRaw,
+  );
 
   const mutation = useMutation({
     onMutate: () => {
@@ -1064,10 +1176,11 @@ function CloneProfileDialog({
           })),
         };
       }
-      // identityOverrides copy verbatim (if source has any).
-      const overrides = (source.identityOverrides ?? {}) as Record<string, unknown>;
-      if (Object.keys(overrides).length > 0) {
-        body.identityOverrides = overrides;
+      // identityOverrides copy across only when THIS session holds exactly
+      // the source's values — carrying over anything else would fail the
+      // whole create. The dialog warns above when it can't.
+      if (sourceOverridesRaw != null && sourceHasIdentityOverrides && sessionCanConferSourceOverrides) {
+        body.identityOverrides = sourceOverridesRaw;
       }
       return client.auth.createAccessProfile({
         contextId: ctxId,
@@ -1139,6 +1252,13 @@ function CloneProfileDialog({
               </Typography>
             </Box>
           )}
+          {sourceHasIdentityOverrides && !sessionCanConferSourceOverrides && (
+            // role="status": informational, not the dialog's error slot — see
+            // the same choice on the editor's own notice above.
+            <Alert severity="warning" role="status">
+              <FormattedMessage id="access.profiles.cloneDialog.identityOverridesWontCopy" />
+            </Alert>
+          )}
           {cloneError != null &&
             (isDuplicateIdConflict ? (
               <ApiErrorAlert error={cloneError}>
@@ -1169,7 +1289,13 @@ function CloneProfileDialog({
 }
 
 // ---------------------------------------------------------------------------
-// DeleteProfileDialog — unconditional. Backend has no ref-refusal here.
+// DeleteProfileDialog — unconditional, UNLESS the profile carries identity
+// overrides this SESSION doesn't hold: deleting one removes its identity
+// wholesale (the platform's displacement rule — clearing/removing an
+// existing override value requires holding it, same as setting one). The
+// caller decides `blockedByOverrides` (via `sessionIdentityMatchesOverrides`)
+// since that needs the session's own identity, which this dialog doesn't
+// mint independently. The server has no other ref-refusal beyond that case.
 // ---------------------------------------------------------------------------
 
 function DeleteProfileDialog({
@@ -1177,11 +1303,16 @@ function DeleteProfileDialog({
   onClose,
   ctxId,
   principalId,
+  blockedByOverrides,
 }: {
   open: boolean;
   onClose: () => void;
   ctxId: string;
   principalId: string;
+  /** True when this session's identity doesn't cover the profile's existing
+      identity overrides (if any) — deletion would displace a value it
+      doesn't hold. False (deletable) trivially when the profile has none. */
+  blockedByOverrides: boolean;
 }): React.JSX.Element {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -1219,7 +1350,11 @@ function DeleteProfileDialog({
       }
       body={
         <FormattedMessage
-          id="access.profiles.deleteConfirm.body"
+          id={
+            blockedByOverrides
+              ? 'access.profiles.deleteConfirm.bodyBlockedByOverrides'
+              : 'access.profiles.deleteConfirm.body'
+          }
           values={{ principalId, contextId: ctxId }}
         />
       }
@@ -1228,6 +1363,7 @@ function DeleteProfileDialog({
       onConfirm={() => mutation.mutate()}
       onClose={handleClose}
       pending={mutation.isPending}
+      confirmDisabled={blockedByOverrides}
       error={
         mutation.isError ? (
           <>

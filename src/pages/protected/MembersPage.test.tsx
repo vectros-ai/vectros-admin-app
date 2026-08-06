@@ -19,8 +19,16 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { __resetVectrosApiTokenCacheForTest } from '@vectros-ai/react';
+
 import { TestIntlProvider } from '../../test/intl';
 import { pageOf } from '../../test/pageOf';
+import {
+  expectContextBindingHolds,
+  makeBindingTrackedClient,
+} from '../../test/contextBinding';
+import type { ContextBindingRecord } from '../../test/contextBinding';
+import { registerScope } from '../../test/scopeToken';
 import { vectrosApiClient, VectrosError } from '../../api/vectrosApi';
 import type * as VectrosApi from '../../api/vectrosApi';
 import { TestTenantProvider } from '../../test/TestTenantProvider';
@@ -76,7 +84,7 @@ function renderPage(opts: { client?: ReturnType<typeof makeMockClient> } = {}) {
   const utils = render(
     <TestIntlProvider>
       <MemoryRouter>
-        <TestTenantProvider>
+        <TestTenantProvider kind="live">
           <MembersPage />
         </TestTenantProvider>
       </MemoryRouter>
@@ -90,10 +98,16 @@ beforeEach(() => {
     writable: true,
     value: { origin: 'https://admin.test.example' },
   });
+  // Default every test to a wildcard scope so the pre-existing tests, which
+  // don't reason about Resend's client-side scope gate, keep seeing it
+  // enabled. Tests exercising the gate itself override with a narrower
+  // registerScope(...) call.
+  registerScope(['*']);
 });
 
 afterEach(() => {
   vi.clearAllMocks();
+  __resetVectrosApiTokenCacheForTest();
 });
 
 describe('MembersPage', () => {
@@ -120,7 +134,7 @@ describe('MembersPage', () => {
     const chip = within(aliceRow).getByRole('link', { name: 'tmpl-owner' });
     expect(chip).toHaveAttribute(
       'href',
-      '/access/contexts/vectros-admin/profiles/usr_u_alice',
+      '/access/contexts/default/profiles/usr_u_alice',
     );
   });
 
@@ -360,11 +374,270 @@ describe('MembersPage', () => {
     await screen.findByText('bob@example.com');
     // Let the profile query settle so the no-role state is known.
     await waitFor(() => expect(getAccessProfile).toHaveBeenCalled());
+    // Wait past the client-side scope gate's own async mint before
+    // clicking, or the button is still disabled and the click is a no-op.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /resend invite/i })).toBeEnabled(),
+    );
 
     await user.click(screen.getByRole('button', { name: /resend invite/i }));
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/no access profile role bound/i);
     expect(resendInvite).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // Client-side scope gate. The backend's `/resend` route requires users:c +
+  // users:r + users:u (all three — the `c` requirement is a deliberate,
+  // retained rule, not something Resend happens not to need) — before this
+  // the button rendered unconditionally and an under-scoped sub-user got a
+  // bare 403 on click.
+  //
+  // Red-test verified (not just asserted): reverting MembersPage.tsx's
+  // `canResendInvite = canPerformAction('users:cru')` to a hardcoded `true`
+  // (the historical always-enabled bug) makes ONLY "disables…" below fail;
+  // hardcoding it to `false` (a broken always-deny gate) makes ONLY the two
+  // "enables…" tests below fail. The three together, not any one alone, pin
+  // both failure directions — the ops-union correctness itself (combined vs.
+  // split-entry grants) is covered exhaustively at its source of truth,
+  // `canPerform`'s own suite in packages/react.
+  // -------------------------------------------------------------------------
+  it('disables Resend when the caller lacks users:r + users:u', async () => {
+    // Same grant that gets a sub-user onto this page — create-only, no r/u.
+    registerScope(['users:c']);
+    const resendInvite = vi.fn().mockResolvedValue(undefined);
+    renderPage({ client: makeMockClient({ resendInvite }) });
+    await screen.findByText('bob@example.com');
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /resend invite/i })).toBeDisabled(),
+    );
+    expect(resendInvite).not.toHaveBeenCalled();
+  });
+
+  it('enables Resend once the caller holds a combined users:cru grant', async () => {
+    registerScope(['users:cru']);
+    renderPage();
+    await screen.findByText('bob@example.com');
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /resend invite/i })).toBeEnabled(),
+    );
+  });
+
+  it('enables Resend when users:c, users:r and users:u are granted as separate entries', async () => {
+    // canPerform unions ops across every granted `users:*` entry, not just a
+    // single combined one — this pins that a caller isn't missed just
+    // because their profile authored the grant split across rows.
+    registerScope(['users:c', 'users:r', 'users:u']);
+    renderPage();
+    await screen.findByText('bob@example.com');
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /resend invite/i })).toBeEnabled(),
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // Client-side scope gate for Revoke. The backend's DELETE route requires
+  // users:d — before this the button rendered unconditionally and an
+  // under-scoped sub-user got a bare 403 on click. Same red-test discipline as
+  // the Resend block above: disable-only and enable-only each pin one
+  // direction of the gate.
+  // -------------------------------------------------------------------------
+  it('disables Revoke when the caller lacks users:d', async () => {
+    // A grant that covers every other member action but deletion.
+    registerScope(['users:c', 'users:r', 'users:u']);
+    renderPage();
+    await screen.findByText('alice@example.com');
+
+    // (No trailing `deleteUser).not.toHaveBeenCalled()` — this never clicks
+    // the button, so that would be vacuously true regardless of this guard.)
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: /^revoke$/i })[0]).toBeDisabled(),
+    );
+  });
+
+  it('enables Revoke once the caller holds users:d', async () => {
+    registerScope(['users:d']);
+    renderPage();
+    await screen.findByText('alice@example.com');
+
+    await waitFor(() =>
+      expect(screen.getAllByRole('button', { name: /^revoke$/i })[0]).toBeEnabled(),
+    );
+  });
+
+  it('surfaces an error when the member listing exceeds the drain ceiling', async () => {
+    // The drain now REFUSES a partial listing. That is only an improvement if
+    // the surface says so — the contract changed for 14 callers with unit
+    // coverage on the helper alone, so at least one caller has to prove the
+    // throw reaches a user. A cursor that never goes null is the shape that
+    // triggers it.
+    const listUsers = vi.fn().mockResolvedValue({
+      data: [{ id: 'u_x', email: 'x@example.com', type: 'HUMAN', status: 'ACTIVE' }],
+      nextCursor: 'never-ends',
+    });
+    renderPage({ client: makeMockClient({ listUsers }) });
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent(/couldn't load your members/i),
+    );
+    // And crucially NOT a table quietly holding the first 50 pages.
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // Tenant guard. An invite is written to the account's LIVE tenant whichever
+  // tenant is active, while the roles offered come from the active one — so on
+  // a test tenant the two disagree and the invite stores a role that does not
+  // exist where it lands, producing a member who can never sign in. Note the
+  // default TestTenantProvider seeds a TEST tenant, which is why every case
+  // above had to opt into `kind="live"` once this guard existed.
+  // -------------------------------------------------------------------------
+  it('offers Invite on a live tenant', async () => {
+    renderPage();
+    await screen.findByText('alice@example.com');
+    expect(screen.getByRole('button', { name: /invite member/i })).toBeEnabled();
+  });
+
+  it('withholds Invite on a test tenant, and says why', async () => {
+    vi.mocked(vectrosApiClient).mockReturnValue(makeMockClient() as never);
+    render(
+      <TestIntlProvider>
+        <MemoryRouter>
+          <TestTenantProvider kind="test">
+            <MembersPage />
+          </TestTenantProvider>
+        </MemoryRouter>
+      </TestIntlProvider>,
+    );
+    await screen.findByText('alice@example.com');
+    expect(screen.getByRole('button', { name: /invite member/i })).toBeDisabled();
+    // The "and says why" half. A disabled button is not focusable, so the
+    // reason has to live somewhere announced — not on a hover-only tooltip.
+    expect(screen.getByRole('status')).toHaveTextContent(
+      /invitations are always sent from your live tenant/i,
+    );
+  });
+
+  it('does not show the live-tenant notice on a live tenant', async () => {
+    // Positive control for the case above: without this, a notice rendered
+    // unconditionally would satisfy it.
+    renderPage();
+    await screen.findByText('alice@example.com');
+    expect(
+      screen.queryByText(/invitations are always sent from your live tenant/i),
+    ).not.toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // Client-side scope gate for Invite. The create route requires users:c —
+  // before this the button rendered regardless of scope, gated only on which
+  // tenant was active (the tests above). Both guards compose: a live tenant
+  // AND the permission are each necessary on their own.
+  // -------------------------------------------------------------------------
+  it('disables Invite when the caller lacks users:c', async () => {
+    registerScope(['users:r', 'users:u', 'users:d']);
+    renderPage();
+    await screen.findByText('alice@example.com');
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /invite member/i })).toBeDisabled(),
+    );
+  });
+
+  it('enables Invite once the caller holds users:c', async () => {
+    registerScope(['users:c']);
+    renderPage();
+    await screen.findByText('alice@example.com');
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /invite member/i })).toBeEnabled(),
+    );
+  });
+
+  it('blocks Resend on a test tenant instead of calling the API', async () => {
+    // The failure this prevents is not cosmetic: resend re-mints against the
+    // live tenant, so from here it reports a real invitation as missing.
+    const user = userEvent.setup();
+    const resendInvite = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(vectrosApiClient).mockReturnValue(
+      makeMockClient({ resendInvite }) as never,
+    );
+    render(
+      <TestIntlProvider>
+        <MemoryRouter>
+          <TestTenantProvider kind="test">
+            <MembersPage />
+          </TestTenantProvider>
+        </MemoryRouter>
+      </TestIntlProvider>,
+    );
+    await screen.findByText('bob@example.com');
+    // Wait past the client-side scope gate's own async mint before
+    // clicking, or the button is still disabled and the click is a no-op.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /resend invite/i })).toBeEnabled(),
+    );
+
+    await user.click(screen.getByRole('button', { name: /resend invite/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/live tenant/i);
+    expect(resendInvite).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // Context binding. Every test above stubs `vectrosApiClient` as a bare
+  // `vi.fn()` that ignores its arguments, so it can only see request SHAPE —
+  // it is structurally blind to whether the bearer those requests ride is
+  // pinned to the context they name. That is exactly how this page shipped
+  // with every context-scoped call 403ing against the real API: the requests
+  // named the reserved control-plane context while the client was built with
+  // no context at all (⇒ a `default`-pinned bearer).
+  //
+  // This case wires the argument-aware factory instead and asserts the pairing
+  // itself, so a future edit that changes one side without the other fails
+  // here rather than in staging.
+  // -------------------------------------------------------------------------
+  it('pins every context-scoped call to a bearer minted for that same context', async () => {
+    const user = userEvent.setup();
+    const records: ContextBindingRecord[] = [];
+    vi.mocked(vectrosApiClient).mockImplementation(
+      makeBindingTrackedClient(() => makeMockClient(), records) as never,
+    );
+
+    render(
+      <TestIntlProvider>
+        <MemoryRouter>
+          <TestTenantProvider kind="live">
+            <MembersPage />
+          </TestTenantProvider>
+        </MemoryRouter>
+      </TestIntlProvider>,
+    );
+
+    // Mount fans out one getAccessProfile per member…
+    await screen.findByText('bob@example.com');
+    await waitFor(() =>
+      expect(records.some((r) => r.method === 'auth.getAccessProfile')).toBe(true),
+    );
+    // Wait past the client-side scope gate's own async mint before
+    // clicking, or the button is still disabled and the click is a no-op.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /resend invite/i })).toBeEnabled(),
+    );
+
+    // …and Resend (PENDING rows only) is the other context-scoped call.
+    await user.click(screen.getByRole('button', { name: /resend invite/i }));
+    await waitFor(() =>
+      expect(records.some((r) => r.method === 'auth.resendInvite')).toBe(true),
+    );
+
+    // Name the METHODS, not a count: a scalar floor is satisfiable by the
+    // wrong calls (add a member to SAMPLE_USERS and one extra profile lookup
+    // covers for a resend that stopped naming its context).
+    expectContextBindingHolds(records, ['auth.getAccessProfile', 'auth.resendInvite']);
   });
 });
 

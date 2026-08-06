@@ -246,7 +246,10 @@ export function AccessLogPage(): React.JSX.Element {
   // Load the account's app contexts to populate the required context selector.
   // Owner-gated developer API (the only surface that enumerates every context),
   // the same source + cache key the Activity Logs / App Contexts pages use.
-  // Best-effort: a failure leaves the selector empty and Fetch stays gated.
+  // A failure leaves the selector empty and Fetch permanently gated, so it is
+  // surfaced below rather than left to look like an empty account. (The drain
+  // this uses refuses to return a partial list, so "empty" and "too large to
+  // enumerate" are both real failures here, not just a slow load.)
   const devApi = useDeveloperApi();
   const contextsQuery = useQuery({
     queryKey: accessQueryKeys.appContexts(),
@@ -402,7 +405,7 @@ export function AccessLogPage(): React.JSX.Element {
                     : ''
                 }
                 onChange={(e) => commitFilter('contextId', e.target.value)}
-                disabled={contextsQuery.isLoading}
+                disabled={contextsQuery.isLoading || contextsQuery.isError}
               >
                 {contexts.map((c) => (
                   <MenuItem key={c.contextId ?? ''} value={c.contextId ?? ''}>
@@ -410,6 +413,11 @@ export function AccessLogPage(): React.JSX.Element {
                   </MenuItem>
                 ))}
               </Select>
+              {contextsQuery.isError && (
+                <ApiErrorAlert error={contextsQuery.error}>
+                  <FormattedMessage id="accessLog.contextsLoadError" />
+                </ApiErrorAlert>
+              )}
             </FormControl>
 
             <FormControl size="small" sx={{ minWidth: 130 }} required>

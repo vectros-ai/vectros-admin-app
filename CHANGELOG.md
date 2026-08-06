@@ -3,6 +3,116 @@
 All notable changes to the Vectros Admin App are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.14.0 — 2026-08-05
+
+### Changed
+
+- **Repinned to SDK 0.38.0.** No API surface this app uses changed shape; see the
+  [SDK changelog](https://github.com/vectros-ai/sdk/blob/main/CHANGELOG.md) for the full release.
+- **The row-level scope filter editor (in Roles and Access Profile clauses) can now express the
+  new "any other dimension" default.** Type `*` as the scope to state a rule for every ownership
+  dimension a clause doesn't name explicitly, and the value field now suggests the matchers that
+  make that useful — "any value present", or "values whose immediate parent is your own" — instead
+  of requiring you to already know the syntax to type it.
+
+### Fixed
+
+- **Typing an invalid scope value in a profile's identity overrides now shows an inline error
+  instead of a silent failed save.** Only a blank value was ever caught; a value containing a
+  colon, space, or other punctuation looked accepted until you tried to save, then failed with no
+  explanation.
+- **Resend Invite is no longer offered to a member who doesn't hold the permission to use it.**
+  It requires more than the permission to invite; a sub-user who could see the button but not use
+  it got an unexplained failure on click. The button now explains why it's unavailable instead.
+- **Revoke and Invite now follow the same rule as Resend.** Both were previously offered
+  regardless of whether the signed-in credential actually had permission to use them; each now
+  explains why it's unavailable when it isn't.
+- **The identity overrides section of the access profile editor now explains why it can't be
+  edited from an account with no identity of its own, instead of failing silently on save.**
+  Granting an identity override requires already holding the value being granted; an account
+  without one — the top-level owner credential, for example — always failed with no useful
+  explanation. Its fields stay visible so existing values remain legible, but are disabled for
+  that account, with an inline note explaining why. An account that does hold an identity can edit
+  them as before.
+- **Saving unrelated changes to an access profile that already has identity overrides no longer
+  fails.** Every save previously resent the profile's existing overrides even when they weren't
+  touched, so changing just a role or a scope on such a profile failed for a reason that had
+  nothing to do with the change being made. Untouched overrides are no longer resent.
+- **Cloning an access profile that has identity overrides your account doesn't hold no longer
+  fails outright.** The clone now completes without them, with a note that they weren't carried
+  over — previously the whole clone failed. Overrides your account does hold still copy across
+  normally.
+- **Deleting an access profile that has identity overrides your account doesn't hold is now
+  blocked with an explanation instead of failing.** Removing such a profile always failed the same
+  way a save or clone did; the delete button now says so up front rather than after the fact.
+
+## 0.13.0 — 2026-08-04
+
+### Fixed
+
+- **Inviting a member, and the Members page's Access Profile column, no longer
+  fail with a permission error.** Both targeted the reserved control-plane app
+  context, while the bearer backing those requests is minted for the base
+  `default` context. A credential may act only inside the context it is minted
+  for, so every one of those calls was rejected: the role dropdown stayed
+  empty, Resend Invite failed, the per-row Access Profile cell showed a load
+  error, and submitting an invite failed outright — the whole add-a-member flow
+  was unusable. Both surfaces now name `default`, which is where a member's
+  access profile has to live for their own sign-in to resolve it. The Access
+  Profile chip's link follows, so it now opens a page that exists.
+
+- **Editing a role no longer proceeds when we cannot tell you what it will affect.** The role editor
+  warns you how many access profiles reference a role, because saving propagates the change to every
+  one of them. That warning is driven by a count, and when the profile list failed to load the count
+  fell to zero — identical to "nothing references this role". The warning simply disappeared, and
+  saving stayed enabled, so an edit could propagate with its blast radius silently understated. The
+  editor now tells you the profiles could not be loaded and holds the save until they can be.
+
+- **A long role, profile, member or context list no longer goes quietly short.** These lists are
+  fetched a page at a time and joined together, and there is a ceiling on how many pages that will
+  chase. On reaching it the list used to be handed back as though it were complete, so a picker could
+  silently omit its tail — a role you hold would simply not be offered, and a member who exists would
+  look removed. The surface now reports an error instead of showing a list it cannot vouch for. A
+  list that ends exactly on the ceiling is still complete and still loads: confirming there is
+  nothing further costs one more request, and that request is not counted against the ceiling.
+
+- **Inviting a member is now offered only on your live tenant.** Invitations
+  are always created in the live tenant whichever one you have selected, while
+  the roles offered came from the selected one — so inviting from a test tenant
+  picked a role that does not exist where the invitation lands. That was
+  accepted rather than refused, and the member it created could then never sign
+  in. The Invite button and Resend now explain this and stay unavailable until
+  you switch, instead of silently sending the invitation somewhere else.
+
+- **The paginator behind every list on these pages now refuses to return a
+  partial answer.** It has a ceiling on how many pages it will fetch; on
+  reaching it, it used to hand back whatever it had read so far, which is the
+  silent truncation the paginator exists to prevent — a role picker missing its
+  tail offers a choice that isn't there, and a members table missing its tail
+  looks like someone was removed. It now reports an error naming both how many
+  pages it fetched and how many rows it read, since "5000 rows over 50 pages"
+  (a genuinely large listing) and "0 rows over 50 pages" (a cursor that never
+  resolves) are different problems. Several screens were dropping that report
+  on the floor — an unavailable app-context list left a filter silently empty,
+  a failed count showed as a permanent "loading", and a failed role list looked
+  like a context with no roles; each of those now says what happened. Nothing
+  changes below 5000 entries in one app context.
+
+  A second guard, which stopped paging when two consecutive cursors matched,
+  has been removed: cursors are issued with a random element, so two of them
+  never match and that check could never fire. It read as a protection this
+  code did not have.
+
+### Added
+
+- A test helper (`src/test/contextBinding.ts`) that asserts a request naming an
+  app context or tenant was made on a client built for that same one, and that
+  the client was not built for a context no credential can be issued for. The
+  previous tests stubbed the client factory in a way that ignored what it was
+  asked for, so they passed against the broken flow above; forks writing their
+  own context-scoped pages can reuse the helper to avoid the same blind spot.
+  Its own limits are documented in the file, and it has its own tests.
+
 ## 0.12.0 — 2026-07-27
 
 ### Security

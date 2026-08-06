@@ -8,6 +8,7 @@ import {
   namespaceFromScopeKey,
   scopeKey,
   validateScopeNamespace,
+  validateScopeValue,
 } from './scopeNamespace';
 
 describe('validateScopeNamespace', () => {
@@ -38,6 +39,32 @@ describe('validateScopeNamespace', () => {
     expect(validateScopeNamespace('ab')).toBeNull();
     expect(validateScopeNamespace('a' + 'b'.repeat(31))).toBeNull(); // 32 chars
     expect(validateScopeNamespace('a' + 'b'.repeat(32))?.code).toBe('grammar'); // 33 chars
+  });
+});
+
+describe('validateScopeValue', () => {
+  it('accepts mixed-case, digit-leading, and dash/underscore values', () => {
+    for (const v of ['org_123', 'A1', 'eng-team', 'UUID-4f2b', '9', 'a'.repeat(128)]) {
+      expect(validateScopeValue(v)).toBeNull();
+    }
+  });
+
+  it('rejects a colon (the load-bearing rejection — it can break a storage key)', () => {
+    expect(validateScopeValue('a:b')).toEqual({ code: 'grammar' });
+  });
+
+  it('rejects other punctuation and a leading dash/underscore', () => {
+    for (const v of ['a b', 'a.b', '-x', '_x', 'a$b', 'a{b}']) {
+      expect(validateScopeValue(v)?.code).toBe('grammar');
+    }
+  });
+
+  it('rejects a value over 128 characters', () => {
+    expect(validateScopeValue('a'.repeat(129))?.code).toBe('grammar');
+  });
+
+  it('rejects the empty string (callers must blank-check separately)', () => {
+    expect(validateScopeValue('')?.code).toBe('grammar');
   });
 });
 

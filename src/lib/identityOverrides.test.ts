@@ -12,8 +12,11 @@ import {
   canonicalOverridesKeyOfModel,
   countOverrideNamespaces,
   emptyIdentityOverrides,
+  identityOverridesRequestValue,
   parseIdentityOverrides,
   serializeIdentityOverrides,
+  sessionHoldsAnyIdentity,
+  sessionIdentityMatchesOverrides,
   validateIdentityOverrides,
 } from './identityOverrides';
 
@@ -127,6 +130,125 @@ describe('canonical dirty-compare', () => {
   });
 });
 
+describe('sessionHoldsAnyIdentity', () => {
+  it('is false for an empty identity claim (an OWNER session)', () => {
+    expect(sessionHoldsAnyIdentity({})).toBe(false);
+  });
+
+  it('is false for a claim that carries only partnerUserId (no ownership dimension)', () => {
+    expect(sessionHoldsAnyIdentity({ partnerUserId: 'u_123' })).toBe(false);
+  });
+
+  it('is true once the session holds a real ownership dimension', () => {
+    expect(sessionHoldsAnyIdentity({ partnerUserId: 'u_123', 'scope:org': 'org_a' })).toBe(true);
+  });
+});
+
+describe('sessionIdentityMatchesOverrides', () => {
+  it('trivially matches a null/absent overrides map (nothing to displace or confer)', () => {
+    expect(sessionIdentityMatchesOverrides({}, null)).toBe(true);
+    expect(sessionIdentityMatchesOverrides({}, undefined)).toBe(true);
+    expect(sessionIdentityMatchesOverrides({ 'scope:org': 'org_a' }, null)).toBe(true);
+  });
+
+  it('trivially matches an empty overrides map', () => {
+    expect(sessionIdentityMatchesOverrides({ 'scope:org': 'org_a' }, {})).toBe(true);
+  });
+
+  it('matches when the session holds EXACTLY the same value for every key', () => {
+    expect(
+      sessionIdentityMatchesOverrides(
+        { 'scope:org': 'org_a', 'scope:client': 'cli_x' },
+        { 'scope:org': 'org_a', 'scope:client': 'cli_x' },
+      ),
+    ).toBe(true);
+  });
+
+  it('does not match when the session holds nothing for a key the overrides carry', () => {
+    expect(sessionIdentityMatchesOverrides({}, { 'scope:org': 'org_a' })).toBe(false);
+  });
+
+  it('does not match a DIFFERENT value on the same key — equality, not subset', () => {
+    expect(
+      sessionIdentityMatchesOverrides({ 'scope:org': 'org_b' }, { 'scope:org': 'org_a' }),
+    ).toBe(false);
+  });
+
+  it('extra keys the session holds but the overrides map does not mention are irrelevant', () => {
+    expect(
+      sessionIdentityMatchesOverrides(
+        { 'scope:org': 'org_a', 'scope:client': 'cli_x' },
+        { 'scope:org': 'org_a' },
+      ),
+    ).toBe(true);
+  });
+
+  it('one mismatched key among several fails the whole map', () => {
+    expect(
+      sessionIdentityMatchesOverrides(
+        { 'scope:org': 'org_a', 'scope:client': 'WRONG' },
+        { 'scope:org': 'org_a', 'scope:client': 'cli_x' },
+      ),
+    ).toBe(false);
+  });
+});
+
+// The exact function `ProfileEditor.buildBody()` calls to decide what to put
+// in the save request — tested directly here, independent of any UI state
+// (in particular: independent of whether the editor's fields are enabled),
+// so both directions are provable regardless of that disablement.
+describe('identityOverridesRequestValue', () => {
+  it('CREATE: a non-empty model is sent (nothing to compare against yet)', () => {
+    const model = parseIdentityOverrides({ 'scope:org': 'o' });
+    expect(identityOverridesRequestValue(model, undefined, true)).toEqual({
+      'scope:org': 'o',
+    });
+  });
+
+  it('CREATE: an empty model is omitted', () => {
+    expect(identityOverridesRequestValue(emptyIdentityOverrides(), undefined, true)).toBeUndefined();
+  });
+
+  it('EDIT: a genuine change from the baseline IS sent — the positive control for the fix below', () => {
+    const baseline = { 'scope:org': 'org_a' };
+    const edited = parseIdentityOverrides({ 'scope:org': 'org_b' });
+    expect(identityOverridesRequestValue(edited, baseline, false)).toEqual({
+      'scope:org': 'org_b',
+    });
+  });
+
+  it('EDIT: an UNCHANGED, non-empty model vs. its own baseline is omitted — the regression this function fixes', () => {
+    const baseline = { 'scope:org': 'org_a', 'scope:group': 'eng' };
+    const unchanged = parseIdentityOverrides(baseline);
+    expect(identityOverridesRequestValue(unchanged, baseline, false)).toBeUndefined();
+  });
+
+  it('EDIT: reads through the canonical form — a re-ordered/re-spread baseline of the SAME overrides still reads unchanged', () => {
+    const baseline = { 'scope:group': 'eng', 'scope:org': 'org_a' };
+    const sameButReordered = parseIdentityOverrides({
+      'scope:org': 'org_a',
+      'scope:group': 'eng',
+    });
+    expect(identityOverridesRequestValue(sameButReordered, baseline, false)).toBeUndefined();
+  });
+
+  it('EDIT: clearing a non-empty baseline sends an explicit {} — an omitted field means "leave as-is", so a real clear has to say so', () => {
+    const baseline = { 'scope:org': 'org_a' };
+    expect(
+      identityOverridesRequestValue(emptyIdentityOverrides(), baseline, false),
+    ).toEqual({});
+  });
+
+  it('EDIT: an already-empty model against an already-empty baseline stays omitted (nothing changed)', () => {
+    expect(
+      identityOverridesRequestValue(emptyIdentityOverrides(), undefined, false),
+    ).toBeUndefined();
+    expect(
+      identityOverridesRequestValue(emptyIdentityOverrides(), {}, false),
+    ).toBeUndefined();
+  });
+});
+
 describe('countOverrideNamespaces', () => {
   it('counts non-blank org, client, and completed extras', () => {
     expect(
@@ -211,5 +333,53 @@ describe('validateIdentityOverrides', () => {
       passthrough: {},
     });
     expect(err).toEqual({ code: 'tooManyNamespaces', max: 2 });
+  });
+
+  // org/client/extra values now run the platform's scope-value grammar, not
+  // just a blank check.
+  it('rejects an org value that breaks the scope-value grammar', () => {
+    const err = validateIdentityOverrides({ ...base, org: 'a:b' });
+    expect(err).toEqual({ code: 'orgInvalidValue' });
+  });
+
+  it('rejects a client value that breaks the scope-value grammar', () => {
+    const err = validateIdentityOverrides({ ...base, client: 'a b' });
+    expect(err).toEqual({ code: 'clientInvalidValue' });
+  });
+
+  it('rejects an extra value that breaks the scope-value grammar', () => {
+    const err = validateIdentityOverrides({
+      ...base,
+      extras: [{ namespace: 'group', value: 'eng:team' }],
+    });
+    expect(err).toEqual({ code: 'extraInvalidValue', index: 0 });
+  });
+
+  it('still requires a value before checking its grammar (extraMissingValue wins)', () => {
+    const err = validateIdentityOverrides({
+      ...base,
+      extras: [{ namespace: 'group', value: '' }],
+    });
+    expect(err).toEqual({ code: 'extraMissingValue', index: 0 });
+  });
+
+  it('accepts a well-formed org/client value (positive control)', () => {
+    expect(
+      validateIdentityOverrides({
+        org: 'org_123',
+        client: 'cli-456',
+        extras: [],
+        passthrough: {},
+      }),
+    ).toBeNull();
+  });
+
+  it('accepts a well-formed extra value (positive control)', () => {
+    expect(
+      validateIdentityOverrides({
+        ...base,
+        extras: [{ namespace: 'group', value: 'eng-team' }],
+      }),
+    ).toBeNull();
   });
 });

@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  DIMENSION_WILDCARD,
   canonicalDataScopeKey,
   countDataScopeNamespaces,
   emptyDataScope,
@@ -43,6 +44,16 @@ describe('parseDataScope', () => {
   it('treats null/empty as match-all', () => {
     expect(parseDataScope(null)).toEqual(emptyDataScope());
     expect(parseDataScope({})).toEqual(emptyDataScope());
+  });
+
+  // The "*" dimension wildcard (0.38.0) is a BARE key, not scope:* — it must
+  // parse as a dimension, not fall through to passthrough.
+  it('reads the "*" dimension wildcard as a dimension, not passthrough', () => {
+    const model = parseDataScope({ '*': ['${{ any }}', null] });
+    expect(model.dimensions).toEqual([
+      { namespace: DIMENSION_WILDCARD, values: ['${{ any }}'], includeNull: true },
+    ]);
+    expect(model.passthrough).toEqual({});
   });
 });
 
@@ -99,11 +110,24 @@ describe('serializeDataScope', () => {
     });
     expect(wire).toEqual({ userId: 'usr_1' });
   });
+
+  it('emits the "*" dimension wildcard as a BARE key, not scope:*', () => {
+    const wire = serializeDataScope({
+      dimensions: [{ namespace: DIMENSION_WILDCARD, values: ['${{ any }}'], includeNull: true }],
+      passthrough: {},
+    });
+    expect(wire).toEqual({ '*': ['${{ any }}', null] });
+  });
 });
 
 describe('round-trip', () => {
   it('preserves a userId + namespaced filter with zero loss', () => {
     const raw = { userId: 'usr_1', 'scope:org': ['org_a', null] };
+    expect(serializeDataScope(parseDataScope(raw))).toEqual(raw);
+  });
+
+  it('preserves the "*" dimension wildcard with zero loss', () => {
+    const raw = { '*': ['${{ any }}', null] };
     expect(serializeDataScope(parseDataScope(raw))).toEqual(raw);
   });
 
@@ -200,5 +224,39 @@ describe('validateDataScope', () => {
       passthrough: {},
     });
     expect(err).toEqual({ code: 'tooManyNamespaces', max: 2 });
+  });
+
+  // The "*" dimension wildcard is a KEY, not a `scope:<ns>` namespace — before
+  // this it failed the ordinary a-z namespace grammar (SCOPE_NAMESPACE_PATTERN
+  // rejects a leading `*`), so the UI could not author 0.38.0's new wildcard
+  // at all: any attempt to save one hit a `namespace`/`grammar` error.
+  it('accepts the "*" dimension wildcard (bypasses the ordinary namespace grammar)', () => {
+    expect(
+      validateDataScope({
+        dimensions: [
+          { namespace: DIMENSION_WILDCARD, values: ['${{ any }}'], includeNull: true },
+        ],
+        passthrough: {},
+      }),
+    ).toBeNull();
+  });
+
+  it('still requires a value (or the null opt-in) on the "*" dimension', () => {
+    const err = validateDataScope({
+      dimensions: [{ namespace: DIMENSION_WILDCARD, values: [''], includeNull: false }],
+      passthrough: {},
+    });
+    expect(err).toEqual({ code: 'noValues', index: 0 });
+  });
+
+  it('rejects a duplicate "*" dimension the same as any other duplicate', () => {
+    const err = validateDataScope({
+      dimensions: [
+        { namespace: DIMENSION_WILDCARD, values: ['a'], includeNull: false },
+        { namespace: DIMENSION_WILDCARD, values: ['b'], includeNull: false },
+      ],
+      passthrough: {},
+    });
+    expect(err).toEqual({ code: 'duplicate', index: 1, namespace: DIMENSION_WILDCARD });
   });
 });

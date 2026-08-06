@@ -12,17 +12,39 @@
 //     createInvite + AccessProfileRole-dropdown flow.
 //   - Per-row actions: Resend invite (PENDING rows only) + Revoke (DELETE).
 //   - AccessProfile chip per row: batch-loaded on page mount via
-//     `getAccessProfile(vectros-admin, usr_<userId>)`. The chip renders the
+//     `getAccessProfile(default, usr_<userId>)`. The chip renders the
 //     profile's roleId (falling back to principalId — no human-readable name
 //     field on the model yet). Click routes to the profile editor at
-//     `/access/contexts/vectros-admin/profiles/<principalId>`.
+//     `/access/contexts/default/profiles/<principalId>`.
 //     A 404 renders a distinct "no profile" cell; any OTHER lookup failure
 //     renders a distinct "couldn't load" cell rather than masquerading as
 //     "no profile" (so a real backend error isn't silently swallowed).
 //
+// **Why `default` and not the reserved control-plane context.** A member's
+// admin-app session is backed by the AccessProfile the token mint resolves,
+// and that mint targets the base `default` context — a bearer pinned to any
+// other context is what this page's calls must agree with, or they fail
+// closed with a 403. The browser-held token mint rejects the reserved
+// control-plane context outright, so THIS APP can never hold a bearer pinned
+// there and can never read a profile stored there back.
+//
+// Note the scope of that claim: it is about the token this app mints, not
+// about the context in general. A scoped API key minted server-side CAN be
+// bound to the reserved context, and its authority IS resolved from the
+// profile there — so those rows are not inert in general, only unreachable
+// from here. Do not generalize this comment into "that context is dead".
+//
 // Tenant-aware: reads the active tenant from `useCurrentTenant()` and
 // passes it to `vectrosApiClient(tenant)` so switching tenants in the
 // AppLayout TenantSwitcher refetches against the new env on next render.
+//
+// **Context binding.** Every call below that names a `contextId` is made on a
+// client whose bearer is pinned to that same context — here by omitting the
+// factory's `contextId` (the mint resolves an omitted context to `default`,
+// the value these calls pass). Naming a context the bearer isn't pinned to is
+// a 403, so the two must move together; `MEMBERS_CONTEXT_ID` is the single
+// value both sides read. Pinned by the context-binding test in
+// `MembersPage.test.tsx`.
 // ---------------------------------------------------------------------------
 
 import { useMemo, useState } from 'react';
@@ -57,9 +79,10 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
-import { ConfirmDialog, LoadingBlock } from '@vectros-ai/react';
+import { ConfirmDialog, LoadingBlock, useScopeGate } from '@vectros-ai/react';
 
-import { useActiveTenantId } from '../../auth';
+import { useActiveTenantId, useCurrentTenant } from '../../auth';
+import { RESERVED_DEFAULT_CONTEXT_ID } from '../../lib/reservedContexts';
 import { BRAND } from '../../brand';
 import { VectrosError, vectrosApiClient } from '../../api/vectrosApi';
 import type {
@@ -72,7 +95,12 @@ import { ApiErrorAlert } from '../../components/ApiErrorAlert';
 import { RequestIdCaption } from '../../components/RequestIdCaption';
 import { InviteMemberDialog } from './InviteMemberDialog';
 
-const ADMIN_CONTEXT_ID = 'vectros-admin';
+/**
+ * The AppContext this page's member profiles live in. Aliased (rather than
+ * used inline) so the binding it shares with the bearer above is stated once
+ * and every call site below reads the same value.
+ */
+const MEMBERS_CONTEXT_ID = RESERVED_DEFAULT_CONTEXT_ID;
 
 type TypeFilter = 'all' | 'HUMAN' | 'SERVICE';
 type StatusFilter = 'all' | 'ACTIVE' | 'PENDING' | 'SUSPENDED';
@@ -80,7 +108,18 @@ type StatusFilter = 'all' | 'ACTIVE' | 'PENDING' | 'SUSPENDED';
 export function MembersPage(): React.JSX.Element {
   const intl = useIntl();
   const tenant = useActiveTenantId();
+  const { activeMembership } = useCurrentTenant();
   const queryClient = useQueryClient();
+
+  // Invitations always land in the LIVE tenant, whichever tenant is selected
+  // here: the server resolves the target tenant from the account, not from the
+  // bearer. The rest of this page follows the switcher, so on a test tenant the
+  // two disagree — the roles offered come from the test tenant while the invite
+  // is written to the live one, where that role does not exist. The invite is
+  // still accepted and stores the unresolvable role, and the member it creates
+  // can then never sign in. Rather than let the two flows silently target
+  // different tenants, invite and resend are offered only where they act.
+  const isLiveTenant = activeMembership?.tenantKind === 'live';
 
   // Members list — single query keyed on the active tenant. Switching
   // tenants in the TenantSwitcher swaps queryKey → automatic refetch.
@@ -113,7 +152,7 @@ export function MembersPage(): React.JSX.Element {
         queryFn: async (): Promise<AccessProfileResponse | null> => {
           try {
             return await vectrosApiClient(tenant).auth.getAccessProfile({
-              contextId: ADMIN_CONTEXT_ID,
+              contextId: MEMBERS_CONTEXT_ID,
               principalId: `usr_${m.id!}`,
             });
           } catch (err) {
@@ -163,7 +202,7 @@ export function MembersPage(): React.JSX.Element {
     mutationFn: (vars: { email: string; roleId: string }) =>
       vectrosApiClient(tenant).auth.resendInvite({
         email: vars.email,
-        contextId: ADMIN_CONTEXT_ID,
+        contextId: MEMBERS_CONTEXT_ID,
         accessProfile: { roleId: vars.roleId },
       }),
     onSuccess: (_data, vars) => {
@@ -184,6 +223,26 @@ export function MembersPage(): React.JSX.Element {
   });
 
   const actionInFlight = resendMutation.isPending || deleteMutation.isPending;
+
+  // Client-side scope gate for Resend. The backend's `/resend` route requires
+  // `users:c` + `users:r` + `users:u` (the `c` requirement is a deliberate,
+  // retained rule, not an oversight); without this check the button rendered
+  // unconditionally and an under-scoped sub-user got a bare 403 on click.
+  // `useScopeGate().can()` is ops-aware (unions across every unqualified
+  // `users:*` entry, whether split across rows or combined into one), so this
+  // no longer needs a local re-implementation of that grammar — a second copy
+  // is exactly the shape that has previously let a letter-level gap slip in.
+  // Cosmetic only: the backend remains authoritative and still 403s a
+  // forged/stale token.
+  const { can: canPerformAction, loading: scopeLoading } = useScopeGate();
+  const canResendInvite = canPerformAction('users:cru');
+  // Same discipline as Resend, for the other two backend-enforced actions on
+  // this page: Revoke calls `identity.deleteUser`, which requires `users:d`;
+  // Invite calls the create route, which requires `users:c`. Each rendered
+  // unconditionally before this, so an under-scoped sub-user could click
+  // through to a bare 403.
+  const canRevokeMember = canPerformAction('users:d');
+  const canInvite = canPerformAction('users:c');
 
   // The resend invite that hit a non-role guard or backend failure. `null`
   // role-guard sets a dedicated message; an SDK failure is read off the
@@ -210,6 +269,15 @@ export function MembersPage(): React.JSX.Element {
   // `{ userId }` shape — captured as a backend follow-up.
   const handleResend = (member: UserResponse): void => {
     if (!member.email || !member.id) return;
+    // Same tenant asymmetry as the invite: resend re-mints against the LIVE
+    // tenant regardless of the switcher, so from a test tenant it looks up a
+    // PENDING row that is not there and reports the invitation as missing.
+    if (!isLiveTenant) {
+      setSuccessMessage(null);
+      resendMutation.reset();
+      setResendGuardMessage(intl.formatMessage({ id: 'members.resendLiveOnly' }));
+      return;
+    }
     setSuccessMessage(null);
     setResendGuardMessage(null);
     resendMutation.reset();
@@ -252,17 +320,37 @@ export function MembersPage(): React.JSX.Element {
               />
             </Typography>
           </Box>
-          <Button
-            variant="contained"
-            onClick={() => setInviteOpen(true)}
-            // Match the other list-header action buttons (default size); keep the
-            // label on one line so the header Stack can't wrap it.
-            sx={{ whiteSpace: 'nowrap', flexShrink: 0 }}
+          <Tooltip
+            title={
+              !canInvite && !scopeLoading
+                ? intl.formatMessage({ id: 'members.inviteForbidden' })
+                : ''
+            }
           >
-            <FormattedMessage id="members.inviteButton" />
-          </Button>
+            {/* flexShrink lives on the span, not the Button: the span (not the
+                Button) is the direct child of the header Stack now that the
+                Tooltip needs a wrapper around a disabled control, so that's
+                the flex item whose shrinking needs to be stopped. */}
+            <span style={{ flexShrink: 0 }}>
+              <Button
+                variant="contained"
+                onClick={() => setInviteOpen(true)}
+                disabled={!isLiveTenant || !canInvite}
+                // Keep the label on one line so the header Stack can't wrap it.
+                sx={{ whiteSpace: 'nowrap' }}
+              >
+                <FormattedMessage id="members.inviteButton" />
+              </Button>
+            </span>
+          </Tooltip>
         </Stack>
       </Box>
+
+      {!isLiveTenant && (
+        <Alert severity="info" role="status">
+          <FormattedMessage id="members.inviteLiveOnly" />
+        </Alert>
+      )}
 
       {successMessage && (
         <Alert severity="success" role="status" onClose={() => setSuccessMessage(null)}>
@@ -444,7 +532,7 @@ export function MembersPage(): React.JSX.Element {
                       ) : (
                         <Link
                           component={RouterLink}
-                          to={`/access/contexts/${ADMIN_CONTEXT_ID}/profiles/${encodeURIComponent(profile.principalId ?? '')}`}
+                          to={`/access/contexts/${MEMBERS_CONTEXT_ID}/profiles/${encodeURIComponent(profile.principalId ?? '')}`}
                           variant="body2"
                         >
                           {profile.roleId ?? profile.principalId}
@@ -454,12 +542,23 @@ export function MembersPage(): React.JSX.Element {
                     <TableCell align="right">
                       <Stack direction="row" spacing={0.5} justifyContent="flex-end">
                         {member.status === 'PENDING' && (
-                          <Tooltip title={intl.formatMessage({ id: 'members.actionResend' })}>
+                          <Tooltip
+                            title={intl.formatMessage({
+                              // While the scope gate is still minting, `canResendInvite`
+                              // reads false the same as a genuine denial would — don't
+                              // show "forbidden" copy to an about-to-be-authorized user
+                              // for the brief window before the mint resolves.
+                              id:
+                                canResendInvite || scopeLoading
+                                  ? 'members.actionResend'
+                                  : 'members.actionResendForbidden',
+                            })}
+                          >
                             <span>
                               <IconButton
                                 size="small"
                                 onClick={() => void handleResend(member)}
-                                disabled={actionInFlight}
+                                disabled={actionInFlight || !canResendInvite}
                                 aria-label={intl.formatMessage({ id: 'members.actionResend' })}
                               >
                                 <ForwardToInboxIcon fontSize="small" />
@@ -467,12 +566,22 @@ export function MembersPage(): React.JSX.Element {
                             </span>
                           </Tooltip>
                         )}
-                        <Tooltip title={intl.formatMessage({ id: 'members.actionRevoke' })}>
+                        <Tooltip
+                          title={intl.formatMessage({
+                            // Same loading-flash handling as Resend above: don't
+                            // show "forbidden" copy for the brief window before
+                            // the mint resolves.
+                            id:
+                              canRevokeMember || scopeLoading
+                                ? 'members.actionRevoke'
+                                : 'members.actionRevokeForbidden',
+                          })}
+                        >
                           <span>
                             <IconButton
                               size="small"
                               onClick={() => setRevokeTarget(member)}
-                              disabled={actionInFlight}
+                              disabled={actionInFlight || !canRevokeMember}
                               aria-label={intl.formatMessage({ id: 'members.actionRevoke' })}
                             >
                               <DeleteOutlineIcon fontSize="small" />

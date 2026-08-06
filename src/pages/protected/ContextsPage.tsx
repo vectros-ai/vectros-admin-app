@@ -111,6 +111,9 @@ const CONTEXT_ID_PATTERN = /^[a-z][a-z0-9-]{2,30}$/;
 // ContextsPage
 // ---------------------------------------------------------------------------
 
+/** A per-row count: the number, `null` while loading, or 'error' on failure. */
+type CountValue = number | null | 'error';
+
 export function ContextsPage(): React.JSX.Element {
   const intl = useIntl();
   const queryClient = useQueryClient();
@@ -171,13 +174,13 @@ export function ContextsPage(): React.JSX.Element {
       ];
     }),
   });
-  // Build a lookup: contextId → { roles: number|null, profiles: number|null }.
-  // null = loading; number = loaded count. countQueries' order matches the
+  // Build a lookup: contextId → { roles, profiles }, each a count, `null` while
+  // loading, or 'error' when its query failed. countQueries' order matches the
   // flatMap above: roles first then profiles for each context.
   const counts = useMemo<
-    Record<string, { roles: number | null; profiles: number | null }>
+    Record<string, { roles: CountValue; profiles: CountValue }>
   >(() => {
-    const result: Record<string, { roles: number | null; profiles: number | null }> = {};
+    const result: Record<string, { roles: CountValue; profiles: CountValue }> = {};
     let i = 0;
     for (const ctx of contexts) {
       const id = ctx.contextId;
@@ -188,9 +191,13 @@ export function ContextsPage(): React.JSX.Element {
       const tplQuery = countQueries[i];
       const profQuery = countQueries[i + 1];
       i += 2;
+      // `undefined` = still loading, `'error'` = the count query failed (the
+      // drain refuses to return a partial count, so a listing past the page
+      // ceiling lands here too). Conflating the two rendered a permanent
+      // "loading" placeholder for a count that was never coming.
       result[id] = {
-        roles: tplQuery?.data ? tplQuery.data.length : null,
-        profiles: profQuery?.data ? profQuery.data.length : null,
+        roles: tplQuery?.isError ? 'error' : tplQuery?.data ? tplQuery.data.length : null,
+        profiles: profQuery?.isError ? 'error' : profQuery?.data ? profQuery.data.length : null,
       };
     }
     return result;
@@ -357,7 +364,7 @@ function ContextRow({
   onDelete,
 }: {
   context: AppContextSummary;
-  counts: { roles: number | null; profiles: number | null } | undefined;
+  counts: { roles: CountValue; profiles: CountValue } | undefined;
   onEdit: () => void;
   onDelete: () => void;
 }): React.JSX.Element {
@@ -395,9 +402,17 @@ function ContextRow({
     }
   };
 
-  /** Loading placeholder for a not-yet-resolved per-row count. */
-  const countCell = (value: number | null): React.ReactNode =>
-    value == null ? (
+  /** Cell for a per-row count: a number, a load failure, or not-yet-resolved. */
+  const countCell = (value: CountValue): React.ReactNode =>
+    value === 'error' ? (
+      <Box
+        component="span"
+        aria-label={intl.formatMessage({ id: 'access.contexts.countError' })}
+        sx={{ color: 'error.main' }}
+      >
+        <FormattedMessage id="access.contexts.countErrorShort" />
+      </Box>
+    ) : value == null ? (
       <Box
         component="span"
         aria-label={intl.formatMessage({ id: 'access.contexts.countLoading' })}
@@ -678,7 +693,7 @@ function ContextDeleteDialog({
   onClose,
 }: {
   target: AppContextSummary | null;
-  counts: { roles: number | null; profiles: number | null } | undefined;
+  counts: { roles: CountValue; profiles: CountValue } | undefined;
   onClose: () => void;
 }): React.JSX.Element {
   const intl = useIntl();
@@ -715,8 +730,13 @@ function ContextDeleteDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target]);
 
-  const roleCount = counts?.roles ?? null;
-  const profileCount = counts?.profiles ?? null;
+  // A count that FAILED to load must not read as "loaded" here: this dialog
+  // uses the numbers to state a destroy's blast radius, and treating an
+  // unavailable count as absent would let the sentence be omitted as though
+  // the context were empty. 'error' is excluded alongside null, so the
+  // sentence appears only when both numbers are real.
+  const roleCount = typeof counts?.roles === 'number' ? counts.roles : null;
+  const profileCount = typeof counts?.profiles === 'number' ? counts.profiles : null;
   const countsLoaded = roleCount != null && profileCount != null;
   // The destructive CTA arms only when the typed echo matches exactly —
   // mirroring the server's own confirm contract.

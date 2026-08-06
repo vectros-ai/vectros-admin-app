@@ -1,6 +1,6 @@
 {
   "name": "vectros-admin-app",
-  "version": "0.12.0",
+  "version": "0.14.0",
   "license": "Apache-2.0",
   "description": "Vectros Admin App — production admin UI for the Vectros platform and the canonical reference example for developers building on top of the Vectros API. Fork, re-brand via src/brand.ts, point at your own Cognito pool, and ship.",
   "type": "module",
@@ -28,7 +28,7 @@
     "@mui/material": "7.3.11",
     "@tanstack/react-query": "5.100.14",
     "@tanstack/react-query-devtools": "5.100.14",
-    "@vectros-ai/sdk": "^0.37.0",
+    "@vectros-ai/sdk": "^0.38.0",
     "@zxcvbn-ts/core": "^3.0.4",
     "@zxcvbn-ts/language-common": "^3.0.4",
     "@zxcvbn-ts/language-en": "^3.0.2",
@@ -39,11 +39,17 @@
     "react-dom": "19.2.8",
     "react-intl": "^10.1.11",
     "react-router": "^8.3.0",
-    "@vectros-ai/react": "^0.6.1"
+    "@vectros-ai/react": "^0.7.0"
   },
   "overrides": {
     "fast-xml-parser": "^5.10.1",
-    "undici": "^7.28.0"
+    "undici": "^7.29.0",
+    "js-yaml": "^4.3.0",
+    "postcss": "^8.5.23",
+    "brace-expansion": "^2.1.4",
+    "minimatch@3.1.5": {
+      "brace-expansion": "^1.1.18"
+    }
   },
   "devDependencies": {
     "@testing-library/jest-dom": "6.6.3",
@@ -59,6 +65,7 @@
     "eslint-plugin-react-hooks": "5.1.0",
     "eslint-plugin-react-refresh": "0.4.16",
     "globals": "15.14.0",
+    "intl-messageformat": "11.2.7",
     "jsdom": "29.1.1",
     "prettier": "3.4.2",
     "typescript": "5.7.2",

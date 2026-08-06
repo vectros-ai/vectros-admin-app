@@ -554,6 +554,118 @@ describe('<ScopeEditor> data-scope filters', () => {
       'scope:org': ['org_a', null],
     });
   });
+
+  // The "*" dimension wildcard (0.38.0) previously could not be authored at
+  // all through this editor — the namespace field's grammar rejected a
+  // leading "*". Both the option's discoverability and the actual save path
+  // are pinned here, not just the underlying dataScope.ts model.
+  it('offers "*" as a namespace suggestion and saves it as the bare wildcard key', async () => {
+    const user = userEvent.setup();
+    const seen: { value: ScopeClause[] } = {
+      value: [{ allowed_actions: ['records:r'], data_scope: {} }],
+    };
+    function Harness(): React.JSX.Element {
+      const [value, setValue] = useState<ScopeClause[]>(seen.value);
+      return (
+        <ScopeEditor
+          value={value}
+          onChange={(v) => {
+            seen.value = v;
+            setValue(v);
+          }}
+        />
+      );
+    }
+    render(
+      <TestIntlProvider>
+        <Harness />
+      </TestIntlProvider>,
+    );
+    await user.click(
+      screen.getByRole('button', { name: /row-level data filters/i }),
+    );
+    await user.click(screen.getByRole('button', { name: /add filter/i }));
+
+    const namespaceInput = screen.getByRole('combobox', { name: /scope/i });
+    await user.click(namespaceInput);
+    // "*" is offered alongside the built-ins, not just typeable blind.
+    expect(await screen.findByRole('option', { name: '*' })).toBeInTheDocument();
+    await user.type(namespaceInput, '*');
+
+    // Pick the suggested matcher from the values dropdown rather than typing
+    // it — the literal `${{ }}` braces are userEvent.type() special-key
+    // syntax, and clicking the option is also the real UX this feature is
+    // FOR ("pick one from the value field's suggestions").
+    const valuesInput = screen.getByRole('combobox', { name: /allowed values/i });
+    await user.click(valuesInput);
+    await user.click(await screen.findByRole('option', { name: '${{ any }}' }));
+
+    // The bare "*" key, not "scope:*" — the whole point of the sentinel.
+    expect(seen.value[0]?.data_scope).toEqual({ '*': ['${{ any }}'] });
+  });
+
+  it('suggests the placement matchers in the values field once a namespace is entered', async () => {
+    const user = userEvent.setup();
+    render(
+      <TestIntlProvider>
+        <ScopeEditor
+          value={[{ allowed_actions: ['records:r'], data_scope: { 'scope:org': [] } }]}
+          onChange={() => {}}
+        />
+      </TestIntlProvider>,
+    );
+    const valuesInput = screen.getByRole('combobox', { name: /allowed values/i });
+    await user.click(valuesInput);
+    expect(await screen.findByRole('option', { name: '${{ any }}' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('option', { name: '${{ under.self.userId }}' }),
+    ).toBeInTheDocument();
+    // The namespace-scoped matcher is templated with THIS row's namespace.
+    expect(
+      screen.getByRole('option', { name: '${{ under.self.scope.org }}' }),
+    ).toBeInTheDocument();
+    // Built-in namespaces are always offered as cross-reference candidates,
+    // even with only one dimension row authored.
+    expect(
+      screen.getByRole('option', { name: '${{ under.self.scope.client }}' }),
+    ).toBeInTheDocument();
+  });
+
+  // The feature's own canonical use case (0.38.0's release note): a credential
+  // confined to an ORG can work with the CLIENTS under it — matcher
+  // ${{ under.self.scope.org }} on the "client" ROW. Suggesting only a row's
+  // own namespace would never surface the form the feature exists for.
+  it('suggests a matcher for a DIFFERENT authored dimension, not only the row\'s own namespace', async () => {
+    const user = userEvent.setup();
+    render(
+      <TestIntlProvider>
+        <ScopeEditor
+          value={[
+            {
+              allowed_actions: ['records:r'],
+              // Two dimensions on one clause: org (row 0) and a custom
+              // namespace "group" (row 1) — group is NOT a built-in, so it can
+              // only appear as a suggestion via the other-authored-dimensions
+              // path, never via the built-ins fallback.
+              data_scope: { 'scope:org': [], 'scope:group': [] },
+            },
+          ]}
+          onChange={() => {}}
+        />
+      </TestIntlProvider>,
+    );
+    const valuesInputs = screen.getAllByRole('combobox', { name: /allowed values/i });
+    // Row 1 ("group") — open its values field and confirm it suggests the
+    // OTHER row's namespace (org), the cross-dimension form.
+    await user.click(valuesInputs[1]!);
+    expect(
+      await screen.findByRole('option', { name: '${{ under.self.scope.org }}' }),
+    ).toBeInTheDocument();
+    // And its own namespace, still offered.
+    expect(
+      screen.getByRole('option', { name: '${{ under.self.scope.group }}' }),
+    ).toBeInTheDocument();
+  });
 });
 
 // ---------------------------------------------------------------------------

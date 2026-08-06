@@ -56,6 +56,7 @@ import { FormattedMessage, useIntl } from 'react-intl';
 import type { IntlShape } from 'react-intl';
 
 import {
+  DIMENSION_WILDCARD,
   parseDataScope,
   serializeDataScope,
   validateDataScope,
@@ -683,6 +684,42 @@ function ClauseCard({
 // or steal focus).
 // ---------------------------------------------------------------------------
 
+/**
+ * Autocomplete suggestions for a data-scope dimension's VALUES field — the
+ * platform's placement matchers: the 0.38.0 `${{ any }}` / `${{ under.self.* }}`
+ * forms plus the pre-existing `${{ self.* }}` forms. All are ordinary strings
+ * in the wire `values[]` array — typing one verbatim already produces the
+ * correct shape — this only makes them discoverable rather than something an
+ * author has to already know to type.
+ *
+ * The namespace-scoped forms are offered for THIS row's own namespace AND for
+ * `otherNamespaces` — the built-in namespaces plus the clause's other
+ * authored dimensions. This is not redundancy: the feature's own canonical
+ * use case is cross-dimension (0.38.0's release note: *"a credential confined
+ * to an organization can work with the clients under it"* — that's the
+ * `client` DIMENSION matched by an `org`-scoped matcher). Suggesting only the
+ * row's own namespace would never surface the form the feature exists for.
+ * Neither namespace-scoped form is offered for the "*" wildcard dimension
+ * (own or other), which names no single namespace to resolve against.
+ */
+function placementMatcherSuggestions(
+  namespace: string,
+  otherNamespaces: readonly string[],
+): readonly string[] {
+  const base = ['${{ any }}', '${{ self.userId }}', '${{ under.self.userId }}'];
+  const candidates = new Set<string>();
+  const own = namespace.trim();
+  if (own && own !== DIMENSION_WILDCARD) candidates.add(own);
+  for (const other of otherNamespaces) {
+    const trimmed = other.trim();
+    if (trimmed && trimmed !== DIMENSION_WILDCARD) candidates.add(trimmed);
+  }
+  for (const ns of candidates) {
+    base.push(`\${{ self.scope.${ns} }}`, `\${{ under.self.scope.${ns} }}`);
+  }
+  return base;
+}
+
 function DataScopeSection({
   dataScope,
   disabled,
@@ -768,7 +805,7 @@ function DataScopeSection({
               <Autocomplete
                 freeSolo
                 disabled={disabled}
-                options={[...SCOPE_BUILTIN_NAMESPACES]}
+                options={[...SCOPE_BUILTIN_NAMESPACES, DIMENSION_WILDCARD]}
                 value={dim.namespace}
                 onInputChange={(_evt, v) => updateDimension(i, { namespace: v })}
                 sx={{ width: { xs: '100%', sm: 200 } }}
@@ -794,7 +831,10 @@ function DataScopeSection({
                   freeSolo
                   autoSelect
                   disabled={disabled}
-                  options={[]}
+                  options={placementMatcherSuggestions(dim.namespace, [
+                    ...SCOPE_BUILTIN_NAMESPACES,
+                    ...dims.filter((_, j) => j !== i).map((d) => d.namespace),
+                  ])}
                   value={[...dim.values]}
                   onChange={(_evt, v) => updateDimension(i, { values: v as string[] })}
                   renderInput={(params) => (

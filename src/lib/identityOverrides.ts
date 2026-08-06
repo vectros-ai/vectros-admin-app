@@ -21,8 +21,69 @@ import {
   namespaceFromScopeKey,
   scopeKey,
   validateScopeNamespace,
+  validateScopeValue,
 } from './scopeNamespace';
 import type { ScopeNamespaceError } from './scopeNamespace';
+
+/**
+ * Whether a SESSION (identified by its own decoded `identity` claim — see
+ * `useScopeGate().identity` in `@vectros-ai/react`) holds any identity of its
+ * own at all. This is a LIVE, per-session question, not a fixed fact about
+ * the app: an owner session's credential carries no identity (nothing to
+ * confer), but a sub-user session bound to an access profile with identity
+ * overrides of its own generally does — and the platform's conferral rule
+ * lets such a session grant EXACTLY the identity value it itself holds. A
+ * session with none can never author a non-empty override; a session that
+ * holds some MAY be able to (still bounded per-dimension by the backend —
+ * see `sessionIdentityMatchesOverrides` for the precise, checkable form of
+ * that bound; this function only answers "is authoring categorically
+ * impossible for this session", the coarse question the editor's overall
+ * shown-but-disabled state needs).
+ *
+ * `sessionIdentity` is the raw decoded claim (canonical `scope:<ns>` keys,
+ * plus a non-namespace `partnerUserId` key this reuses `parseIdentityOverrides`
+ * to filter out via `passthrough`).
+ */
+export function sessionHoldsAnyIdentity(
+  sessionIdentity: Readonly<Record<string, string>>,
+): boolean {
+  return countOverrideNamespaces(parseIdentityOverrides(sessionIdentity)) > 0;
+}
+
+/**
+ * Whether `sessionIdentity` holds, per key, EXACTLY the values in `raw` — the
+ * platform's per-key equality rule (`Objects.equals(held, requested)`),
+ * applied wholesale to a map instead of one key. This is the same test the
+ * backend runs in two different roles, both of which reduce to identical
+ * math:
+ *   - **conferral** (creating/setting `raw` as new `identityOverrides`): may
+ *     the caller grant exactly these values? — `raw` is the REQUESTED map.
+ *   - **displacement** (clearing/deleting an EXISTING `identityOverrides`):
+ *     does the caller hold every value it would be displacing? — `raw` is
+ *     the PRIOR map, and the request is empty (nothing left to compare each
+ *     key against, so a null/absent resulting value only agrees with a
+ *     null/absent prior — any real prior value must be held to clear it).
+ *
+ * `null`/absent `raw` (no overrides at all) trivially passes — mirrors the
+ * backend's own early-return-allow on an empty/absent map at both call sites.
+ * Blank-valued entries are NOT filtered before comparing (unlike this
+ * module's other helpers) — this deliberately mirrors the backend's raw,
+ * canonicalization-free key/value equality, since the whole point is to
+ * predict THAT check, not to reason about the value grammar.
+ */
+export function sessionIdentityMatchesOverrides(
+  sessionIdentity: Readonly<Record<string, string>>,
+  raw: Record<string, unknown> | null | undefined,
+): boolean {
+  if (raw == null) return true;
+  return Object.entries(raw).every(([key, value]) => {
+    const priorValue = value == null ? null : String(value);
+    const held = Object.prototype.hasOwnProperty.call(sessionIdentity, key)
+      ? sessionIdentity[key]
+      : null;
+    return held === priorValue;
+  });
+}
 
 /** One authored custom-namespace override (a `scope:<namespace>` dimension). */
 export interface IdentityOverrideExtra {
@@ -131,6 +192,45 @@ export function canonicalOverridesKeyOfModel(
   return stableStringify(serializeIdentityOverrides(model));
 }
 
+/**
+ * What a save request's `identityOverrides` field should be, given the
+ * CURRENT form model vs the BASELINE it was loaded from:
+ *   - unchanged from baseline → `undefined` (omit the field entirely — PATCH
+ *     semantics read an omitted field as "leave as-is"). This is what stops a
+ *     save from resending an UNCHANGED, already-non-empty override, which
+ *     would otherwise happen on every save of a profile that has one, for
+ *     ANY edit at all (role, scopes, anything), not only an edit to the
+ *     override itself.
+ *   - changed AND still non-empty → the serialized wire form.
+ *   - changed TO empty (cleared) → an explicit `{}`, NOT omitted — an
+ *     omitted field means "leave as-is", so clearing a baseline's overrides
+ *     requires actually sending the empty map, not dropping the key.
+ *
+ * `isCreate` treats any non-empty model as "changed" (there's no baseline to
+ * diff against yet) and never needs the "clear" case (nothing existed to
+ * clear).
+ *
+ * Pure and independent of any UI state, so it's testable on its own
+ * regardless of whether the caller's form fields are enabled — see this
+ * module's own test file for direct coverage of all three shapes above.
+ */
+export function identityOverridesRequestValue(
+  currentModel: IdentityOverridesModel,
+  baselineRaw: Record<string, unknown> | null | undefined,
+  isCreate: boolean,
+): Record<string, unknown> | undefined {
+  const wire = serializeIdentityOverrides(currentModel);
+  const hasOverrides = Object.keys(wire).length > 0;
+
+  if (isCreate) {
+    return hasOverrides ? wire : undefined;
+  }
+
+  const changed = canonicalOverridesKeyOfModel(currentModel) !== canonicalOverridesKey(baselineRaw);
+  if (!changed) return undefined;
+  return hasOverrides ? wire : {};
+}
+
 function stableStringify(obj: Record<string, unknown>): string {
   const entries = Object.entries(obj).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   return JSON.stringify(entries);
@@ -184,7 +284,9 @@ function isActiveExtra(extra: IdentityOverrideExtra): boolean {
 /**
  * Structured validation error for the overrides authoring UI. `extra*` errors
  * carry the offending `extras` row index; `tooManyNamespaces` is the whole-form
- * ≤2 cap.
+ * ≤2 cap. `orgInvalidValue` / `clientInvalidValue` / `extraInvalidValue` are the
+ * scope-VALUE grammar the platform enforces — distinct from `extraMissingValue`,
+ * which only catches blank.
  */
 export type IdentityOverridesValidationError =
   | { readonly code: 'tooManyNamespaces'; readonly max: number }
@@ -195,15 +297,24 @@ export type IdentityOverridesValidationError =
     }
   | { readonly code: 'extraBuiltin'; readonly index: number; readonly namespace: string }
   | { readonly code: 'extraDuplicate'; readonly index: number; readonly namespace: string }
-  | { readonly code: 'extraMissingValue'; readonly index: number };
+  | { readonly code: 'extraMissingValue'; readonly index: number }
+  | { readonly code: 'extraInvalidValue'; readonly index: number }
+  | { readonly code: 'orgInvalidValue' }
+  | { readonly code: 'clientInvalidValue' };
 
 /**
  * Validate the authored overrides model. Returns null when savable. A row that
  * is entirely blank is ignored (it serializes away); a row with only one half
- * filled, a bad/reserved/built-in/duplicate namespace, or more than
- * {@link MAX_SCOPE_NAMESPACES} total dimensions is an error. Built-in
- * namespaces (org / client) must use their dedicated fields, so typing them in
- * an extra row is rejected as `extraBuiltin`.
+ * filled, a bad/reserved/built-in/duplicate namespace, a value that fails the
+ * platform's scope-value grammar, or more than {@link MAX_SCOPE_NAMESPACES}
+ * total dimensions is an error. Built-in namespaces (org / client) must use
+ * their dedicated fields, so typing them in an extra row is rejected as
+ * `extraBuiltin`.
+ *
+ * The value-grammar check runs on `org` / `client` / each `extras` value —
+ * previously only blank was checked (`extraMissingValue`), and `org`/`client`
+ * had no value check at all, so a value like `a:b` round-tripped to the server
+ * and came back as a bare, uncaught 400.
  */
 export function validateIdentityOverrides(
   model: IdentityOverridesModel,
@@ -211,6 +322,13 @@ export function validateIdentityOverrides(
   const seen = new Set<string>();
   if (model.org.trim()) seen.add('org');
   if (model.client.trim()) seen.add('client');
+
+  if (model.org.trim() && validateScopeValue(model.org.trim())) {
+    return { code: 'orgInvalidValue' };
+  }
+  if (model.client.trim() && validateScopeValue(model.client.trim())) {
+    return { code: 'clientInvalidValue' };
+  }
 
   for (let i = 0; i < model.extras.length; i++) {
     const extra = model.extras[i];
@@ -223,6 +341,9 @@ export function validateIdentityOverrides(
     }
     if (extra.value.trim() === '') {
       return { code: 'extraMissingValue', index: i };
+    }
+    if (validateScopeValue(extra.value.trim())) {
+      return { code: 'extraInvalidValue', index: i };
     }
     if (seen.has(ns)) return { code: 'extraDuplicate', index: i, namespace: ns };
     seen.add(ns);

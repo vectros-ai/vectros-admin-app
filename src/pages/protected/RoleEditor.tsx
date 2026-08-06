@@ -192,7 +192,13 @@ export function RoleEditor(): React.JSX.Element {
     name.trim() !== '' &&
     (isCreate ? roleId !== '' && !roleIdInvalid : true) &&
     scopeError === null &&
-    dirty;
+    dirty &&
+    // An edit here propagates to every profile referencing this role, and
+    // `referencingCount` is how the editor tells the operator that. A failed
+    // drain makes that count read zero, so saving would proceed with the blast
+    // radius silently understated. Fail closed on the count, not just on the
+    // list: `isError` is the only state where the count is a lie.
+    (isCreate || !profilesQuery.isError);
 
   const saveMutation = useMutation({
     onMutate: () => {
@@ -324,6 +330,18 @@ export function RoleEditor(): React.JSX.Element {
       {!isCreate && roleQuery.isError && (
         <ApiErrorAlert error={roleQuery.error}>
           <FormattedMessage id="access.roles.editor.loadErrorBody" />
+        </ApiErrorAlert>
+      )}
+
+      {/* The profile drain backs the propagation warning below, and that warning
+          is gated on a COUNT. A failed drain counts zero, which is
+          indistinguishable from "no profile uses this role" — so without this
+          the editor would quietly present an unreferenced-looking role and let
+          it be saved, propagating the edit to every profile that does use it.
+          Saving is blocked while the count is untrustworthy. */}
+      {!isCreate && profilesQuery.isError && (
+        <ApiErrorAlert error={profilesQuery.error}>
+          <FormattedMessage id="access.roles.editor.profilesErrorBody" />
         </ApiErrorAlert>
       )}
 

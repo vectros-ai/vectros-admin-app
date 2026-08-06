@@ -35,5 +35,6 @@
   "accessLog.revealedNo": "No",
   "accessLog.loadMore": "Load more",
   "accessLog.loadingMore": "Loading…",
-  "accessLog.cellEmpty": "—"
+  "accessLog.cellEmpty": "—",
+  "accessLog.contextsLoadError": "We couldn't load your app contexts, so the context filter is unavailable. Please try again."
 }

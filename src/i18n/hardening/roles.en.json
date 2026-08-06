@@ -1,5 +1,6 @@
 {
   "access.roles.editor.loadErrorBody": "We could not load this role. Please try again.",
+  "access.roles.editor.profilesErrorBody": "We could not load the access profiles in this context, so we cannot tell you which ones use this role. Saving is disabled until we can — an edit here applies to every profile that references it. Please refresh and try again.",
   "access.roles.editor.saveErrorBody": "We could not save this role. Please try again.",
   "access.roles.editor.duplicateId": "A role with this ID already exists in this context. Choose a different ID.",
   "access.roles.cloneDialog.cloneErrorBody": "We could not clone this role. Please try again.",
@@ -14,5 +15,6 @@
   "access.profiles.editor.sourceSwitchTitle": "Discard the other source?",
   "access.profiles.editor.sourceSwitchBody": "Switching the permission source will discard the draft on the side you are leaving. This cannot be undone.",
   "access.profiles.editor.sourceSwitchConfirmCta": "Discard and switch",
-  "access.profiles.editor.sourceSwitchCancel": "Keep editing"
+  "access.profiles.editor.sourceSwitchCancel": "Keep editing",
+  "access.profiles.editor.roleRefLoadError": "We couldn't load this context's roles, so the list below is empty — that does not mean the context has none. Please try again."
 }

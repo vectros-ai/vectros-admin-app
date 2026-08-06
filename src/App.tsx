@@ -52,22 +52,47 @@ import { NotFoundPage } from './pages/public/NotFoundPage';
 // Both the nav item's `gateAction` AND the route's `RequireScope` read from
 // here, so a nav link and its route guard can never drift (a typo'd literal in
 // one place but not the other is exactly the bug class this prevents).
+//
+// These are the real `resource:ops` grammar (see `RESOURCE_CATALOG` in
+// components/ScopeEditor.tsx) — NOT the `admin:<resource>` spelling this
+// table previously used. `admin:users`/`admin:keys`/`admin:logs`/
+// `admin:profiles` are unauthorable: TokenScope's action grammar rejects any
+// op letter outside `cruds`, and none of those legacy strings' post-colon
+// segments are — so no stored scope can ever carry them, and `RequireScope`/
+// `ScopeGate` passed ONLY for a wildcard `*` credential. A sub-user's grant,
+// however correctly scoped server-side, could never make the corresponding
+// nav link or route visible. `useScopeGate().can()` is now ops-aware (unions
+// across every unqualified `resource:ops` entry for the resource), so a
+// plain `:r` read grant is sufficient here regardless of how the profile
+// author split it across entries.
 const ADMIN_ACTIONS = {
-  members: 'admin:users',
-  keys: 'admin:keys',
-  logs: 'admin:logs',
+  members: 'users:r',
+  keys: 'keys:r',
+  logs: 'logs:r',
   // Accounting-of-disclosures gates on the SAME literal the backend enforces on
   // GET /v1/admin/access-log (`access-log:r`; an owner's wildcard covers it).
   accessLog: 'access-log:r',
-  contexts: 'admin:profiles',
+  // The app-contexts lifecycle (list + detail) gates on the dedicated
+  // `app-contexts` resource, not `profiles`.
+  contexts: 'app-contexts:r',
+  // The nested role-item and profile-item editors, by contrast, are on the
+  // SAME backend resource as the item-level read/write ops the editors
+  // themselves call (`profiles:r`/`profiles:u`/`profiles:d`) — the backend
+  // has no separate `roles` resource; role and profile item routes are both
+  // enforced on `profiles`. Read-only here (matching the read-only route
+  // gates elsewhere in this table); Save/Clone/Delete on those editors don't
+  // yet carry their own per-action gates (tracked as a follow-up, same shape
+  // as MembersPage's action gates).
+  profiles: 'profiles:r',
   // Usage gates on the SAME literal the backend enforces on GET /v1/usage
   // (`billing:r` on scoped tokens; an owner's wildcard covers it).
   usage: 'billing:r',
 } as const;
 
-// Admin App sidebar nav (labels are i18n message ids; gateAction matches the
-// `admin:<resource>` scope convention — OWNER's wildcard covers them all, a
-// sub-user without the grant stays hidden). The shared AppLayout renders these.
+// Admin App sidebar nav (labels are i18n message ids; gateAction is each
+// surface's minimal read grant — see ADMIN_ACTIONS above — OWNER's wildcard
+// covers them all, a sub-user without the grant stays hidden). The shared
+// AppLayout renders these.
 const ADMIN_NAV_ITEMS: ReadonlyArray<NavItemSpec> = [
   { to: '/', labelId: 'layout.navWelcome', gateAction: null, icon: <HomeIcon fontSize="small" /> },
   { to: '/members', labelId: 'layout.navMembers', gateAction: ADMIN_ACTIONS.members, icon: <PeopleIcon fontSize="small" /> },
@@ -127,9 +152,18 @@ export default function App(): React.JSX.Element {
           path="/usage"
           element={<RequireScope action={ADMIN_ACTIONS.usage}><UsagePage /></RequireScope>}
         />
-        {/* App Contexts + their Roles + Profiles (all gated on admin:profiles).
-            The /access root redirects to /access/contexts — the contexts list,
-            which is always the landing surface (clicking a row opens its detail). */}
+        {/* App Contexts + their Roles + Profiles. The /access root redirects to
+            /access/contexts — the contexts list, which is always the landing
+            surface (clicking a row opens its detail).
+            The context list/detail routes gate on ADMIN_ACTIONS.contexts
+            (`app-contexts:r`); the nested role/profile ITEM editors gate on
+            ADMIN_ACTIONS.profiles (`profiles:r`) instead — different backend
+            resource, see that constant's comment. NOTE: ContextDetailPage's
+            OWN list-roles/list-profiles calls also need `profiles:r`, which
+            this route-level gate (app-contexts:r only) doesn't confirm — a
+            session holding app-contexts:r but not profiles:r reaches the page
+            and 403s loading its tabs. Tracked as a follow-up alongside the
+            editors' own action gates (RequireScope only checks ONE action). */}
         <Route path="/access" element={<Navigate to="/access/contexts" replace />} />
         <Route
           path="/access/contexts"
@@ -141,11 +175,11 @@ export default function App(): React.JSX.Element {
         />
         <Route
           path="/access/contexts/:ctxId/roles/:tplId"
-          element={<RequireScope action={ADMIN_ACTIONS.contexts}><RoleEditor /></RequireScope>}
+          element={<RequireScope action={ADMIN_ACTIONS.profiles}><RoleEditor /></RequireScope>}
         />
         <Route
           path="/access/contexts/:ctxId/profiles/:principalId"
-          element={<RequireScope action={ADMIN_ACTIONS.contexts}><ProfileEditor /></RequireScope>}
+          element={<RequireScope action={ADMIN_ACTIONS.profiles}><ProfileEditor /></RequireScope>}
         />
       </Route>
 

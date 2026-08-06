@@ -7,9 +7,7 @@
   "auth.errors.LIMIT_EXCEEDED": "Too many attempts. Please wait a few minutes and try again.",
   "auth.errors.NETWORK_ERROR": "A network problem occurred. Check your connection and try again.",
   "auth.errors.UNKNOWN": "Something went wrong. Please try again.",
-
   "error.requestId": "Reference ID: {requestId}",
-
   "login.title": "Sign in",
   "login.subtitle": "Welcome back to {productName}.",
   "login.emailLabel": "Email address",
@@ -29,17 +27,14 @@
   "login.mfaSetupSubtitle": "Your account requires an authenticator app. Scan the code below to finish signing in.",
   "login.backToSignIn": "Back to sign in",
   "login.newPasswordRequired": "Your account requires a new password. Please contact your administrator.",
-
   "account.title": "Account",
   "account.infoHeading": "Your account",
   "account.emailLabel": "Email",
   "account.nameLabel": "Name",
   "account.idLabel": "User ID",
-
   "notFound.title": "Page not found",
   "notFound.body": "We couldn't find the page you're looking for. The link may be broken, or the page may have moved.",
   "notFound.backHome": "Back to home",
-
   "accept.titleWelcome": "Welcome!",
   "accept.titleError": "Invitation problem",
   "accept.invitedByAndOrg": "{inviter} invited you to join {org}",
@@ -74,7 +69,6 @@
   "accept.differentIdentityTitle": "Switch accounts to continue",
   "accept.differentIdentityBody": "This invitation is for {inviteEmail}, but you're signed in as {sessionEmail}. Sign out and open the link again to accept it.",
   "accept.differentIdentitySignOut": "Sign out",
-
   "welcome.heading": "Welcome",
   "welcome.headingWithName": "Welcome, {firstName}",
   "welcome.intro": "You're signed in to {productName}.",
@@ -85,7 +79,6 @@
   "welcome.userIdLabel": "User ID",
   "welcome.nextStepsTitle": "What's next",
   "welcome.nextStepsBody": "All admin surfaces are now live — member management, scoped API keys, activity logs, and access profiles — accessible from the nav.",
-
   "confirm.title": "Confirm your email",
   "confirm.subtitle": "Enter the verification code we sent to {email}",
   "confirm.noEmailTitle": "Confirmation problem",
@@ -98,7 +91,6 @@
   "confirm.resending": "Sending…",
   "confirm.resentSuccess": "A new code was sent to {email}",
   "confirm.backToSignIn": "Back to sign in",
-
   "forgotPassword.requestTitle": "Reset your password",
   "forgotPassword.requestSubtitle": "Enter your email and we'll send a verification code.",
   "forgotPassword.requestSubmit": "Send code",
@@ -115,7 +107,6 @@
   "forgotPassword.successBody": "You can now sign in with your new password.",
   "forgotPassword.successCta": "Continue to sign in",
   "forgotPassword.backToSignIn": "Back to sign in",
-
   "members.title": "Members",
   "members.subtitle": "Manage who has access to your organization in {productName}.",
   "members.inviteButton": "Invite member",
@@ -139,14 +130,16 @@
   "members.profileNone": "—",
   "members.profileLoading": "Loading…",
   "members.actionResend": "Resend invite",
+  "members.actionResendForbidden": "Resending requires the users:r and users:u permissions — ask an owner or admin to resend.",
   "members.actionRevoke": "Revoke",
+  "members.actionRevokeForbidden": "Revoking requires the users:d permission — ask an owner or admin to revoke.",
+  "members.inviteForbidden": "Inviting requires the users:c permission — ask an owner or admin to invite.",
   "members.revokeConfirmTitle": "Revoke {email}?",
   "members.revokeConfirmBody": "Their access will be removed immediately. This cannot be undone.",
   "members.revokeConfirmCta": "Revoke",
   "members.revokeCancelCta": "Cancel",
   "members.revokeSuccess": "{email} revoked.",
   "members.resendSuccess": "Invitation re-sent to {email}.",
-
   "invite.title": "Invite a new member",
   "invite.subtitle": "They'll get an email with a link to set their password and join.",
   "invite.emailLabel": "Email address",
@@ -215,9 +208,9 @@
   "scopeEditor.validationNoActions": "Clause {n}: grant at least one permission",
   "scopeEditor.validationBlankAction": "Clause {clauseN}, action {actionN}: must be a non-blank string",
   "scopeEditor.dataScopeTitle": "Row-level data filters (optional)",
-  "scopeEditor.dataScopeHelp": "Narrow this clause to rows owned by specific scopes — for example scope \"org\", value \"org_acme\". Leave empty to apply to every row in the context. A clause can filter on at most two scopes; multiple filters must all match.",
+  "scopeEditor.dataScopeHelp": "Narrow this clause to rows owned by specific scopes — for example scope \"org\", value \"org_acme\". Leave empty to apply to every row in the context. A clause can filter on at most two scopes; multiple filters must all match. Use scope \"*\" to state a default for every scope this clause doesn't name explicitly. A value can also be a matcher instead of a literal — \"$'{{' any '}}'\" (any value present in this scope), \"$'{{' under.self.userId '}}'\", or \"$'{{' under.self.scope.NAMESPACE '}}'\" (values whose immediate parent is your own in that namespace — NAMESPACE can be this row's own scope or another one on the clause, e.g. an \"org\"-matcher on a \"client\" row) — pick one from the value field's suggestions.",
   "scopeEditor.dataScopeNamespaceLabel": "Scope",
-  "scopeEditor.dataScopeNamespacePlaceholder": "org, client, or custom",
+  "scopeEditor.dataScopeNamespacePlaceholder": "org, client, *, or custom",
   "scopeEditor.dataScopeValuesLabel": "Allowed values",
   "scopeEditor.dataScopeValuesPlaceholder": "Type a value, press Enter",
   "scopeEditor.dataScopeIncludeNull": "Also include rows with no value in this scope",
@@ -328,10 +321,8 @@
   "keysWizard.confirmation.idempotentDetail": "A scoped key with this (user, context, name) tuple already exists. The raw key cannot be re-disclosed — if you've lost it, revoke this one from the Keys list and create a new one with a different name.",
   "keysWizard.confirmation.idempotentExistingKeyId": "Existing key id",
   "keysWizard.confirmation.idempotentCreatedAt": "Created",
-
   "logs.title": "Activity logs",
   "logs.subtitle": "Inspect API call history for the active tenant. Sourced from CloudWatch Logs Insights — request and response bodies are never logged.",
-
   "logs.idle": "Set a time range and filters, then click Fetch logs to query.",
   "logs.loading": "Querying logs…",
   "logs.loadError": "Could not query logs. {message}",
@@ -340,7 +331,6 @@
   "logs.truncated": "Results truncated at {limit}. Narrow the time window or add filters to see all entries.",
   "logs.resultCount": "{count, plural, =0 {No entries} one {# entry} other {# entries}}",
   "logs.queryDuration": "{ms}ms",
-
   "logs.contextLabel": "Context",
   "logs.contextAll": "All contexts",
   "logs.contextHelp": "Activity is shown across every app context by default. Pick a context to narrow the view to it.",
@@ -354,7 +344,6 @@
   "logs.timeRangeInvalid": "Start time must be before end time.",
   "logs.showingLast": "Showing last {label}",
   "logs.showingCustom": "Showing custom range",
-
   "logs.filtersLegend": "Filters",
   "logs.resourceLabel": "Resource",
   "logs.resourceAll": "All resources",
@@ -363,11 +352,9 @@
   "logs.keyIdLabel": "Key ID",
   "logs.keyIdInvalid": "Use only letters, digits, hyphens, or underscores (max 64).",
   "logs.errorsOnlyLabel": "Errors only",
-
   "logs.fetchCta": "Fetch logs",
   "logs.fetchInFlight": "Querying…",
   "logs.refresh": "Refresh",
-
   "logs.tableLabel": "API call log entries",
   "logs.columnTime": "Time",
   "logs.columnMethod": "Method",
@@ -379,9 +366,7 @@
   "logs.columnKeyId": "Key ID",
   "logs.cellEmpty": "—",
   "logs.requestId": "Ref: {requestId}",
-
   "layout.navUsage": "Usage",
-
   "usage.title": "Usage & credits",
   "usage.subtitle": "Your account's consumption for the current billing period: credits against your plan, read metering, and the live/test and per-context breakdowns.",
   "usage.refresh": "Refresh",
@@ -423,7 +408,6 @@
   "usage.contextsLabel": "Usage by app context",
   "usage.colContext": "Context",
   "usage.estimateNote": "Storage is an in-period estimate; final billing runs at the end of the cycle. Credit values are rounded down to whole credits.",
-
   "access.shared.save": "Save",
   "access.shared.saving": "Saving…",
   "access.shared.cancel": "Cancel",
@@ -436,11 +420,9 @@
   "access.shared.propagationNotice": "Permission changes take effect within ~5 minutes (the Rust authorizer's policy-cache window).",
   "access.shared.discardConfirm": "You have unsaved changes. Are you sure you want to leave?",
   "access.shared.refreshAfterConflict": "Refresh",
-
   "access.nav": "App Contexts",
   "access.breadcrumbRoot": "App Contexts",
   "access.contexts.detail.tabsLabel": "Context sections",
-
   "access.contexts.title": "App contexts",
   "access.contexts.subtitle": "An app context is a namespace you define to group access profiles and roles. You usually only need the default {defaultContextId} context — add more when you have separate apps or environments with different permission models.",
   "access.contexts.createButton": "Create app context",
@@ -455,7 +437,6 @@
   "access.contexts.columnProfilesCount": "Profiles",
   "access.contexts.columnCreated": "Created",
   "access.contexts.columnActions": "Actions",
-
   "access.contexts.createDialog.title": "Create app context",
   "access.contexts.createDialog.idLabel": "Context ID",
   "access.contexts.createDialog.idHelper": "3–31 characters. Lowercase letter prefix, then lowercase letters / digits / dashes.",
@@ -465,10 +446,8 @@
   "access.contexts.createDialog.create": "Create",
   "access.contexts.createDialog.creating": "Creating…",
   "access.contexts.createDialog.createError": "Could not create app context. {message}",
-
   "access.contexts.editDialog.title": "Edit app context",
   "access.contexts.editDialog.saveError": "Could not save app context. {message}",
-
   "access.contexts.deleteConfirm.title": "Delete app context {contextId}?",
   "access.contexts.deleteConfirm.body": "This permanently deletes the app context and everything in it — every record, document, folder, schema, role, and access profile. Scoped API keys for this context are revoked and stop working within ~5 minutes. This cannot be undone.",
   "access.contexts.deleteConfirm.bodyCounts": "Right now it contains {roles, plural, one {# role} other {# roles}} and {profiles, plural, one {# access profile} other {# access profiles}}.",
@@ -477,7 +456,6 @@
   "access.contexts.deleteConfirm.cta": "Delete app context",
   "access.contexts.purging": "Deleting…",
   "access.contexts.editDetails": "Edit name & description",
-
   "access.roles.title": "Roles",
   "access.roles.subtitle": "Reusable scope packs that access profiles can reference. Changes to a role propagate to every referencing profile.",
   "access.roles.createButton": "Create role",
@@ -492,7 +470,6 @@
   "access.roles.columnUpdated": "Updated",
   "access.roles.columnActions": "Actions",
   "access.roles.referencingClickToView": "View referencing profiles",
-
   "access.roles.editor.titleCreate": "Create role",
   "access.roles.editor.titleEdit": "Edit role {roleId}",
   "access.roles.editor.propagationBanner": "Changes propagate to {count, plural, one {# referencing profile} other {# referencing profiles}}. {propagationNotice}",
@@ -504,20 +481,17 @@
   "access.roles.editor.scopesLabel": "Scope clauses",
   "access.roles.editor.saveError": "Could not save role. {message}",
   "access.roles.editor.viewReferencingLink": "View referencing profiles",
-
   "access.roles.cloneDialog.title": "Clone role",
   "access.roles.cloneDialog.newIdLabel": "New role ID",
   "access.roles.cloneDialog.newNameLabel": "New name",
   "access.roles.cloneDialog.cta": "Clone",
   "access.roles.cloneDialog.cloning": "Cloning…",
   "access.roles.cloneDialog.cloneError": "Could not clone role. {message}",
-
   "access.roles.deleteConfirm.title": "Delete role {roleId}?",
   "access.roles.deleteConfirm.bodyEmpty": "This cannot be undone.",
   "access.roles.deleteConfirm.bodyRefs": "{count, plural, one {# profile} other {# profiles}} reference this role. Reassign or delete those profiles first.",
   "access.roles.deleteConfirm.cta": "Delete role",
   "access.roles.deleteConfirm.error": "Could not delete role. {message}",
-
   "access.profiles.title": "Access profiles",
   "access.profiles.subtitle": "Bindings of principals (users or scoped keys) to a permission source — either a referenced role or inline scope clauses.",
   "access.profiles.createButton": "Create profile",
@@ -535,12 +509,11 @@
   "access.profiles.sourceInline": "Inline ({count, plural, one {# clause} other {# clauses}})",
   "access.profiles.filteredByRole": "Filtered to profiles referencing {roleId}.",
   "access.profiles.clearRoleFilter": "Clear filter",
-
   "access.profiles.editor.titleCreate": "Create access profile",
   "access.profiles.editor.titleEdit": "Edit profile for {principalId}",
   "access.profiles.editor.principalIdLabel": "Principal",
   "access.profiles.editor.principalIdHelper": "A user (usr_…) or API key (key_…) principal. Suffix: letters, digits, underscores, dashes.",
-  "access.profiles.editor.principalIdInvalid": "Must be usr_<suffix> or key_<suffix>. Suffix: letters, digits, underscores, or dashes only.",
+  "access.profiles.editor.principalIdInvalid": "Must be usr_SUFFIX or key_SUFFIX. Suffix: letters, digits, underscores, or dashes only.",
   "access.profiles.editor.principalPickerLabel": "User",
   "access.profiles.editor.principalPickerPlaceholder": "Search users by email…",
   "access.profiles.editor.principalPickerHelper": "Pick the user to grant access to. To bind an API key instead, type its key id (key_…).",
@@ -562,6 +535,7 @@
   "access.profiles.editor.identityOverridesShow": "Show advanced",
   "access.profiles.editor.identityOverridesHide": "Hide advanced",
   "access.profiles.editor.identityOverridesHelp": "Optionally override the ownership scopes this principal stamps in this context. Leave blank to inherit from the principal's base identity. The user's audit identity is always preserved. A principal can carry at most two scopes (org, client, and any custom scopes combined).",
+  "access.profiles.editor.identityOverridesUnavailable": "Identity overrides can't be set from this sign-in: granting one requires a credential that already holds the identity value being granted, and this one doesn't hold any. Any values below are shown for reference only — sign in as an account that holds an identity, or use a root API key, to change them.",
   "access.profiles.editor.identityOverrideOrgId": "Org ID",
   "access.profiles.editor.identityOverrideClientId": "Client ID",
   "access.profiles.editor.identityOverrideExtrasLegend": "Additional scopes",
@@ -577,8 +551,8 @@
   "access.profiles.editor.identityOverrideNamespaceBuiltin": "Use the Org ID / Client ID fields above for the \"{namespace}\" scope.",
   "access.profiles.editor.identityOverrideNamespaceDuplicate": "The \"{namespace}\" scope is already set. Each namespace can appear once.",
   "access.profiles.editor.identityOverrideValueRequired": "Enter a value for this scope, or remove the row.",
+  "access.profiles.editor.identityOverrideValueInvalid": "Value must be 1–128 characters, start with a letter or digit, and use only letters, digits, - or _ (no \":\").",
   "access.profiles.editor.saveError": "Could not save profile. {message}",
-
   "access.profiles.cloneDialog.title": "Clone access profile",
   "access.profiles.cloneDialog.newPrincipalIdLabel": "New principal ID",
   "access.profiles.cloneDialog.materializeToggle": "Materialize role into inline scopes",
@@ -586,9 +560,11 @@
   "access.profiles.cloneDialog.cta": "Clone",
   "access.profiles.cloneDialog.cloning": "Cloning…",
   "access.profiles.cloneDialog.cloneError": "Could not clone profile. {message}",
-
+  "access.profiles.cloneDialog.identityOverridesWontCopy": "This profile's identity overrides won't be copied to the clone: this sign-in doesn't hold a matching identity to grant them. Everything else will still be cloned.",
   "access.profiles.deleteConfirm.title": "Delete access profile for {principalId}?",
   "access.profiles.deleteConfirm.body": "This removes the binding in {contextId}. Scoped API keys bound to this profile will start returning 401 within ~5 minutes (the authorizer's policy-cache window). This cannot be undone.",
+  "access.profiles.deleteConfirm.bodyBlockedByOverrides": "This profile has identity overrides this sign-in doesn't hold. Removing them requires a credential that already holds the identity being removed — sign in as an account that holds it, or use a root API key, to delete this profile instead.",
   "access.profiles.deleteConfirm.cta": "Delete profile",
-  "access.profiles.deleteConfirm.error": "Could not delete profile. {message}"
+  "access.profiles.deleteConfirm.error": "Could not delete profile. {message}",
+  "logs.contextsLoadError": "We couldn't load your app contexts, so the context filter is unavailable. Please try again."
 }

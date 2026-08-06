@@ -245,6 +245,30 @@ describe('RoleEditor — edit mode', () => {
     expect(descInput.value).toBe('Standard read-only access for engineering members');
   });
 
+  it('blocks saving and says why when the profile drain fails', async () => {
+    // The propagation banner is gated on a COUNT, and a failed drain counts
+    // zero — indistinguishable from "no profile uses this role". Without a
+    // guard the editor presents an unreferenced-looking role and lets it be
+    // saved, propagating the edit to every profile that actually references it.
+    const client = makeMockClient({
+      listAccessProfiles: vi.fn().mockRejectedValue(new Error('400 invalid_cursor')),
+    });
+    renderEditor({ client, initialUrl: '/access/contexts/engineering/roles/eng-member' });
+
+    expect(
+      await screen.findByText(/cannot tell you which ones use this role/i),
+    ).toBeInTheDocument();
+    // The propagation banner must NOT claim zero referencing profiles.
+    expect(screen.queryByText(/changes propagate to/i)).not.toBeInTheDocument();
+    // And Save stays disabled even after a real edit makes the form dirty.
+    const nameInput = await screen.findByRole('textbox', { name: /name/i });
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, 'Renamed Role');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /save/i })).toBeDisabled(),
+    );
+  });
+
   it('renders the propagation banner with refs count', async () => {
     renderEditor({
       initialUrl: '/access/contexts/engineering/roles/eng-member',

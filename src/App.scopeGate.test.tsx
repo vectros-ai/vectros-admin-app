@@ -2,7 +2,7 @@
 // App scope-gating integration tests (nav-gating wave surface).
 //
 // Two client-side authz layers, both exercised here against the SHIPPING
-// ADMIN_NAV_ITEMS wiring (incl. the admin:profiles-gated /access/contexts item
+// ADMIN_NAV_ITEMS wiring (incl. the app-contexts:r-gated /access/contexts item
 // that AppLayout's own package suite omits from its hand-built fixture):
 //   1. AppLayout's per-nav-item <ScopeGate> HIDES a sidebar link when the
 //      session lacks the gateAction.
@@ -26,12 +26,10 @@ import { MemoryRouter } from 'react-router';
 
 import App from './App';
 import { AuthProvider, CurrentTenantProvider } from './auth';
-import {
-  setPartnerApiTokenMinter,
-  __resetVectrosApiTokenCacheForTest,
-} from '@vectros-ai/react';
+import { __resetVectrosApiTokenCacheForTest } from '@vectros-ai/react';
 import type { AuthProviderAdapter, AuthUser, TenantMembership } from './auth';
 import { TestIntlProvider } from './test/intl';
+import { registerScope } from './test/scopeToken';
 
 const TENANT_ID = 'tnt_test_00000000';
 const MEMBERSHIPS: ReadonlyArray<TenantMembership> = [
@@ -77,27 +75,6 @@ function mockAdapter(overrides: Partial<AuthProviderAdapter> = {}): AuthProvider
     disableTotp: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
-}
-
-/**
- * Build an st_* token carrying `actions` in the real minted shape:
- * `scope.scopes[]` clauses, each with an `allowed_actions` array.
- */
-function tokenWithActions(actions: ReadonlyArray<string>): string {
-  const payload = btoa(JSON.stringify({ scope: { scopes: [{ allowed_actions: actions }] } }))
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
-  return `st_test_h.${payload}.s`;
-}
-
-/** Register a minter that mints a token encoding the given scope. */
-function registerScope(actions: ReadonlyArray<string>): ReturnType<typeof vi.fn> {
-  const minter = vi
-    .fn()
-    .mockResolvedValue({ token: tokenWithActions(actions), expiresAtMs: Date.now() + 10 * 60 * 1000 });
-  setPartnerApiTokenMinter(minter);
-  return minter;
 }
 
 function renderApp(provider: AuthProviderAdapter) {
@@ -212,24 +189,37 @@ describe('App nav scope-gating (real gate, shipping ADMIN_NAV_ITEMS)', () => {
     expect(screen.queryAllByRole('link', { name: /welcome/i }).length).toBeGreaterThan(0);
   });
 
-  it('pins each gateAction to its item: scope of exactly admin:profiles reveals ONLY the App Contexts link', async () => {
-    registerScope(['admin:profiles']);
+  it('pins each gateAction to its item: scope of exactly app-contexts:r reveals ONLY the App Contexts link', async () => {
+    registerScope(['app-contexts:r']);
     renderApp(mockAdapter());
 
-    // Access (admin:profiles) appears — a positive signal the gate resolved.
+    // Access (app-contexts:r) appears — a positive signal the gate resolved.
     expect(
       (await screen.findAllByRole('link', { name: /app contexts/i }, { timeout: GATE_SETTLE_MS }))
         .length,
     ).toBeGreaterThan(0);
     // The other three gated items stay hidden — proves no gateAction-string
-    // typo cross-grants (e.g. 'admin:profile' vs 'admin:profiles').
+    // typo cross-grants (e.g. 'app-context:r' vs 'app-contexts:r').
     expect(screen.queryByRole('link', { name: /members/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /scoped keys/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /^logs$/i })).not.toBeInTheDocument();
   });
 
-  it('grants admin:keys ONLY the Keys link (single-scope sub-user)', async () => {
-    registerScope(['admin:keys']);
+  it('grants users:r ONLY the Members link (single-scope sub-user)', async () => {
+    registerScope(['users:r']);
+    renderApp(mockAdapter());
+
+    expect(
+      (await screen.findAllByRole('link', { name: /members/i }, { timeout: GATE_SETTLE_MS }))
+        .length,
+    ).toBeGreaterThan(0);
+    expect(screen.queryByRole('link', { name: /scoped keys/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /^logs$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /app contexts/i })).not.toBeInTheDocument();
+  });
+
+  it('grants keys:r ONLY the Keys link (single-scope sub-user)', async () => {
+    registerScope(['keys:r']);
     renderApp(mockAdapter());
 
     expect(
@@ -239,6 +229,29 @@ describe('App nav scope-gating (real gate, shipping ADMIN_NAV_ITEMS)', () => {
     expect(screen.queryByRole('link', { name: /members/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /^logs$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /app contexts/i })).not.toBeInTheDocument();
+  });
+
+  // F-1 regression lock. `admin:users`/`admin:keys`/`admin:logs`/`admin:profiles`
+  // were this app's ORIGINAL gateAction literals — and TokenScope's action
+  // grammar rejects every one of them at mint time (the post-colon segment must
+  // be composed only of `cruds` letters; none of "users"/"keys"/"logs"/
+  // "profiles" qualify). No real credential could ever carry them, which meant
+  // every sub-user was silently bounced regardless of their actual grant, and
+  // only a wildcard `*` credential ever passed. Assert the legacy shape stays
+  // provably inert now that the literals are real grammar, so a future revert
+  // back to the `admin:<resource>` spelling fails loudly here instead of
+  // shipping a route guard nothing can ever satisfy.
+  it('a legacy admin:*-shaped grant (unauthorable server-side) unlocks nothing', async () => {
+    const minter = registerScope(['admin:users', 'admin:keys', 'admin:logs', 'admin:profiles']);
+    renderApp(mockAdapter());
+
+    expect(await screen.findByRole('heading', { name: 'Welcome, Alice' })).toBeInTheDocument();
+    // Ensure the gate actually resolved (minter ran) — not merely still loading,
+    // which would make the absences below vacuous.
+    await waitFor(() => expect(minter).toHaveBeenCalled());
+    for (const name of GATED) {
+      expect(screen.queryByRole('link', { name })).not.toBeInTheDocument();
+    }
   });
 
   it('grants access-log:r ONLY the Disclosures link (single-scope sub-user)', async () => {
@@ -286,12 +299,51 @@ describe('App route scope-gating (RequireScope enforces gated routes, not just t
     expect(screen.queryByRole('button', { name: 'Invite member' })).not.toBeInTheDocument();
   });
 
-  it('lets a sub-user scoped to admin:users through to the Members page on deep-link', async () => {
-    registerScope(['admin:users']);
+  it('lets a sub-user scoped to users:r through to the Members page on deep-link', async () => {
+    registerScope(['users:r']);
     renderAt('/members');
 
     // The route guard allows it through — the Members page itself mounts (its
     // h1, distinct from the nav link of the same name).
     expect(await screen.findByRole('heading', { name: 'Members' })).toBeInTheDocument();
+  });
+
+  // F-1 regression lock, route level (the nav-gating describe block above
+  // covers the same fact at the link-visibility level). Before the fix this
+  // registerScope(['admin:users']) fixture minted a token shape the real
+  // authorizer can never issue and the test read as proof RequireScope
+  // worked — it actually only proved that route-gating logic exists, not
+  // that any real credential could satisfy it.
+  it('does NOT let a sub-user scoped to the legacy admin:users through — that grant is unauthorable', async () => {
+    registerScope(['admin:users']);
+    renderAt('/members');
+
+    expect(await screen.findByRole('heading', { name: 'Welcome, Alice' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Members' })).not.toBeInTheDocument();
+  });
+
+  // The profile/role ITEM editors gate on `profiles:r`, a DIFFERENT backend
+  // resource than the context list/detail routes' `app-contexts:r` — both
+  // directions of that mismatch are real bugs (a session with one but not
+  // the other is either wrongly redirected away from a page it could use, or
+  // let through to one whose own data call then 403s).
+  it('redirects a sub-user holding ONLY app-contexts:r away from the profile editor — it needs profiles:r', async () => {
+    registerScope(['app-contexts:r']);
+    renderAt('/access/contexts/engineering/profiles/usr_alice');
+
+    expect(await screen.findByRole('heading', { name: 'Welcome, Alice' })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/loading profiles/i)).not.toBeInTheDocument();
+  });
+
+  it('lets a sub-user holding profiles:r through to the profile editor on deep-link', async () => {
+    registerScope(['profiles:r']);
+    renderAt('/access/contexts/engineering/profiles/usr_alice');
+
+    // The route guard passed the editor through — it starts fetching (its
+    // labeled loading state), rather than redirecting to Welcome. This
+    // doesn't need a mocked API client: the guard's verdict is decided
+    // before any data call happens.
+    expect(await screen.findByLabelText(/loading profiles/i)).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Welcome, Alice' })).not.toBeInTheDocument();
   });
 });

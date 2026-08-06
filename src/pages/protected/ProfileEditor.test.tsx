@@ -19,6 +19,11 @@
 //      → copies role scopes inline; off → preserves roleId.
 //   9. Delete dialog: unconditional submit (no ref refusal), envelope
 //      {contextId, principalId}, navigates back to ?tab=profiles.
+//  10. Identity-override AUTHORING (edit/clone/delete) is a LIVE, per-session
+//      check, not a fixed app fact — registerScope(['*']) in beforeEach
+//      defaults every test to a no-identity session (fields disabled,
+//      Clone/Delete blocked when the target has overrides); tests that need
+//      the opposite register an identity explicitly, per-test.
 // ---------------------------------------------------------------------------
 
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -32,8 +37,11 @@ import {
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { __resetVectrosApiTokenCacheForTest } from '@vectros-ai/react';
+
 import { TestIntlProvider } from '../../test/intl';
 import { pageOf } from '../../test/pageOf';
+import { registerScope } from '../../test/scopeToken';
 import { vectrosApiClient, VectrosError } from '../../api/vectrosApi';
 import type * as VectrosApi from '../../api/vectrosApi';
 import { TestTenantProvider } from '../../test/TestTenantProvider';
@@ -175,11 +183,17 @@ function renderEditor(
 
 beforeEach(() => {
   vi.spyOn(window, 'confirm').mockReturnValue(true);
+  // Default every test to a wildcard-actions, NO-identity session (an owner
+  // shape) — matches the existing tests' assumption that identity-override
+  // authoring is disabled unless a test explicitly registers a session that
+  // holds one. Mirrors MembersPage.test.tsx's own default-scope convention.
+  registerScope(['*']);
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
+  __resetVectrosApiTokenCacheForTest();
 });
 
 describe('ProfileEditor — create mode', () => {
@@ -293,7 +307,14 @@ describe('ProfileEditor — create mode', () => {
     expect((screen.getByRole('combobox', { name: /^role/i }) as HTMLInputElement).value).toContain('eng-member');
   });
 
-  it('Identity overrides expand + submit under identityOverrides', async () => {
+  // Identity-override AUTHORING is disabled app-wide (this app's credential
+  // can't grant a non-empty override — see CAN_AUTHOR_IDENTITY_OVERRIDES).
+  // The namespace/value grammar validation itself (reserved namespaces,
+  // scope-value grammar, etc.) is exhaustively covered at the pure-function
+  // level in lib/identityOverrides.test.ts — with the fields disabled, a user
+  // can no longer reach an invalid value through this UI at all, so the
+  // integration surface here is just: shown, disabled, explained, never sent.
+  it('Identity overrides section is shown but disabled, with an explanation, and never sent on create', async () => {
     const user = userEvent.setup();
     const { client } = renderEditor();
     await screen.findByRole('heading', { level: 1, name: /create access profile/i });
@@ -306,13 +327,14 @@ describe('ProfileEditor — create mode', () => {
     await user.click(tplInput);
     await user.click(await screen.findByRole('option', { name: /analyst/i }));
 
-    // Expand overrides; fill one of the two TextFields.
     await user.click(screen.getByRole('button', { name: /show advanced/i }));
-    await user.type(
-      screen.getByRole('textbox', { name: /org id/i }),
-      'org_field',
-    );
-    // Leave the client field blank — should be omitted from the payload.
+
+    expect(screen.getByRole('textbox', { name: /org id/i })).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: /client id/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /add scope/i })).toBeDisabled();
+    expect(
+      screen.getByText(/identity overrides can't be set from this sign-in/i),
+    ).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /^save$/i }));
     await waitFor(() => {
@@ -321,11 +343,14 @@ describe('ProfileEditor — create mode', () => {
     const call = client.auth.createAccessProfile.mock.calls[0]?.[0] as {
       body: { identityOverrides?: Record<string, unknown> };
     };
-    // The org field is written in the canonical `scope:<ns>` form.
-    expect(call.body.identityOverrides).toEqual({ 'scope:org': 'org_field' });
+    expect(call.body.identityOverrides).toBeUndefined();
   });
 
-  it('authors a custom-namespace scope override; save emits scope:<ns>', async () => {
+  // The positive direction of the SAME gate — proves it's a live, per-session
+  // check, not a fixed app fact: a session whose own credential holds an
+  // identity can author one, and the value it enters IS sent.
+  it('Identity overrides become editable, and ARE sent, when the session holds an identity', async () => {
+    registerScope(['*'], { 'scope:org': 'org_new' });
     const user = userEvent.setup();
     const { client } = renderEditor();
     await screen.findByRole('heading', { level: 1, name: /create access profile/i });
@@ -336,38 +361,21 @@ describe('ProfileEditor — create mode', () => {
     await user.click(await screen.findByRole('option', { name: /analyst/i }));
 
     await user.click(screen.getByRole('button', { name: /show advanced/i }));
-    // Add a custom-namespace override row.
-    await user.click(screen.getByRole('button', { name: /add scope/i }));
-    await user.type(screen.getByRole('textbox', { name: /namespace/i }), 'group');
-    await user.type(screen.getByRole('textbox', { name: /^value$/i }), 'eng-team');
+    const orgInput = screen.getByRole('textbox', { name: /org id/i });
+    await waitFor(() => expect(orgInput).toBeEnabled());
+    expect(
+      screen.queryByText(/identity overrides can't be set from this sign-in/i),
+    ).not.toBeInTheDocument();
 
+    await user.type(orgInput, 'org_new');
     await user.click(screen.getByRole('button', { name: /^save$/i }));
-    await waitFor(() =>
-      expect(client.auth.createAccessProfile).toHaveBeenCalledTimes(1),
-    );
+    await waitFor(() => {
+      expect(client.auth.createAccessProfile).toHaveBeenCalledTimes(1);
+    });
     const call = client.auth.createAccessProfile.mock.calls[0]?.[0] as {
       body: { identityOverrides?: Record<string, unknown> };
     };
-    expect(call.body.identityOverrides).toEqual({ 'scope:group': 'eng-team' });
-  });
-
-  it('blocks save + shows an error for a reserved override namespace', async () => {
-    const user = userEvent.setup();
-    renderEditor();
-    await screen.findByRole('heading', { level: 1, name: /create access profile/i });
-
-    await user.type(screen.getByRole('combobox', { name: /user/i }), 'usr_dana');
-    const tplInput = screen.getByRole('combobox', { name: /^role/i });
-    await user.click(tplInput);
-    await user.click(await screen.findByRole('option', { name: /analyst/i }));
-
-    await user.click(screen.getByRole('button', { name: /show advanced/i }));
-    await user.click(screen.getByRole('button', { name: /add scope/i }));
-    await user.type(screen.getByRole('textbox', { name: /namespace/i }), 'tenant');
-    await user.type(screen.getByRole('textbox', { name: /^value$/i }), 'x');
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(/reserved/i);
-    expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
+    expect(call.body.identityOverrides).toEqual({ 'scope:org': 'org_new' });
   });
 });
 
@@ -424,6 +432,8 @@ describe('ProfileEditor — edit mode', () => {
       name: /org id/i,
     })) as HTMLInputElement;
     expect(orgInput.value).toBe('org_eng');
+    // Legible but not editable — this app's credential can't author it.
+    expect(orgInput).toBeDisabled();
   });
 });
 
@@ -517,13 +527,15 @@ describe('ProfileEditor — identity-override round-trip', () => {
       name: /org id/i,
     })) as HTMLInputElement;
     expect(orgInput.value).toBe('org_canon');
-    // The custom `scope:group` override renders as a namespace/value row.
-    expect(
-      (screen.getByRole('textbox', { name: /namespace/i }) as HTMLInputElement).value,
-    ).toBe('group');
-    expect(
-      (screen.getByRole('textbox', { name: /^value$/i }) as HTMLInputElement).value,
-    ).toBe('eng-team');
+    expect(orgInput).toBeDisabled();
+    // The custom `scope:group` override renders as a namespace/value row —
+    // legible but disabled, same as org/client above.
+    const namespaceInput = screen.getByRole('textbox', { name: /namespace/i });
+    const valueInput = screen.getByRole('textbox', { name: /^value$/i });
+    expect((namespaceInput as HTMLInputElement).value).toBe('group');
+    expect((valueInput as HTMLInputElement).value).toBe('eng-team');
+    expect(namespaceInput).toBeDisabled();
+    expect(valueInput).toBeDisabled();
   });
 
   it('stays clean on load (no spurious dirty) with canonical overrides', async () => {
@@ -537,7 +549,12 @@ describe('ProfileEditor — identity-override round-trip', () => {
     expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
   });
 
-  it('survives edit→save with zero loss — the custom namespace is preserved', async () => {
+  it('a save that only touches an unrelated field never resubmits the untouched overrides', async () => {
+    // The overrides section is disabled, so nothing in it CAN be edited —
+    // this pins the buildBody() half of the fix: without it, saving ANY
+    // other field (role, here) on a profile that already has non-empty
+    // overrides would resend them unchanged and 403 for a reason the user
+    // never touched.
     const user = userEvent.setup();
     const { client } = renderEditor({
       client: makeMockClient({
@@ -548,10 +565,13 @@ describe('ProfileEditor — identity-override round-trip', () => {
       }),
       initialUrl: '/access/contexts/engineering/profiles/usr_alice',
     });
-    // Edit only the org override; the custom scope must ride through untouched.
-    const orgInput = await screen.findByRole('textbox', { name: /org id/i });
-    await user.clear(orgInput);
-    await user.type(orgInput, 'org_next');
+    // PROFILE_CANONICAL_OVERRIDES already holds 'eng-member' — switch to the
+    // OTHER role so this is a genuine, dirtying change.
+    const tplInput = await screen.findByRole('combobox', { name: /^role/i });
+    await user.click(tplInput);
+    await user.clear(tplInput);
+    await user.type(tplInput, 'analyst');
+    await user.click(await screen.findByRole('option', { name: /analyst/i }));
 
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled(),
@@ -562,17 +582,118 @@ describe('ProfileEditor — identity-override round-trip', () => {
       expect(client.auth.updateAccessProfile).toHaveBeenCalledTimes(1),
     );
     const call = client.auth.updateAccessProfile.mock.calls[0]?.[0] as {
-      body: { identityOverrides?: Record<string, unknown> };
+      body: { identityOverrides?: Record<string, unknown>; roleId?: string };
     };
-    expect(call.body.identityOverrides).toEqual({
-      'scope:org': 'org_next',
-      'scope:group': 'eng-team',
+    // The role change goes through...
+    expect(call.body.roleId).toBe('analyst');
+    // ...but the already-non-empty, untouched overrides are never resent.
+    expect(call.body.identityOverrides).toBeUndefined();
+  });
+
+  it('...and the SAME holds even when the session COULD edit the overrides — being able to isn\'t the same as doing it', async () => {
+    registerScope(['*'], { 'scope:org': 'org_eng' }); // matches PROFILE_ALICE_ROLED exactly
+    const user = userEvent.setup();
+    const { client } = renderEditor({
+      initialUrl: '/access/contexts/engineering/profiles/usr_alice',
     });
+    const tplInput = await screen.findByRole('combobox', { name: /^role/i });
+    await waitFor(() =>
+      expect(screen.getByRole('textbox', { name: /org id/i })).toBeEnabled(),
+    );
+    await user.click(tplInput);
+    await user.clear(tplInput);
+    await user.type(tplInput, 'analyst');
+    await user.click(await screen.findByRole('option', { name: /analyst/i }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled(),
+    );
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(client.auth.updateAccessProfile).toHaveBeenCalledTimes(1),
+    );
+    const call = client.auth.updateAccessProfile.mock.calls[0]?.[0] as {
+      body: { identityOverrides?: Record<string, unknown>; roleId?: string };
+    };
+    expect(call.body.roleId).toBe('analyst');
+    expect(call.body.identityOverrides).toBeUndefined();
+  });
+});
+
+// A stored value that breaks the client-side scope-VALUE grammar (a colon) —
+// the grammar itself is exhaustively covered at the pure-function level in
+// lib/identityOverrides.test.ts; these two pin the WIRING from that error
+// into `canSubmit`, in both directions: it must not permanently block Save
+// when the session can't fix it, but must still block when it genuinely
+// could.
+const PROFILE_INVALID_OVERRIDE = {
+  contextId: 'engineering',
+  principalId: 'usr_alice',
+  roleId: 'eng-member',
+  identityOverrides: { 'scope:org': 'a:b' } as Record<string, unknown>,
+};
+
+describe('ProfileEditor — a stale invalid stored override never permanently blocks Save', () => {
+  it('does NOT block saving an unrelated field when this session cannot fix the override (fields disabled)', async () => {
+    registerScope(['*']); // no identity — matches the disabled-fields case
+    const user = userEvent.setup();
+    renderEditor({
+      client: makeMockClient({
+        getAccessProfile: vi.fn().mockResolvedValue(PROFILE_INVALID_OVERRIDE),
+        updateAccessProfile: vi.fn().mockResolvedValue(PROFILE_INVALID_OVERRIDE),
+      }),
+      initialUrl: '/access/contexts/engineering/profiles/usr_alice',
+    });
+    // The inline error still renders — informational, not silently dropped.
+    expect(await screen.findByText(/1.{0,3}128 characters/i)).toBeInTheDocument();
+
+    const tplInput = screen.getByRole('combobox', { name: /^role/i });
+    await user.click(tplInput);
+    await user.clear(tplInput);
+    await user.type(tplInput, 'analyst');
+    await user.click(await screen.findByRole('option', { name: /analyst/i }));
+
+    // Save enables despite the pre-existing override error — this session
+    // has no way to fix it, so it must not block an unrelated edit.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled(),
+    );
+  });
+
+  it('DOES still block Save when this session holds an identity and genuinely could fix it', async () => {
+    registerScope(['*'], { 'scope:org': 'a:b' }); // holds exactly the broken value
+    const user = userEvent.setup();
+    renderEditor({
+      client: makeMockClient({
+        getAccessProfile: vi.fn().mockResolvedValue(PROFILE_INVALID_OVERRIDE),
+      }),
+      initialUrl: '/access/contexts/engineering/profiles/usr_alice',
+    });
+    expect(await screen.findByText(/1.{0,3}128 characters/i)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole('textbox', { name: /org id/i })).toBeEnabled(),
+    );
+
+    const tplInput = screen.getByRole('combobox', { name: /^role/i });
+    await user.click(tplInput);
+    await user.clear(tplInput);
+    await user.type(tplInput, 'analyst');
+    await user.click(await screen.findByRole('option', { name: /analyst/i }));
+
+    // Stays disabled — this session COULD fix the override and hasn't.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled(),
+    );
   });
 });
 
 describe('ProfileEditor — clone dialog', () => {
-  it('Materialize OFF (default) keeps roleId reference', async () => {
+  it('Materialize OFF (default) keeps roleId reference; identity overrides are NOT copied, and the dialog warns', async () => {
+    // Source (usr_alice / PROFILE_ALICE_ROLED) has a non-empty scope:org
+    // override — this app's credential can't author one, so carrying it
+    // into the clone would just fail the whole create. The dialog warns and
+    // drops it; everything else still clones.
     const user = userEvent.setup();
     const { client } = renderEditor({
       initialUrl: '/access/contexts/engineering/profiles/usr_alice',
@@ -583,6 +704,10 @@ describe('ProfileEditor — clone dialog', () => {
     await waitFor(() => expect(cloneOpenBtn).toBeEnabled());
     await user.click(cloneOpenBtn);
     const dialog = await screen.findByRole('dialog', { name: /clone access profile/i });
+
+    expect(
+      within(dialog).getByText(/won't be copied to the clone/i),
+    ).toBeInTheDocument();
 
     await user.type(
       within(dialog).getByRole('textbox', { name: /new principal id/i }),
@@ -600,8 +725,71 @@ describe('ProfileEditor — clone dialog', () => {
     expect(call.body.principalId).toBe('usr_eve');
     expect(call.body.roleId).toBe('eng-member');
     expect(call.body.scopes).toBeUndefined();
-    // identityOverrides copied verbatim from source.
+    expect(call.body.identityOverrides).toBeUndefined();
+  });
+
+  it('copies identity overrides to the clone, without warning, when the session holds a matching identity', async () => {
+    registerScope(['*'], { 'scope:org': 'org_eng' }); // matches PROFILE_ALICE_ROLED exactly
+    const user = userEvent.setup();
+    const { client } = renderEditor({
+      initialUrl: '/access/contexts/engineering/profiles/usr_alice',
+    });
+    await screen.findByRole('heading', { level: 1, name: /edit profile for usr_alice/i });
+    const cloneOpenBtn = screen.getByRole('button', { name: /^clone$/i });
+    await waitFor(() => expect(cloneOpenBtn).toBeEnabled());
+    await user.click(cloneOpenBtn);
+    const dialog = await screen.findByRole('dialog', { name: /clone access profile/i });
+
+    expect(
+      within(dialog).queryByText(/won't be copied to the clone/i),
+    ).not.toBeInTheDocument();
+
+    await user.type(
+      within(dialog).getByRole('textbox', { name: /new principal id/i }),
+      'usr_eve',
+    );
+    await user.click(within(dialog).getByRole('button', { name: /^clone$/i }));
+
+    await waitFor(() => {
+      expect(client.auth.createAccessProfile).toHaveBeenCalledTimes(1);
+    });
+    const call = client.auth.createAccessProfile.mock.calls[0]?.[0] as {
+      body: { identityOverrides?: Record<string, unknown> };
+    };
     expect(call.body.identityOverrides).toEqual({ 'scope:org': 'org_eng' });
+  });
+
+  it('does not warn, and clones normally, when the source has no identity overrides', async () => {
+    const user = userEvent.setup();
+    const { client } = renderEditor({
+      client: makeMockClient({
+        getAccessProfile: vi.fn().mockResolvedValue(PROFILE_KEYBOT_INLINE),
+      }),
+      initialUrl: '/access/contexts/engineering/profiles/key_bot',
+    });
+    await screen.findByRole('heading', { level: 1, name: /edit profile for key_bot/i });
+    const cloneOpenBtn = screen.getByRole('button', { name: /^clone$/i });
+    await waitFor(() => expect(cloneOpenBtn).toBeEnabled());
+    await user.click(cloneOpenBtn);
+    const dialog = await screen.findByRole('dialog', { name: /clone access profile/i });
+
+    expect(
+      within(dialog).queryByText(/won't be copied to the clone/i),
+    ).not.toBeInTheDocument();
+
+    await user.type(
+      within(dialog).getByRole('textbox', { name: /new principal id/i }),
+      'key_bot2',
+    );
+    await user.click(within(dialog).getByRole('button', { name: /^clone$/i }));
+
+    await waitFor(() => {
+      expect(client.auth.createAccessProfile).toHaveBeenCalledTimes(1);
+    });
+    const call = client.auth.createAccessProfile.mock.calls[0]?.[0] as {
+      body: Record<string, unknown>;
+    };
+    expect(call.body.identityOverrides).toBeUndefined();
   });
 
   it('Materialize ON copies role scopes inline; roleId omitted', async () => {
@@ -642,10 +830,21 @@ describe('ProfileEditor — clone dialog', () => {
   });
 });
 
+// Alice, without the identityOverrides the default fixture carries — used by
+// the delete tests below that need the unconditional (no-overrides) path.
+const PROFILE_ALICE_NO_OVERRIDES = {
+  contextId: 'engineering',
+  principalId: 'usr_alice',
+  roleId: 'eng-member',
+};
+
 describe('ProfileEditor — delete dialog', () => {
   it('Submits envelope unconditionally and navigates to ?tab=profiles', async () => {
     const user = userEvent.setup();
     const { client } = renderEditor({
+      client: makeMockClient({
+        getAccessProfile: vi.fn().mockResolvedValue(PROFILE_ALICE_NO_OVERRIDES),
+      }),
       initialUrl: '/access/contexts/engineering/profiles/usr_alice',
     });
     await screen.findByRole('heading', { level: 1, name: /edit profile for usr_alice/i });
@@ -671,6 +870,55 @@ describe('ProfileEditor — delete dialog', () => {
     });
   });
 
+  it('disables Delete, with an explanation, when the session identity does not match the profile\'s overrides', async () => {
+    // The default fixture (PROFILE_ALICE_ROLED) has a non-empty scope:org
+    // override; the default session (registerScope(['*']) in beforeEach, no
+    // identity) holds nothing that matches it — removing it would displace
+    // an identity value this session can't prove it holds.
+    const user = userEvent.setup();
+    renderEditor({
+      initialUrl: '/access/contexts/engineering/profiles/usr_alice',
+    });
+    await screen.findByRole('heading', { level: 1, name: /edit profile for usr_alice/i });
+    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /delete access profile/i });
+
+    expect(
+      within(dialog).getByText(/this sign-in doesn't hold/i),
+    ).toBeInTheDocument();
+    // Disabled — a real click can't even land on it (pointer-events: none),
+    // which is the guard itself; nothing more to prove by attempting one. (A
+    // trailing `deleteAccessProfile).not.toHaveBeenCalled()` here would be
+    // vacuous — true regardless of this guard, since the mutation is never
+    // invoked without a click reaching the button.)
+    expect(within(dialog).getByRole('button', { name: /delete profile/i })).toBeDisabled();
+  });
+
+  it('allows Delete when the session holds an identity matching the profile\'s overrides — the false-deny fix', async () => {
+    // Same PROFILE_ALICE_ROLED (scope:org: org_eng); this session holds
+    // EXACTLY that value — the platform's displacement rule is satisfied, so
+    // this delete is really authorized, not merely appearing to be.
+    registerScope(['*'], { 'scope:org': 'org_eng' });
+    const user = userEvent.setup();
+    const { client } = renderEditor({
+      initialUrl: '/access/contexts/engineering/profiles/usr_alice',
+    });
+    await screen.findByRole('heading', { level: 1, name: /edit profile for usr_alice/i });
+    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /delete access profile/i });
+
+    const confirmBtn = within(dialog).getByRole('button', { name: /delete profile/i });
+    await waitFor(() => expect(confirmBtn).toBeEnabled());
+    await user.click(confirmBtn);
+
+    await waitFor(() => {
+      expect(client.auth.deleteAccessProfile).toHaveBeenCalledWith({
+        contextId: 'engineering',
+        principalId: 'usr_alice',
+      });
+    });
+  });
+
   it('Delete keeps the dialog OPEN and announces the error (role=alert + requestId) on failure', async () => {
     const user = userEvent.setup();
     const err = new VectrosError({
@@ -680,6 +928,7 @@ describe('ProfileEditor — delete dialog', () => {
     });
     const { client } = renderEditor({
       client: makeMockClient({
+        getAccessProfile: vi.fn().mockResolvedValue(PROFILE_ALICE_NO_OVERRIDES),
         deleteAccessProfile: vi.fn().mockRejectedValue(err),
       }),
       initialUrl: '/access/contexts/engineering/profiles/usr_alice',

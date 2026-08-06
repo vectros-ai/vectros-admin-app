@@ -24,6 +24,15 @@ import {
 } from './scopeNamespace';
 import type { ScopeNamespaceError } from './scopeNamespace';
 
+/**
+ * Sentinel dimension key for the `"*"` dimension wildcard (0.38.0):
+ * `{"*": ["${{ any }}", null]}` states a rule for every dimension the clause
+ * doesn't name explicitly; a named dimension always takes precedence. This is a
+ * BARE wire key — not `scope:*` — so it needs its own parse/serialize path
+ * rather than going through {@link namespaceFromScopeKey}/{@link scopeKey}.
+ */
+export const DIMENSION_WILDCARD = '*';
+
 /** One authored `scope:<namespace>` dimension of a data-scope filter. */
 export interface DataScopeDimension {
   readonly namespace: string;
@@ -59,7 +68,7 @@ export function parseDataScope(
   const passthrough: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(src)) {
-    const ns = namespaceFromScopeKey(key);
+    const ns = key === DIMENSION_WILDCARD ? DIMENSION_WILDCARD : namespaceFromScopeKey(key);
     if (ns !== null && Array.isArray(value)) {
       const values = value
         .filter((v) => v != null)
@@ -95,7 +104,7 @@ export function serializeDataScope(
   for (const dim of model.dimensions) {
     const ns = dim.namespace.trim();
     if (!ns) continue;
-    const key = scopeKey(ns);
+    const key = ns === DIMENSION_WILDCARD ? DIMENSION_WILDCARD : scopeKey(ns);
     const values = dim.values.map((v) => v.trim()).filter((v) => v !== '');
     const existing = merged.get(key);
     if (existing) {
@@ -165,6 +174,8 @@ export type DataScopeValidationError =
  * opt-in); namespaces must be unique; at most {@link MAX_SCOPE_NAMESPACES}
  * dimensions may be declared. Built-in namespaces (org / client) are valid here
  * — unlike identity overrides there are no dedicated fields to defer to.
+ * {@link DIMENSION_WILDCARD} (`*`) is also valid here and skips the normal
+ * `scope:<ns>` grammar — it's a dimension KEY, not a namespace.
  */
 export function validateDataScope(
   model: DataScopeModel,
@@ -174,7 +185,7 @@ export function validateDataScope(
     const dim = model.dimensions[i];
     if (!dim || !isActiveDimension(dim)) continue;
     const ns = dim.namespace.trim();
-    const nsError = validateScopeNamespace(ns);
+    const nsError = ns === DIMENSION_WILDCARD ? null : validateScopeNamespace(ns);
     if (nsError) return { code: 'namespace', index: i, error: nsError };
     const hasValue =
       dim.values.some((v) => v.trim() !== '') || dim.includeNull;

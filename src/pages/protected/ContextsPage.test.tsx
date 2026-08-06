@@ -490,6 +490,28 @@ describe('ContextsPage', () => {
     return screen.findByRole('dialog', { name: /delete app context engineering/i });
   }
 
+  it('Delete dialog: omits the blast-radius counts when a count FAILED to load', async () => {
+    // Safety, not cosmetics. The sentence states what a destroy will take with
+    // it. An unavailable count must not be presented as a real one — reading a
+    // failed count as absent would let the dialog imply the context is empty
+    // while the operator types the confirmation.
+    const user = userEvent.setup();
+    renderPage({ listRoles: vi.fn().mockRejectedValue(new Error('boom')) });
+    const dialog = await openDeleteDialog(user);
+
+    expect(within(dialog).queryByText(/right now it contains/i)).not.toBeInTheDocument();
+  });
+
+  it('Delete dialog: states the counts when both loaded', async () => {
+    // Positive control — otherwise the case above passes on a sentence that
+    // never renders at all.
+    const user = userEvent.setup();
+    renderPage();
+    const dialog = await openDeleteDialog(user);
+
+    expect(await within(dialog).findByText(/right now it contains/i)).toBeInTheDocument();
+  });
+
   it('Delete dialog: CTA stays disabled until the contextId is typed exactly', async () => {
     const user = userEvent.setup();
     const { developerApi } = renderPage();
@@ -585,5 +607,23 @@ describe('ContextsPage', () => {
     expect(screen.getByTestId('probe-pathname')).toHaveTextContent(
       '/access/contexts/engineering',
     );
+  });
+
+  it('shows a failed per-row count as an error, not a permanent "loading"', async () => {
+    // The count queries fall back to `data === undefined` on failure, which
+    // used to render the LOADING placeholder — so an error read as "still
+    // loading", forever. The drain refusing a partial count made that
+    // reachable one more way.
+    renderPage({
+      listRoles: vi.fn().mockRejectedValue(new Error('boom')),
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getAllByLabelText(/count unavailable/i).length,
+      ).toBeGreaterThan(0),
+    );
+    // And it must NOT still be claiming to load.
+    expect(screen.queryAllByLabelText(/loading count/i)).toHaveLength(0);
   });
 });

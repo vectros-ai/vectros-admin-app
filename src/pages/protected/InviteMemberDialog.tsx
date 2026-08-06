@@ -3,7 +3,7 @@
 //
 // **UX decisions:**
 //   - Email + Role dropdown upfront. Roles are loaded from
-//     `client.auth.listRoles({ contextId: 'vectros-admin' })`.
+//     `client.auth.listRoles({ contextId: 'default' })`.
 //     Custom inline scopes are handled by the access-profile UI.
 //   - "Advanced options" collapses the 4 partner-customizable knobs:
 //     firstName / lastName / ttlDays / sendEmail / fromName / acceptUrl.
@@ -18,6 +18,13 @@
 // this is open isn't a supported flow, but the SDK client used here is
 // re-resolved per render so a change just routes the next request to the
 // new tenant's VectrosClient.
+//
+// **Context binding.** Both calls name `INVITE_CONTEXT_ID` and both run on a
+// client whose bearer is pinned to that same context (by omitting the
+// factory's `contextId` — an omitted context mints against `default`).
+// Naming a context the bearer isn't pinned to fails closed with a 403, so
+// the two sides must move together. Pinned by the context-binding test in
+// `InviteMemberDialog.test.tsx`.
 // ---------------------------------------------------------------------------
 
 import { useEffect, useId, useState } from 'react';
@@ -50,7 +57,8 @@ import { FormattedMessage, useIntl } from 'react-intl';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { SubmitButton } from '@vectros-ai/react';
 
-import { useActiveTenantId } from '../../auth';
+import { useActiveTenantId, useCurrentTenant } from '../../auth';
+import { RESERVED_DEFAULT_CONTEXT_ID } from '../../lib/reservedContexts';
 import { BRAND } from '../../brand';
 import { VectrosError, vectrosApiClient } from '../../api/vectrosApi';
 import type {
@@ -61,8 +69,18 @@ import type {
 import { ApiErrorAlert } from '../../components/ApiErrorAlert';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
 
-/** AppContext admin-app's members are bound to. Auto-seeded. */
-const ADMIN_CONTEXT_ID = 'vectros-admin';
+/**
+ * AppContext an invited member is bound to — the base `default` context, which
+ * is where the invitee's AccessProfile has to live for their own token mint to
+ * resolve it.
+ *
+ * Seeded at tenant provisioning, but note the limit of that: seeding of this
+ * context was added on 2026-06-02 and nothing backfills, so a tenant
+ * provisioned before then does not have it. The invite then fails with a clean
+ * 404 naming the missing context — loud, and not something this dialog can
+ * repair — rather than landing somewhere wrong.
+ */
+const INVITE_CONTEXT_ID = RESERVED_DEFAULT_CONTEXT_ID;
 
 /** Backend default per the SDK comment. */
 const DEFAULT_TTL_DAYS = 7;
@@ -88,7 +106,17 @@ export function InviteMemberDialog({
 }: InviteMemberDialogProps): React.JSX.Element {
   const intl = useIntl();
   const tenant = useActiveTenantId();
+  const { activeMembership } = useCurrentTenant();
   const formId = useId();
+
+  // An invite is written to the account's LIVE tenant whichever tenant is
+  // active here, while the roles offered below come from the active one — so
+  // on a test tenant the role picked does not exist where the invite lands.
+  // MembersPage already withholds the button that opens this dialog; the guard
+  // is repeated here because the dialog is exported and a fork can mount it
+  // itself, and because a silent tenant mismatch produces a member who can
+  // never sign in.
+  const isLiveTenant = activeMembership?.tenantKind === 'live';
 
   // Form state (UI-local — stays as useState).
   const [email, setEmail] = useState('');
@@ -117,13 +145,13 @@ export function InviteMemberDialog({
   // the dialog is actually opened, mirroring the prior useEffect's open-gate.
   // Switching tenants mid-flight changes the queryKey → automatic refetch.
   const rolesQuery = useQuery({
-    queryKey: ['roles', tenant, ADMIN_CONTEXT_ID],
+    queryKey: ['roles', tenant, INVITE_CONTEXT_ID],
     queryFn: () =>
       drainPages<RoleResponse>((startFrom) =>
         vectrosApiClient(tenant).auth.listRoles(
           startFrom === undefined
-            ? { contextId: ADMIN_CONTEXT_ID, limit: AUTH_PAGE_SIZE }
-            : { contextId: ADMIN_CONTEXT_ID, startFrom, limit: AUTH_PAGE_SIZE },
+            ? { contextId: INVITE_CONTEXT_ID, limit: AUTH_PAGE_SIZE }
+            : { contextId: INVITE_CONTEXT_ID, startFrom, limit: AUTH_PAGE_SIZE },
         ),
       ),
     enabled: open,
@@ -184,6 +212,7 @@ export function InviteMemberDialog({
 
   const emailValid = email === '' || isEmailLike(email);
   const canSubmit =
+    isLiveTenant &&
     !submitting &&
     email.trim() !== '' &&
     emailValid &&
@@ -199,7 +228,7 @@ export function InviteMemberDialog({
 
     const body: CreateInviteRequest = {
       email: email.trim().toLowerCase(),
-      contextId: ADMIN_CONTEXT_ID,
+      contextId: INVITE_CONTEXT_ID,
       accessProfile: { roleId },
       ttlSeconds: ttlDays * 86400,
       sendEmail,
@@ -231,6 +260,12 @@ export function InviteMemberDialog({
             <Typography variant="body2" color="text.secondary">
               <FormattedMessage id="invite.subtitle" />
             </Typography>
+
+            {!isLiveTenant && (
+              <Alert severity="info" role="status">
+                <FormattedMessage id="invite.liveTenantOnly" />
+              </Alert>
+            )}
 
             {/* Success rendering — sendEmail path shows a simple message;
                 manual-send path surfaces the token + accept link (each with
