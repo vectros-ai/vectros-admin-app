@@ -3,6 +3,13 @@
 All notable changes to the Vectros Admin App are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.15.0 — 2026-08-12
+
+### Changed
+
+- **Repinned to SDK 0.39.0.** No API surface this app uses changed shape; see the
+  [SDK changelog](https://github.com/vectros-ai/sdk/blob/main/CHANGELOG.md) for the full release.
+
 ## 0.14.0 — 2026-08-05
 
 ### Changed
