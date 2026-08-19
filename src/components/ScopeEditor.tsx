@@ -85,6 +85,17 @@ export interface ScopeClause {
    * key/value picker without a breaking shape change.
    */
   readonly data_scope: Record<string, unknown>;
+
+  /**
+   * Named platform capabilities this clause grants (0.40.0) — bounded effects
+   * that reach across a partition boundary, which `allowed_actions` cannot
+   * express (see {@link KNOWN_CAPABILITIES}). Absent/empty grants none. Kept
+   * on the model (not dropped) even when empty, so a clause round-trips
+   * byte-for-byte through load → save when untouched — a role or profile
+   * carrying a capability grant must never lose it just because it was
+   * opened in this editor.
+   */
+  readonly granted_capabilities?: readonly string[];
 }
 
 /**
@@ -172,6 +183,42 @@ export const CRUD_OPS = [
   { letter: 'r', labelId: 'scopeEditor.opRead' },
   { letter: 'u', labelId: 'scopeEditor.opUpdate' },
   { letter: 'd', labelId: 'scopeEditor.opDelete' },
+] as const;
+
+/**
+ * The `granted_capabilities` names THIS EDITOR offers to author — a subset of
+ * the platform's full four-name closed list (see `ScopeClause.granted_capabilities`),
+ * deliberately narrowed to the ones admin-app's own browser bearer can ever
+ * back.
+ *
+ * The platform enforces a subset-of-caller rule on every scope-authoring
+ * write: a clause may name a capability only if the calling credential's own
+ * scope names it too. The browser session this app mints carries
+ * `member-lifecycle` and `delegate-mint` — and that pairing is deliberate,
+ * not an oversight to widen: cross-context and tenant-wide administrative
+ * authority is served by dedicated server-side endpoints rather than by a
+ * browser bearer, so no session of this app — OWNER or sub-user — can ever
+ * back `forensic-read` or `context-directory-read`. Offering either as a
+ * checkbox would ship a control that always fails, regardless of who
+ * clicks it.
+ *
+ * `delegate-mint` is the second of the two, and it earned its spot for a
+ * different reason: this app's browser session could already produce that
+ * effect before capability-gating existed (minting a key bound to a
+ * co-member required only the ordinary key-management permission), so it's
+ * the architecturally-correct capability for this UI to offer. It is granted
+ * to this session by default, the same way `member-lifecycle` is — not a
+ * forward-looking placeholder.
+ *
+ * An unrecognized name denies the WHOLE clause server-side rather than being
+ * ignored, so this editor never offers one outside this list — toggling only
+ * ever adds/removes an exact known name, which is what keeps a name outside
+ * THIS list (e.g. `forensic-read` on a role granted some other way, or a
+ * future-release name) untouched on save.
+ */
+export const KNOWN_CAPABILITIES = [
+  { value: 'member-lifecycle', labelId: 'scopeEditor.capability.memberLifecycle' },
+  { value: 'delegate-mint', labelId: 'scopeEditor.capability.delegateMint' },
 ] as const;
 
 const CRUD_ORDER = 'crud';
@@ -266,7 +313,7 @@ export function serializeClauseActions(model: ClauseActionModel): string[] {
  * all rows within the tenant per the access-profile matching rule).
  */
 export function emptyClause(): ScopeClause {
-  return { allowed_actions: [], data_scope: {} };
+  return { allowed_actions: [], data_scope: {}, granted_capabilities: [] };
 }
 
 /**
@@ -282,6 +329,7 @@ export function normalizeScopes(
     | readonly {
         readonly allowed_actions?: readonly string[];
         readonly data_scope?: unknown;
+        readonly granted_capabilities?: readonly string[] | undefined;
       }[]
     | null
     | undefined,
@@ -292,6 +340,10 @@ export function normalizeScopes(
   return scopes.map((s) => ({
     allowed_actions: [...(s.allowed_actions ?? [])],
     data_scope: (s.data_scope ?? {}) as Record<string, unknown>,
+    // Carried through untouched — see ScopeClause.granted_capabilities. A
+    // clause with none loaded gets [], matching emptyClause()'s default so
+    // load/save comparisons (dirty-state) aren't fooled by undefined-vs-[].
+    granted_capabilities: [...(s.granted_capabilities ?? [])],
   }));
 }
 
@@ -426,6 +478,12 @@ export const ScopeEditor = memo(function ScopeEditor({
     onChange(clauses.map((c, i) => (i === idx ? { ...c, data_scope: dataScope } : c)));
   };
 
+  const setClauseCapabilities = (idx: number, capabilities: readonly string[]): void => {
+    onChange(
+      clauses.map((c, i) => (i === idx ? { ...c, granted_capabilities: capabilities } : c)),
+    );
+  };
+
   const addClause = (): void => {
     onChange([...clauses, emptyClause()]);
   };
@@ -462,6 +520,7 @@ export const ScopeEditor = memo(function ScopeEditor({
           showRemove={clauses.length > 1}
           onChangeActions={(actions) => setClauseActions(idx, actions)}
           onChangeDataScope={(ds) => setClauseDataScope(idx, ds)}
+          onChangeCapabilities={(caps) => setClauseCapabilities(idx, caps)}
           onRemove={() => removeClause(idx)}
         />
       ))}
@@ -509,6 +568,7 @@ function ClauseCard({
   showRemove,
   onChangeActions,
   onChangeDataScope,
+  onChangeCapabilities,
   onRemove,
 }: {
   index: number;
@@ -517,6 +577,7 @@ function ClauseCard({
   showRemove: boolean;
   onChangeActions: (actions: string[]) => void;
   onChangeDataScope: (dataScope: Record<string, unknown>) => void;
+  onChangeCapabilities: (capabilities: readonly string[]) => void;
   onRemove: () => void;
 }): React.JSX.Element {
   const intl = useIntl();
@@ -663,7 +724,100 @@ function ClauseCard({
         disabled={disabled}
         onChange={onChangeDataScope}
       />
+
+      <CapabilitiesSection
+        capabilities={clause.granted_capabilities ?? []}
+        disabled={disabled}
+        onChange={onChangeCapabilities}
+      />
     </Paper>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// CapabilitiesSection — per-clause `granted_capabilities` authoring. The list
+// is closed (see KNOWN_CAPABILITIES): this section only ever toggles one of
+// the four known names on or off, so any OTHER entry a loaded clause already
+// carries (a future-release name this build doesn't know about) rides through
+// untouched — toggling never rewrites the array wholesale.
+// ---------------------------------------------------------------------------
+
+const KNOWN_CAPABILITY_VALUES: readonly string[] = KNOWN_CAPABILITIES.map((c) => c.value);
+
+/**
+ * Canonical order for a capabilities array: known names in catalog order,
+ * then anything this editor doesn't offer (an unrecognized/future name, or
+ * one this editor deliberately excludes — see {@link KNOWN_CAPABILITIES}),
+ * in their original relative order. Mirrors `serializeClauseActions`'s
+ * catalog-then-advanced ordering for `allowed_actions`, for the same reason:
+ * without it, an uncheck-then-recheck round-trip can reorder the array
+ * (toggling always appends at the end) and read as a spurious edit against
+ * `JSON.stringify`-based dirty-state comparisons even though nothing
+ * actually changed.
+ */
+function canonicalizeCapabilities(capabilities: readonly string[]): string[] {
+  const known = KNOWN_CAPABILITY_VALUES.filter((v) => capabilities.includes(v));
+  const rest = capabilities.filter((v) => !KNOWN_CAPABILITY_VALUES.includes(v));
+  return [...known, ...rest];
+}
+
+function CapabilitiesSection({
+  capabilities,
+  disabled,
+  onChange,
+}: {
+  capabilities: readonly string[];
+  disabled: boolean;
+  onChange: (capabilities: readonly string[]) => void;
+}): React.JSX.Element {
+  const toggle = (name: string): void => {
+    onChange(
+      canonicalizeCapabilities(
+        capabilities.includes(name)
+          ? capabilities.filter((c) => c !== name)
+          : [...capabilities, name],
+      ),
+    );
+  };
+
+  return (
+    <Accordion
+      disableGutters
+      elevation={0}
+      defaultExpanded={capabilities.length > 0}
+      sx={{ mt: 1.5, '&:before': { display: 'none' }, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}
+    >
+      <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+        <Typography variant="caption" sx={{ fontWeight: 600 }}>
+          <FormattedMessage id="scopeEditor.capabilitiesTitle" />
+        </Typography>
+      </AccordionSummary>
+      <AccordionDetails>
+        <Typography variant="caption" color="text.secondary" component="p" sx={{ mb: 1.5 }}>
+          <FormattedMessage id="scopeEditor.capabilitiesHelp" />
+        </Typography>
+        <Stack spacing={0.5}>
+          {KNOWN_CAPABILITIES.map((cap) => (
+            <FormControlLabel
+              key={cap.value}
+              control={
+                <Checkbox
+                  size="small"
+                  checked={capabilities.includes(cap.value)}
+                  disabled={disabled}
+                  onChange={() => toggle(cap.value)}
+                />
+              }
+              label={
+                <Typography variant="body2">
+                  <FormattedMessage id={cap.labelId} />
+                </Typography>
+              }
+            />
+          ))}
+        </Stack>
+      </AccordionDetails>
+    </Accordion>
   );
 }
 

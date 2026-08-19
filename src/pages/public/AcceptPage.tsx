@@ -15,9 +15,13 @@
 //   5. A server-side PostConfirmation hook fires on email-confirmation,
 //      cryptographically verifies the token, and activates the membership.
 //
-// The page is auth-provider-agnostic — it consumes useAuth() + the
-// normalized SignUpResult union. Cognito today, Auth0 tomorrow: this file
-// doesn't change.
+// The page consumes useAuth()'s embedded-credential methods (signUp, the
+// normalized SignUpResult union) + useCurrentTenant()'s linkInvitation
+// pass-through. This flow is Cognito/embedded-specific by construction — a
+// hosted-redirect (Auth0 Universal Login) provider wouldn't use this page at
+// all: invite acceptance there passes `invite_token` directly on the
+// `/v1/auth/token/exchange` call instead (TOKEN-EXCHANGE-CONTRACT.md §6), no
+// signup form needed. admin-app is always Cognito, so this page stays as-is.
 // ---------------------------------------------------------------------------
 
 import { useEffect, useState } from 'react';
@@ -28,7 +32,7 @@ import { Alert, Button, Link, Stack, TextField, Typography } from '@mui/material
 import { FormattedMessage, useIntl } from 'react-intl';
 import type { IntlShape } from 'react-intl';
 
-import { useAuth, authErrorToMessage } from '../../auth';
+import { useAuth, useCurrentTenant, authErrorToMessage } from '../../auth';
 import type { SignUpResult } from '../../auth';
 import { AuthCard } from '@vectros-ai/react';
 import { LoadingBlock } from '@vectros-ai/react';
@@ -90,7 +94,8 @@ function AutoLinkCard({
   readonly claims: InviteTokenClaims;
 }): React.JSX.Element {
   const intl = useIntl();
-  const { user, linkInvitation } = useAuth();
+  const { user } = useAuth();
+  const { linkInvitation } = useCurrentTenant();
   const [status, setStatus] = useState<'idle' | 'linking' | 'done'>('idle');
   const [error, setError] = useState<string | null>(null);
 

@@ -39,7 +39,11 @@ import type { ScopeClause } from './ScopeEditor';
 
 describe('emptyClause()', () => {
   it('returns a fresh empty clause shape', () => {
-    expect(emptyClause()).toEqual({ allowed_actions: [], data_scope: {} });
+    expect(emptyClause()).toEqual({
+      allowed_actions: [],
+      data_scope: {},
+      granted_capabilities: [],
+    });
   });
 
   it('returns a fresh instance each call (no shared references)', () => {
@@ -48,6 +52,7 @@ describe('emptyClause()', () => {
     expect(a).not.toBe(b);
     expect(a.allowed_actions).not.toBe(b.allowed_actions);
     expect(a.data_scope).not.toBe(b.data_scope);
+    expect(a.granted_capabilities).not.toBe(b.granted_capabilities);
   });
 });
 
@@ -66,30 +71,55 @@ describe('normalizeScopes()', () => {
   it('carries data_scope through (the dropped key that caused the bug)', () => {
     const scope = { allowed_actions: ['read'], data_scope: { 'scope:org': ['org_1'] } };
     expect(normalizeScopes([scope])).toEqual([
-      { allowed_actions: ['read'], data_scope: { 'scope:org': ['org_1'] } },
+      { allowed_actions: ['read'], data_scope: { 'scope:org': ['org_1'] }, granted_capabilities: [] },
     ]);
   });
 
-  it('defaults missing allowed_actions / data_scope per clause', () => {
+  it('carries granted_capabilities through untouched (0.40.0 — the same class of bug: a role/profile carrying a capability grant must not lose it on load/save)', () => {
+    const scope = {
+      allowed_actions: ['users:crud'],
+      data_scope: {},
+      granted_capabilities: ['member-lifecycle', 'delegate-mint'],
+    };
+    expect(normalizeScopes([scope])).toEqual([
+      {
+        allowed_actions: ['users:crud'],
+        data_scope: {},
+        granted_capabilities: ['member-lifecycle', 'delegate-mint'],
+      },
+    ]);
+  });
+
+  it('defaults missing allowed_actions / data_scope / granted_capabilities per clause', () => {
     expect(normalizeScopes([{ allowed_actions: ['read'] }])).toEqual([
-      { allowed_actions: ['read'], data_scope: {} },
+      { allowed_actions: ['read'], data_scope: {}, granted_capabilities: [] },
     ]);
     expect(normalizeScopes([{ data_scope: { a: 1 } }])).toEqual([
-      { allowed_actions: [], data_scope: { a: 1 } },
+      { allowed_actions: [], data_scope: { a: 1 }, granted_capabilities: [] },
     ]);
   });
 
   it('copies into fresh inner arrays (no aliasing of the source)', () => {
-    const src = [{ allowed_actions: ['read'], data_scope: {} }];
+    const src = [
+      { allowed_actions: ['read'], data_scope: {}, granted_capabilities: ['forensic-read'] },
+    ];
     const out = normalizeScopes(src);
     expect(out[0]?.allowed_actions).not.toBe(src[0]?.allowed_actions);
     expect(out[0]?.allowed_actions).toEqual(['read']);
+    expect(out[0]?.granted_capabilities).not.toBe(src[0]?.granted_capabilities);
+    expect(out[0]?.granted_capabilities).toEqual(['forensic-read']);
   });
 
   it('round-trips so a re-normalized clause list is stringify-stable (clean-on-load)', () => {
     // The editors seed `scopes` via normalizeScopes AND compare against
     // normalizeScopes(baseline) — so a pristine load must compare equal.
-    const loaded = [{ allowed_actions: ['records:r', 'documents:r'], data_scope: {} }];
+    const loaded = [
+      {
+        allowed_actions: ['records:r', 'documents:r'],
+        data_scope: {},
+        granted_capabilities: ['context-directory-read'],
+      },
+    ];
     const seeded = normalizeScopes(loaded);
     expect(JSON.stringify(seeded)).toBe(JSON.stringify(normalizeScopes(loaded)));
   });
@@ -286,7 +316,7 @@ describe('<ScopeEditor>', () => {
     await user.click(screen.getByRole('button', { name: /add clause/i }));
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange).toHaveBeenCalledWith([
-      { allowed_actions: [], data_scope: {} },
+      { allowed_actions: [], data_scope: {}, granted_capabilities: [] },
     ]);
   });
 
@@ -302,7 +332,7 @@ describe('<ScopeEditor>', () => {
     await user.click(screen.getByRole('button', { name: /add clause/i }));
     expect(onChange).toHaveBeenCalledWith([
       { allowed_actions: ['read'], data_scope: {} },
-      { allowed_actions: [], data_scope: {} },
+      { allowed_actions: [], data_scope: {}, granted_capabilities: [] },
     ]);
   });
 
@@ -349,6 +379,168 @@ describe('<ScopeEditor>', () => {
       </TestIntlProvider>,
     );
     expect(screen.queryByRole('button', { name: /remove clause/i })).not.toBeInTheDocument();
+  });
+
+  describe('granted_capabilities authoring (0.40.0)', () => {
+    it('renders a checkbox for each of the two admin-app-authorable capabilities, unchecked by default', async () => {
+      const user = userEvent.setup();
+      render(
+        <TestIntlProvider>
+          <ScopeEditor value={[{ allowed_actions: ['users:crud'], data_scope: {} }]} onChange={() => {}} />
+        </TestIntlProvider>,
+      );
+      // The capabilities accordion is collapsed for a clause with none — open it.
+      await user.click(
+        screen.getByRole('button', { name: /platform capabilities/i }),
+      );
+      for (const name of [/member-lifecycle/i, /delegate-mint/i]) {
+        const checkbox = screen.getByRole('checkbox', { name });
+        expect(checkbox).not.toBeChecked();
+      }
+    });
+
+    it('does NOT offer forensic-read or context-directory-read as checkboxes — admin-app\'s own bearer can never back either by design, so a checkbox would always 403', async () => {
+      const user = userEvent.setup();
+      render(
+        <TestIntlProvider>
+          <ScopeEditor value={[{ allowed_actions: ['users:crud'], data_scope: {} }]} onChange={() => {}} />
+        </TestIntlProvider>,
+      );
+      await user.click(
+        screen.getByRole('button', { name: /platform capabilities/i }),
+      );
+      expect(screen.queryByRole('checkbox', { name: /forensic-read/i })).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('checkbox', { name: /context-directory-read/i }),
+      ).not.toBeInTheDocument();
+    });
+
+    it('renders pre-checked boxes for capabilities the loaded clause already carries', () => {
+      render(
+        <TestIntlProvider>
+          <ScopeEditor
+            value={[
+              {
+                allowed_actions: ['users:crud'],
+                data_scope: {},
+                granted_capabilities: ['delegate-mint'],
+              },
+            ]}
+            onChange={() => {}}
+          />
+        </TestIntlProvider>,
+      );
+      expect(screen.getByRole('checkbox', { name: /delegate-mint/i })).toBeChecked();
+      expect(screen.getByRole('checkbox', { name: /member-lifecycle/i })).not.toBeChecked();
+    });
+
+    it('checking a capability adds exactly that name, preserving the others untouched', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      render(
+        <TestIntlProvider>
+          <ScopeEditor
+            value={[
+              {
+                allowed_actions: ['users:crud'],
+                data_scope: {},
+                granted_capabilities: ['forensic-read'],
+              },
+            ]}
+            onChange={onChange}
+          />
+        </TestIntlProvider>,
+      );
+      await user.click(screen.getByRole('checkbox', { name: /delegate-mint/i }));
+      // Canonicalized: known names (catalog order) first, then anything this
+      // editor doesn't offer — not insertion order. Semantically the same set
+      // either way; canonicalizing is what keeps an uncheck-then-recheck from
+      // reordering the array and reading as a spurious edit.
+      expect(onChange).toHaveBeenCalledWith([
+        expect.objectContaining({
+          granted_capabilities: ['delegate-mint', 'forensic-read'],
+        }),
+      ]);
+    });
+
+    it('unchecking a capability removes only that exact name, leaving entries this editor does not offer alone (forensic-read is not admin-app-authorable, and neither is a future-release name)', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      render(
+        <TestIntlProvider>
+          <ScopeEditor
+            value={[
+              {
+                allowed_actions: ['users:crud'],
+                data_scope: {},
+                granted_capabilities: ['forensic-read', 'some-future-capability', 'member-lifecycle'],
+              },
+            ]}
+            onChange={onChange}
+          />
+        </TestIntlProvider>,
+      );
+      await user.click(screen.getByRole('checkbox', { name: /member-lifecycle/i }));
+      expect(onChange).toHaveBeenCalledWith([
+        expect.objectContaining({
+          granted_capabilities: ['forensic-read', 'some-future-capability'],
+        }),
+      ]);
+    });
+
+    it('unchecking then rechecking a capability settles to a stable canonical order, not the pre-toggle insertion order (dirty-state stability)', async () => {
+      // Starts in a NON-canonical order (as it might load from the server —
+      // order is not semantically meaningful there). Before canonicalization,
+      // toggling always appended at the END, so an uncheck+recheck round-trip
+      // would leave the array in a DIFFERENT order than either the original
+      // OR a second uncheck+recheck — a spurious diff a JSON.stringify-based
+      // dirty check would misread as a real edit.
+      const user = userEvent.setup();
+      const seen: { value: ScopeClause[] } = {
+        value: [
+          {
+            allowed_actions: ['users:crud'],
+            data_scope: {},
+            granted_capabilities: ['delegate-mint', 'member-lifecycle'],
+          },
+        ],
+      };
+      function Harness(): React.JSX.Element {
+        const [value, setValue] = useState<ScopeClause[]>(seen.value);
+        return (
+          <ScopeEditor
+            value={value}
+            onChange={(v) => {
+              seen.value = v;
+              setValue(v);
+            }}
+          />
+        );
+      }
+      render(
+        <TestIntlProvider>
+          <Harness />
+        </TestIntlProvider>,
+      );
+      // The accordion is already expanded — the seeded clause has 2
+      // capabilities (`defaultExpanded={capabilities.length > 0}`) — so no
+      // click is needed to open it here (unlike the empty-clause tests
+      // above).
+      const memberLifecycle = screen.getByRole('checkbox', { name: /member-lifecycle/i });
+      await user.click(memberLifecycle); // uncheck
+      await user.click(memberLifecycle); // recheck
+      const afterOneRoundTrip = [...seen.value[0]!.granted_capabilities!];
+
+      await user.click(memberLifecycle); // uncheck again
+      await user.click(memberLifecycle); // recheck again
+      const afterTwoRoundTrips = [...seen.value[0]!.granted_capabilities!];
+
+      // Stable: a second round-trip produces the SAME array as the first —
+      // not still drifting — and it's the canonical (catalog-order) form,
+      // not the original insertion order.
+      expect(afterOneRoundTrip).toEqual(['member-lifecycle', 'delegate-mint']);
+      expect(afterTwoRoundTrips).toEqual(afterOneRoundTrip);
+    });
   });
 });
 
@@ -433,7 +625,9 @@ describe('<ScopeEditor> permission matrix', () => {
       </TestIntlProvider>,
     );
     await user.click(screen.getByRole('checkbox', { name: /read records/i }));
-    expect(onChange).toHaveBeenCalledWith([{ allowed_actions: ['records:r'], data_scope: {} }]);
+    expect(onChange).toHaveBeenCalledWith([
+      { allowed_actions: ['records:r'], data_scope: {}, granted_capabilities: [] },
+    ]);
   });
 
   it('"Full access" emits ["*"] and hides the matrix', async () => {
@@ -445,7 +639,9 @@ describe('<ScopeEditor> permission matrix', () => {
       </TestIntlProvider>,
     );
     await user.click(screen.getByRole('checkbox', { name: /full access/i }));
-    expect(onChange).toHaveBeenCalledWith([{ allowed_actions: ['*'], data_scope: {} }]);
+    expect(onChange).toHaveBeenCalledWith([
+      { allowed_actions: ['*'], data_scope: {}, granted_capabilities: [] },
+    ]);
   });
 
   it('does not offer create/update/delete on a read-only resource (search)', () => {

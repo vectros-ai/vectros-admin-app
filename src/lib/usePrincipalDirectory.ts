@@ -8,9 +8,20 @@
 // identifier the rest of the app shows). Keys have no name source, so they
 // display as their id.
 //
-// The directory is tenant-wide (users are not context-partitioned), so it reads
-// through the tenant's default (no-context) client — the same source the
-// Members page uses — and is cached per tenant.
+// The directory reads through the tenant's default (no-context) client — the
+// same source the Members page uses — and is cached per tenant.
+//
+// **Known gap: this is NOT a tenant-wide user list, even though the
+// underlying user records themselves carry no context of their own.** The
+// server resolves a confined bearer's user list by joining through that
+// bearer's own context's access profiles, so this hook only ever sees users
+// who hold a profile in the
+// DEFAULT context specifically — regardless of which context the caller is
+// actually resolving a principal FOR. A principal with a profile only in some
+// OTHER context (e.g. a `ProfileEditor` viewing a non-default context's own
+// profiles) resolves as `unresolved` here even though it is a real, currently
+// profiled principal in the context being viewed — see the caveat on
+// `ResolvedPrincipal.unresolved` below.
 // ---------------------------------------------------------------------------
 
 import { useMemo } from 'react';
@@ -48,7 +59,13 @@ export interface ResolvedPrincipal {
   readonly principalId: string;
   /** The matched user, when the principal is a resolvable `usr_` id. */
   readonly user?: UserResponse;
-  /** True for a `usr_` principal with no matching current user (e.g. removed). */
+  /**
+   * True for a `usr_` principal this hook's directory has no matching user
+   * for. That's usually a removed user — but NOT always: see the module
+   * header's caveat, a principal profiled only in a non-default context
+   * reads as unresolved here too, even though it currently exists and is
+   * profiled right where the caller is looking.
+   */
   readonly unresolved: boolean;
 }
 
@@ -58,7 +75,10 @@ export function userLabel(user: UserResponse): string | undefined {
 }
 
 export interface PrincipalDirectory {
-  /** All tenant users (for an assign-by-name picker). */
+  /**
+   * Users this directory can resolve (for an assign-by-name picker) — NOT
+   * every tenant user; see the module header's "Known gap" caveat.
+   */
   readonly users: ReadonlyArray<UserResponse>;
   readonly isLoading: boolean;
   readonly isError: boolean;

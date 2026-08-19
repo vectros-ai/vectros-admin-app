@@ -27,7 +27,9 @@ import { MemoryRouter } from 'react-router';
 import App from './App';
 import { AuthProvider, CurrentTenantProvider } from './auth';
 import { __resetVectrosApiTokenCacheForTest } from '@vectros-ai/react';
-import type { AuthProviderAdapter, AuthUser, TenantMembership } from './auth';
+import type { AuthUser, TenantMembership } from './auth';
+import { makeMockAuthProvider } from './test/mockAuthProvider';
+import type { FullMockProvider } from './test/mockAuthProvider';
 import { TestIntlProvider } from './test/intl';
 import { registerScope } from './test/scopeToken';
 
@@ -50,34 +52,18 @@ const aliceUser: AuthUser = {
   lastName: 'Smith',
 };
 
-function mockAdapter(overrides: Partial<AuthProviderAdapter> = {}): AuthProviderAdapter {
-  return {
+/** This suite's own defaults (a signed-in owner in TENANT_ID) layered over the shared benign ones. */
+function mockAdapter(overrides: Partial<FullMockProvider> = {}): FullMockProvider {
+  return makeMockAuthProvider({
     getCurrentUser: vi.fn().mockResolvedValue(aliceUser),
-    signIn: vi.fn(),
-    confirmSignIn: vi.fn(),
-    signUp: vi.fn(),
-    confirmSignUp: vi.fn(),
-    resendSignUpCode: vi.fn(),
-    forgotPassword: vi.fn(),
-    confirmForgotPassword: vi.fn(),
-    changePassword: vi.fn(),
-    signOut: vi.fn(),
-    getIdToken: vi.fn(),
     getMemberships: vi.fn().mockResolvedValue(MEMBERSHIPS),
     getActiveTenant: vi.fn().mockResolvedValue(TENANT_ID),
     getActivePartnerUserId: vi.fn().mockResolvedValue('pu_alice'),
-    setActiveTenant: vi.fn().mockResolvedValue(undefined),
-    checkUserExists: vi.fn().mockResolvedValue({ exists: false, isMe: false }),
-    linkInvitation: vi.fn().mockResolvedValue({ tenantId: '', partnerUserId: '', role: 'SUB_USER', alreadyActive: false }),
-    getMfaStatus: vi.fn().mockResolvedValue({ enabled: [], preferred: null }),
-    setUpTotp: vi.fn().mockResolvedValue({ secret: 'MOCKSECRET234567', otpauthUri: 'otpauth://x' }),
-    verifyTotpSetup: vi.fn().mockResolvedValue(undefined),
-    disableTotp: vi.fn().mockResolvedValue(undefined),
     ...overrides,
-  };
+  });
 }
 
-function renderApp(provider: AuthProviderAdapter) {
+function renderApp(provider: FullMockProvider) {
   return render(
     <TestIntlProvider>
       <MemoryRouter initialEntries={['/']}>
@@ -153,7 +139,7 @@ describe('App nav scope-gating (real gate, shipping ADMIN_NAV_ITEMS)', () => {
       <TestIntlProvider>
         <MemoryRouter initialEntries={['/login']}>
           <AuthProvider provider={adapter}>
-            <CurrentTenantProvider>
+            <CurrentTenantProvider tenancyProvider={adapter}>
               <App />
             </CurrentTenantProvider>
           </AuthProvider>
@@ -232,7 +218,7 @@ describe('App nav scope-gating (real gate, shipping ADMIN_NAV_ITEMS)', () => {
   });
 
   // F-1 regression lock. `admin:users`/`admin:keys`/`admin:logs`/`admin:profiles`
-  // were this app's ORIGINAL gateAction literals — and TokenScope's action
+  // were this app's ORIGINAL gateAction literals — and the platform's scope
   // grammar rejects every one of them at mint time (the post-colon segment must
   // be composed only of `cruds` letters; none of "users"/"keys"/"logs"/
   // "profiles" qualify). No real credential could ever carry them, which meant
@@ -344,6 +330,38 @@ describe('App route scope-gating (RequireScope enforces gated routes, not just t
     // doesn't need a mocked API client: the guard's verdict is decided
     // before any data call happens.
     expect(await screen.findByLabelText(/loading profiles/i)).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Welcome, Alice' })).not.toBeInTheDocument();
+  });
+
+  // The CONTEXT DETAIL route (not the item editors above) previously
+  // gated on app-contexts:r ALONE, but ContextDetailPage's own Roles/Profiles
+  // tab queries need profiles:r — a session holding one but not the other
+  // reached a page whose tabs then silently 403'd. The route now requires
+  // BOTH, so an under-scoped session is redirected before the page mounts at
+  // all rather than landing on a partially-broken one.
+  it('redirects a sub-user holding ONLY app-contexts:r away from the context detail page — it also needs profiles:r', async () => {
+    registerScope(['app-contexts:r']);
+    renderAt('/access/contexts/engineering');
+
+    expect(await screen.findByRole('heading', { name: 'Welcome, Alice' })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/loading roles/i)).not.toBeInTheDocument();
+  });
+
+  it('redirects a sub-user holding ONLY profiles:r away from the context detail page — it also needs app-contexts:r', async () => {
+    registerScope(['profiles:r']);
+    renderAt('/access/contexts/engineering');
+
+    expect(await screen.findByRole('heading', { name: 'Welcome, Alice' })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/loading roles/i)).not.toBeInTheDocument();
+  });
+
+  it('lets a sub-user holding BOTH app-contexts:r and profiles:r through to the context detail page', async () => {
+    registerScope(['app-contexts:r', 'profiles:r']);
+    renderAt('/access/contexts/engineering');
+
+    // The route guard passed the page through — it starts fetching (its
+    // labeled loading state), rather than redirecting to Welcome.
+    expect(await screen.findByLabelText(/loading roles/i)).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Welcome, Alice' })).not.toBeInTheDocument();
   });
 });

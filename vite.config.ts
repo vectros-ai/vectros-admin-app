@@ -100,6 +100,17 @@ export default defineConfig({
       // time → userEvent timing flakes) and loaded a 2nd @types/react. Run
       // `npm run build -w @vectros-ai/react` after changing the lib (tsup --watch
       // during active dev). Swapped for a registry pin at the public-release cut.
+      // The lib ships CognitoAuthProvider/Auth0AuthProvider as SEPARATE entry
+      // points (not re-exported as values from the main bundle — see that
+      // package's tsup.config.ts), so each subpath needs its own alias. Listed
+      // BEFORE the bare '@vectros-ai/react' entry below: Vite/Rollup's alias
+      // matching is prefix-based, so the more specific key must be checked
+      // first or it's shadowed by the shorter one matching as a prefix.
+      // admin-app only ever constructs CognitoAuthProvider; the auth0 subpath
+      // has no alias here since nothing in this app imports it.
+      '@vectros-ai/react/providers/cognito': fileURLToPath(
+        new URL('../../packages/react/dist/auth/providers/cognito.mjs', import.meta.url),
+      ),
     },
     // The lib declares these as peer deps; with a source alias the app and the
     // (workspace-installed) lib would otherwise resolve two copies. That breaks

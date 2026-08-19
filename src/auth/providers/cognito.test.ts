@@ -56,7 +56,8 @@ import {
 
 import { decodeJwt } from 'jose';
 
-import { CognitoAuthProvider, AuthError } from '@vectros-ai/react';
+import { AuthError } from '@vectros-ai/react';
+import { CognitoAuthProvider } from '@vectros-ai/react/providers/cognito';
 import { API_CONFIG } from '../../config';
 import { BRAND } from '../../brand';
 

@@ -500,6 +500,37 @@ describe('ProfileEditor — dirty-state regression', () => {
     await user.click(await screen.findByRole('checkbox', { name: /update records/i }));
     await waitFor(() => expect(saveBtn).toBeEnabled());
   });
+
+  it('a save carries granted_capabilities through untouched (0.40.0 round-trip safety — the actual regression this fixes)', async () => {
+    const user = userEvent.setup();
+    const { client } = renderEditor({
+      client: makeMockClient({
+        getAccessProfile: vi.fn().mockResolvedValue({
+          ...PROFILE_KEYBOT_INLINE,
+          scopes: [
+            {
+              allowed_actions: ['records:r'],
+              data_scope: {},
+              granted_capabilities: ['forensic-read'],
+            },
+          ],
+        }),
+      }),
+      initialUrl: '/access/contexts/engineering/profiles/key_bot',
+    });
+    await screen.findByRole('radio', { name: /inline scope clauses/i });
+    // Edit something ELSE (never touch the capabilities checkboxes) to make
+    // the form dirty and enable Save.
+    await user.click(await screen.findByRole('checkbox', { name: /update records/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(client.auth.updateAccessProfile).toHaveBeenCalledTimes(1));
+    const call = client.auth.updateAccessProfile.mock.calls[0]?.[0] as {
+      body: { scopes?: Array<{ granted_capabilities?: string[] }> };
+    };
+    expect(call.body.scopes?.[0]?.granted_capabilities).toEqual(['forensic-read']);
+  });
 });
 
 // Canonical overrides: org via `scope:org`, plus a custom `scope:group`. Both
@@ -1041,6 +1072,55 @@ describe('ProfileEditor — hardening states', () => {
     expect(alert).toHaveTextContent(/principal id already exists/i);
     // The generic save-error copy must NOT be shown for the conflict case.
     expect(alert).not.toHaveTextContent(/could not save this profile/i);
+  });
+
+  it('surfaces the server-specific reason beneath the generic title on a non-conflict save failure (0.40.0 — e.g. a usr_ principal that is not a live user)', async () => {
+    const user = userEvent.setup();
+    const notALiveUser = new VectrosError({
+      message: 'bad request',
+      statusCode: 400,
+      body: { message: "principalId does not name a live user in your tenant.", requestId: 'req-400-1' },
+    });
+    renderEditor({
+      client: makeMockClient({
+        createAccessProfile: vi.fn().mockRejectedValue(notALiveUser),
+      }),
+      initialUrl: '/access/contexts/engineering/profiles/new',
+    });
+    await screen.findByRole('heading', { level: 1, name: /create access profile/i });
+    await user.type(screen.getByRole('combobox', { name: /user/i }), 'usr_ghost');
+    const tplInput = screen.getByRole('combobox', { name: /^role/i });
+    await user.click(tplInput);
+    await user.click(await screen.findByRole('option', { name: /eng-member/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    const alert = await screen.findByRole('alert');
+    // The generic title AND the server's specific reason both render.
+    expect(alert).toHaveTextContent(/could not save this profile/i);
+    expect(alert).toHaveTextContent(/does not name a live user/i);
+    expect(alert).toHaveTextContent(/req-400-1/);
+  });
+
+  it('shows only the generic save-error title (no stray detail line) when the error carries no body message', async () => {
+    const user = userEvent.setup();
+    const bare = new VectrosError({ message: 'boom', statusCode: 500 });
+    renderEditor({
+      client: makeMockClient({
+        createAccessProfile: vi.fn().mockRejectedValue(bare),
+      }),
+      initialUrl: '/access/contexts/engineering/profiles/new',
+    });
+    await screen.findByRole('heading', { level: 1, name: /create access profile/i });
+    await user.type(screen.getByRole('combobox', { name: /user/i }), 'usr_charlie');
+    const tplInput = screen.getByRole('combobox', { name: /^role/i });
+    await user.click(tplInput);
+    await user.click(await screen.findByRole('option', { name: /eng-member/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/could not save this profile/i);
   });
 
   it('keeps the Clone dialog OPEN and announces a clone error on failure', async () => {

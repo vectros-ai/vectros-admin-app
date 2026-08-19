@@ -79,9 +79,19 @@ export function TestTenantProvider({
   // selects a coherent (id, kind) pair rather than leaving the active id
   // pointing at a membership that isn't in the list.
   const activeTenant = tenant ?? seeded[0]?.tenantId ?? TEST_TENANT_ID;
+  // One adapter instance, shared with CurrentTenantProvider's tenancyProvider
+  // prop — needed even though memberships are seeded (skipping the load):
+  // setTenant/setActiveTenant (the switch handler) isn't part of the seed
+  // skip, so a page test exercising a tenant switch needs a real tenancy
+  // adapter to call through to, not just seeded initial state.
+  const adapter = makeMockAuthProvider();
   return (
-    <AuthProvider provider={makeMockAuthProvider()}>
-      <CurrentTenantProvider initialTenant={activeTenant} initialMemberships={seeded}>
+    <AuthProvider provider={adapter}>
+      <CurrentTenantProvider
+        tenancyProvider={adapter}
+        initialTenant={activeTenant}
+        initialMemberships={seeded}
+      >
         {children}
       </CurrentTenantProvider>
     </AuthProvider>

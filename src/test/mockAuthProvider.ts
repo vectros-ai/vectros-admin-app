@@ -22,11 +22,14 @@
 
 import { vi } from 'vitest';
 
-import type { AuthProviderAdapter } from '../auth';
+import type { AuthProviderAdapter, EmbeddedCredentialAuth, VectrosTenancyProvider } from '../auth';
+
+/** The full shape CognitoAuthProvider implements — admin-app is always this shape. */
+export type FullMockProvider = AuthProviderAdapter & EmbeddedCredentialAuth & VectrosTenancyProvider;
 
 export function makeMockAuthProvider(
-  overrides: Partial<AuthProviderAdapter> = {},
-): AuthProviderAdapter {
+  overrides: Partial<FullMockProvider> = {},
+): FullMockProvider {
   return {
     // Value-returning methods default to a benign "empty" result. signIn /
     // confirmSignIn / signUp have no obvious empty value — a test that drives

@@ -129,6 +129,29 @@ describe('UsagePage', () => {
     expect(screen.getAllByText('Unlimited')).toHaveLength(2);
   });
 
+  it('does not show the context-confinement notice for a cross-context credential (both environments populated)', async () => {
+    renderPage(vi.fn().mockResolvedValue(SAMPLE_REPORT));
+
+    await screen.findByText('2026-07');
+    expect(screen.queryByText(/confined to a single app context/i)).not.toBeInTheDocument();
+  });
+
+  it('shows the context-confinement notice when one environment is null (0.40.0)', async () => {
+    renderPage(
+      vi.fn().mockResolvedValue({
+        ...SAMPLE_REPORT,
+        reads: {
+          calls: { used: 0, freeAllowance: 10000, overage: 0, overageCredits: 0 },
+          dataOut: { bytes: 0, freeBytes: 100_000_000, overageBytes: 0, overageCredits: 0 },
+        },
+        tenants: { live: SAMPLE_REPORT.tenants.live, test: null },
+      }),
+    );
+
+    await screen.findByText('2026-07');
+    expect(screen.getByText(/confined to a single app context/i)).toBeInTheDocument();
+  });
+
   it('shows the error alert when the report fails to load', async () => {
     renderPage(
       vi.fn().mockRejectedValue(

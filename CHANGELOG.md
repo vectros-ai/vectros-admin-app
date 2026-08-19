@@ -3,6 +3,75 @@
 All notable changes to the Vectros Admin App are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.16.0 — 2026-08-19
+
+### Changed
+
+- **Repinned to `@vectros-ai/react` 0.8.0** — the multi-tenant developer-portal methods
+  (`getMemberships`/`getActiveTenant`/`setActiveTenant`/etc.) moved out of the package's generic
+  `useAuth()` surface into a `tenancyProvider` prop on `CurrentTenantProvider` (see that package's
+  CHANGELOG for the full reasoning). `main.tsx` now passes the same Cognito adapter to both
+  `<AuthProvider>` and `<CurrentTenantProvider tenancyProvider={...}>`; `AcceptPage`'s invite-linking
+  now reads from `useCurrentTenant()` instead of `useAuth()`. No user-visible behavior change.
+- **Repinned to SDK 0.40.0.** See the [SDK changelog](https://github.com/vectros-ai/sdk/blob/main/CHANGELOG.md)
+  for the full release; the entries below cover what this app changed in response.
+- **`DELETE /v1/users/{id}` now refuses to remove your account's last OWNER** (among other 409
+  causes the endpoint already had). The Members page's Revoke confirmation now surfaces the
+  server's actual reason beneath the generic error — the backend uses the same error class for the
+  last-OWNER refusal and an unrelated cross-context-membership refusal, so the UI shows what the
+  server actually said rather than assuming one specific cause from the status code alone.
+- **Access-profile and role save failures now surface the server's specific reason** (`ProfileEditor`,
+  `RoleEditor`) beneath the generic error title, when the server includes one — e.g. the new 400 for a
+  `usr_` principal that doesn't exist yet, or a 403 naming a namespace/placement the credential may not
+  write. The scoped-key creation wizard does the same for its mint-failure step, covering the new 403
+  when minting a key bound to a different principal without the `delegate-mint` capability, and the
+  now-uniform 404 that no longer distinguishes "user doesn't exist" from "no profile in this context".
+  The invite-member dialog's generic-error message now prefers this same server-provided reason over
+  the raw HTTP status text too.
+- **The Usage page explains the two metrics that don't narrow for a context-confined credential.**
+  `reads.calls.used`/`reads.dataOut.bytes` read `0` for such a credential because no per-context
+  breakdown exists for those two — not because no calls were made — and `credits.remaining` may
+  overstate what's actually available since the plan limit stays account-wide. A new note explains both
+  when the signal (an unpopulated live/test environment) is present.
+- **The role/access-profile scope editor now authors `granted_capabilities`** via a checkbox list
+  per clause, offering the two capabilities of the platform's four named ones that an admin-app
+  browser session can ever back — `member-lifecycle` and `delegate-mint`. The other two, `forensic-read`
+  and `context-directory-read`, are cross-context/tenant-wide administrative capabilities no
+  browser session can hold, so they're never offered as a checkbox here; a role granted either
+  through another path is left untouched on save, same as any capability grant a loaded role or
+  profile already carries (previously the field wasn't modeled at all, so saving would have
+  silently dropped it).
+- **The Advanced scope field's hint now shows the `profiles:c/u/d` principal-qualifier grammar**
+  (`profiles:u:self`, `profiles:c:usr_<id>`) — already round-trip safe, now discoverable without
+  reading the API reference.
+- **The Logs page shows who delegated a credential**, for a request made under a delegate-minted
+  `ssk_*` key.
+
+### Fixed
+
+- **The App Contexts detail page no longer reaches a partially-broken state for a session holding
+  `app-contexts:r` but not `profiles:r`.** Its Roles/Profiles tabs need `profiles:r` (the same resource
+  the nested Role/Profile editors already gate on); the route now requires both, matching the existing
+  pattern rather than landing on a page whose tabs silently 403.
+- **Scoped-key wizard: a freshly-created service principal now appears immediately in the
+  Bind step's picker, pre-selected.** The Services tab's "Create service principal" flow
+  previously invalidated + refetched the user list, but that list is backed by a
+  membership-scoped query that only returns principals already holding an access profile in
+  the current context — a principal fresh off create structurally never has one, so the row
+  could never appear no matter how long you waited. The picker now writes the created
+  principal straight into the cache instead of invalidating.
+
+### Known limitations
+
+- **Members, and any other page resolving a `usr_` principal to a name, can't see a user who
+  has no access profile in the default context.** The server resolves this app's user list (and
+  its principal-to-name lookups) by joining through that context's access profiles rather than
+  scanning the tenant directly, so a user who exists but hasn't been granted a profile there is
+  simply absent — no error, no indication anything is missing. Creating a service principal from
+  the scoped-key wizard and immediately binding a key to it works around this for that one
+  session (see the fix above); a pre-existing such user stays invisible on every other page,
+  every refresh, until it's granted a profile in the default context.
+
 ## 0.15.0 — 2026-08-12
 
 ### Changed

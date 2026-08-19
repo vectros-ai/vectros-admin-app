@@ -20,7 +20,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AuthProvider } from '../auth';
 import { CurrentTenantProvider } from '../auth';
-import type { AuthProviderAdapter, TenantMembership } from '../auth';
+import type { TenantMembership, VectrosTenancyProvider } from '../auth';
 import { makeMockAuthProvider } from '../test/mockAuthProvider';
 import { TestIntlProvider } from '../test/intl';
 import { TenantSwitcher } from './TenantSwitcher';
@@ -49,7 +49,7 @@ function renderSwitcher(
   opts: {
     tenant?: string;
     memberships?: ReadonlyArray<TenantMembership>;
-    setActiveTenant?: AuthProviderAdapter['setActiveTenant'];
+    setActiveTenant?: VectrosTenancyProvider['setActiveTenant'];
   } = {},
 ) {
   const adapter = makeMockAuthProvider(
@@ -59,6 +59,7 @@ function renderSwitcher(
     <TestIntlProvider>
       <AuthProvider provider={adapter}>
         <CurrentTenantProvider
+          tenancyProvider={adapter}
           initialTenant={opts.tenant ?? 'tnt_test'}
           initialMemberships={opts.memberships ?? [LIVE, TEST]}
         >

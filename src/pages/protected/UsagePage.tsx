@@ -9,9 +9,12 @@
 //
 // Fetches on mount (a usage read is a cheap metadata GET — unlike the metered
 // CloudWatch-backed Logs page, no explicit-fetch gate is warranted) and keys
-// on the active tenant, though the report itself is ACCOUNT-wide: the backend
-// derives the account from the bearer and always returns both environments
-// (the `tenants.live` / `tenants.test` split below).
+// on the active tenant. The report is account-wide ONLY for a credential with
+// cross-context reach (an owner's wildcard); a context-confined credential
+// (0.40.0) instead sees every section narrowed to its own context, and the
+// environment its context does NOT belong to comes back `null` rather than a
+// real total (the `tenants.live` / `tenants.test` split below) — see
+// `isContextConfined` for the detectable signal and its two exceptions.
 //
 // Scope: the backend requires `billing:r` on scoped tokens (API keys always
 // pass); the route + nav item gate on the same literal action string.
@@ -90,9 +93,10 @@ export function UsagePage(): React.JSX.Element {
   const intl = useIntl();
 
   const usageQuery = useQuery({
-    // Account-wide report; keyed on tenant so a TenantSwitcher change re-mints
-    // the bearer and refetches (the report is identical either way — both
-    // environments are always included — but the key mirrors the token slot).
+    // Keyed on tenant so a TenantSwitcher change re-mints the bearer and
+    // refetches — the report narrows to whatever that new bearer can see
+    // (see the module comment above: account-wide only for cross-context
+    // reach, context-narrowed otherwise since 0.40.0).
     queryKey: ['usage', tenant],
     queryFn: () => vectrosApiClient(tenant).auth.getUsage(),
   });
@@ -104,11 +108,26 @@ export function UsagePage(): React.JSX.Element {
   const unlimited = intl.formatMessage({ id: 'usage.unlimited' });
 
   // Environment rows (live/test) + per-context rows for the decomposition tables.
-  const envRows: ReadonlyArray<{ key: string; detail: Vectros.TenantDetail | undefined }> = [
+  const envRows: ReadonlyArray<{ key: string; detail: Vectros.TenantDetail | null | undefined }> = [
     { key: 'live', detail: report?.tenants?.live },
     { key: 'test', detail: report?.tenants?.test },
   ];
   const contexts = report?.contexts ?? [];
+
+  // 0.40.0: a context-confined credential narrows every section EXCEPT
+  // reads.calls.used / reads.dataOut.bytes (no per-context breakdown exists for
+  // those, so they always read 0 rather than a narrowed figure — don't read
+  // that as "no calls made") and credits.limit (stays plan-wide, so
+  // credits.remaining can overstate this context's true remaining room). The
+  // detectable client-side signal is the same narrowing the environment split
+  // already shows: the environment the credential is NOT bound to comes back
+  // `null` rather than a real total.
+  // `== null` (not `=== null`) deliberately: the generated SDK type is
+  // `(TenantDetail | null) | undefined` — the doc comment promises `null`
+  // for the unbound side, but treating an absent key (`undefined`) the same
+  // way is strictly safer and costs nothing.
+  const isContextConfined =
+    report?.tenants != null && (report.tenants.live == null || report.tenants.test == null);
 
   return (
     <Stack spacing={4}>
@@ -209,6 +228,15 @@ export function UsagePage(): React.JSX.Element {
               )}
             </CardContent>
           </Card>
+
+          {/* Context-confinement caveat — only the two exceptions the changelog
+              calls out precisely; everything else narrows correctly and needs
+              no explanation. */}
+          {isContextConfined && (
+            <Alert severity="info">
+              <FormattedMessage id="usage.contextConfinedNotice" />
+            </Alert>
+          )}
 
           {/* Read metering — the per-call axis + unified data-out (egress). */}
           {reads && (

@@ -76,7 +76,7 @@ import { vectrosApiClient } from '../../api/vectrosApi';
 import type { AccessProfileResponse, RoleResponse } from '../../api/vectrosApi';
 import { accessQueryKeys } from '../../lib/accessQueryKeys';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
-import { statusCodeOf } from '../../lib/apiError';
+import { extractErrorMessage, statusCodeOf } from '../../lib/apiError';
 import { useBeforeNavigate } from '../../lib/useBeforeNavigate';
 
 // ---------------------------------------------------------------------------
@@ -217,6 +217,7 @@ export function RoleEditor(): React.JSX.Element {
         scopes: scopes.map((c) => ({
           allowed_actions: [...c.allowed_actions],
           data_scope: c.data_scope as Record<string, Record<string, unknown>>,
+          granted_capabilities: [...(c.granted_capabilities ?? [])],
         })),
       };
       if (isCreate) {
@@ -255,6 +256,12 @@ export function RoleEditor(): React.JSX.Element {
   // can't be a duplicate-id conflict — fall through to the generic alert.
   const isDuplicateIdConflict =
     isCreate && saveError != null && statusCodeOf(saveError) === 409;
+
+  // The server's message on a save failure is actionable (e.g. a 403 naming the
+  // namespace/placement a credential may not write) — surface it beneath the
+  // generic title rather than dropping it. Left off the duplicate-id branch
+  // above, which already renders its own specific message.
+  const saveErrorDetail = extractErrorMessage(saveError);
 
   // Inline-validation message rendered under the ScopeEditor. `scopeError`
   // is a single discriminated error (or null) — format it via the shared
@@ -431,6 +438,11 @@ export function RoleEditor(): React.JSX.Element {
             ) : (
               <ApiErrorAlert error={saveError}>
                 <FormattedMessage id="access.roles.editor.saveErrorBody" />
+                {saveErrorDetail && (
+                  <Typography variant="caption" component="p" sx={{ mt: 0.5, opacity: 0.85 }}>
+                    {saveErrorDetail}
+                  </Typography>
+                )}
               </ApiErrorAlert>
             ))}
         </Stack>
@@ -541,11 +553,15 @@ function CloneRoleDialog({
           roleId: newId,
           name: newName.trim(),
           ...(source.description ? { description: source.description } : {}),
-          // Carry data_scope through verbatim — dropping it would widen a
-          // row-scoped clause to ALL tenant rows (a silent broadening on clone).
+          // Carry data_scope + granted_capabilities through verbatim —
+          // dropping data_scope would widen a row-scoped clause to ALL tenant
+          // rows, and dropping granted_capabilities would silently clone the
+          // role WITHOUT a capability grant it actually has (a silent
+          // narrowing, the opposite failure mode, equally worth avoiding).
           scopes: (source.scopes ?? []).map((s) => ({
             allowed_actions: [...(s.allowed_actions ?? [])],
             data_scope: (s.data_scope ?? {}) as Record<string, Record<string, unknown>>,
+            granted_capabilities: [...(s.granted_capabilities ?? [])],
           })),
         },
       });

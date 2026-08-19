@@ -5,50 +5,12 @@ import { MemoryRouter, Route, Routes } from 'react-router';
 
 import { AuthProvider } from '../../auth';
 import { AuthError } from '../../auth';
-import type { AuthProviderAdapter } from '../../auth';
+import { makeMockAuthProvider as mockAdapter } from '../../test/mockAuthProvider';
+import type { FullMockProvider } from '../../test/mockAuthProvider';
 import { ForgotPasswordPage } from './ForgotPasswordPage';
 import { TestIntlProvider } from '../../test/intl';
 
-function mockAdapter(overrides: Partial<AuthProviderAdapter> = {}): AuthProviderAdapter {
-  return {
-    getCurrentUser: vi.fn().mockResolvedValue(null),
-    signIn: vi.fn(),
-    confirmSignIn: vi.fn(),
-    signUp: vi.fn(),
-    confirmSignUp: vi.fn(),
-    resendSignUpCode: vi.fn(),
-    forgotPassword: vi.fn().mockResolvedValue(undefined),
-    confirmForgotPassword: vi.fn().mockResolvedValue(undefined),
-    changePassword: vi.fn(),
-    signOut: vi.fn(),
-    getIdToken: vi.fn(),
-    getMemberships: vi.fn().mockResolvedValue([]),
-    getActiveTenant: vi.fn().mockResolvedValue(null),
-    getActivePartnerUserId: vi.fn().mockResolvedValue(null),
-    setActiveTenant: vi.fn().mockResolvedValue(undefined),
-    checkUserExists: vi.fn().mockResolvedValue({ exists: false, isMe: false }),
-    linkInvitation: vi
-      .fn()
-      .mockResolvedValue({
-        tenantId: '',
-        partnerUserId: '',
-        role: 'SUB_USER',
-        alreadyActive: false,
-      }),
-    getMfaStatus: vi.fn().mockResolvedValue({ enabled: [], preferred: null }),
-    setUpTotp: vi
-      .fn()
-      .mockResolvedValue({
-        secret: 'MOCKSECRET234567',
-        otpauthUri: 'otpauth://totp/Mock:me?secret=MOCKSECRET234567&issuer=Mock',
-      }),
-    verifyTotpSetup: vi.fn().mockResolvedValue(undefined),
-    disableTotp: vi.fn().mockResolvedValue(undefined),
-    ...overrides,
-  };
-}
-
-function renderForgot(provider: AuthProviderAdapter) {
+function renderForgot(provider: FullMockProvider) {
   return render(
     <TestIntlProvider>
       <MemoryRouter initialEntries={['/forgot-password']}>
@@ -109,7 +71,7 @@ describe('ForgotPasswordPage request stage', () => {
 });
 
 describe('ForgotPasswordPage reset stage', () => {
-  async function gotoResetStage(provider: AuthProviderAdapter) {
+  async function gotoResetStage(provider: FullMockProvider) {
     const user = userEvent.setup();
     renderForgot(provider);
     await user.type(screen.getByLabelText(/email address/i), 'a@b.com');

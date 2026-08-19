@@ -24,8 +24,9 @@ import {
   setPartnerApiTokenMinter,
   __resetVectrosApiTokenCacheForTest,
 } from '@vectros-ai/react';
-import type { AuthProviderAdapter, AuthUser, TenantMembership } from '@vectros-ai/react';
+import type { AuthUser, TenantMembership } from '@vectros-ai/react';
 import { makeMockAuthProvider } from '../test/mockAuthProvider';
+import type { FullMockProvider } from '../test/mockAuthProvider';
 import { TestIntlProvider } from '../test/intl';
 
 const LIVE: TenantMembership = {
@@ -54,7 +55,7 @@ const ALICE: AuthUser = {
 
 function wrapper(
   opts: {
-    adapter?: AuthProviderAdapter;
+    adapter?: FullMockProvider;
     seedTenant?: string;
     seedMemberships?: ReadonlyArray<TenantMembership>;
   } = {},
@@ -71,7 +72,9 @@ function wrapper(
   return ({ children }: { children: ReactNode }): React.JSX.Element => (
     <TestIntlProvider>
       <AuthProvider provider={adapter}>
-        <CurrentTenantProvider {...tenantProps}>{children}</CurrentTenantProvider>
+        <CurrentTenantProvider tenancyProvider={adapter} {...tenantProps}>
+          {children}
+        </CurrentTenantProvider>
       </AuthProvider>
     </TestIntlProvider>
   );
@@ -157,7 +160,7 @@ describe('useCurrentTenant', () => {
 
     // Sign in — flips the identity; the membership load must re-run.
     await act(async () => {
-      await result.current.auth.signIn({ email: ALICE.email, password: 'pw' });
+      await result.current.auth.signIn!({ email: ALICE.email, password: 'pw' });
     });
 
     // The menu-driving tenant now resolves WITHOUT a reload.

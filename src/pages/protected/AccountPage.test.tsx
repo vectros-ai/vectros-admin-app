@@ -13,8 +13,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router';
 
 import { AuthProvider } from '../../auth';
-import type { AuthProviderAdapter, AuthUser } from '../../auth';
+import type { AuthUser } from '../../auth';
 import { makeMockAuthProvider } from '../../test/mockAuthProvider';
+import type { FullMockProvider } from '../../test/mockAuthProvider';
 import { TestIntlProvider } from '../../test/intl';
 import { AccountPage } from './AccountPage';
 
@@ -25,7 +26,7 @@ const aliceUser: AuthUser = {
   lastName: 'Smith',
 };
 
-function renderAccount(overrides: Partial<AuthProviderAdapter> = {}) {
+function renderAccount(overrides: Partial<FullMockProvider> = {}) {
   const provider = makeMockAuthProvider({
     getCurrentUser: vi.fn().mockResolvedValue(aliceUser),
     ...overrides,

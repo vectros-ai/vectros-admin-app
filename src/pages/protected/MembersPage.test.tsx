@@ -287,6 +287,62 @@ describe('MembersPage', () => {
     expect(client.identity.deleteUser).toHaveBeenCalledTimes(1);
   });
 
+  it('surfaces the server-specific reason beneath the generic title on a 409 (0.40.0) — a 409 here is NOT always "last owner"', async () => {
+    // 0.40.0: DELETE /v1/users/{id} 409s for the last-OWNER refusal, but the
+    // SAME status (and the same backend error class) is also used for a
+    // context-confined caller trying to delete a user who has access in
+    // ANOTHER app context — status code alone can't tell them apart, so the
+    // UI must show the server's actual message, not assume one specific
+    // cause. This fixture uses the OTHER-CONTEXT wording on purpose to prove
+    // the rendering doesn't hardcode a "last owner" claim.
+    const user = userEvent.setup();
+    const conflict = new VectrosError({
+      message: 'conflict',
+      statusCode: 409,
+      body: {
+        message:
+          'Cannot delete: this user has access in other app contexts. Remove them from THIS context via DELETE /v1/app-contexts/{contextId}/profiles/{principalId} instead.',
+        requestId: 'corr-owner-1',
+      },
+    });
+    renderPage({
+      client: makeMockClient({ deleteUser: vi.fn().mockRejectedValue(conflict) }),
+    });
+    await screen.findByText('alice@example.com');
+
+    await user.click(screen.getAllByRole('button', { name: /^revoke$/i })[0]!);
+    const confirmDialog = await screen.findByRole('dialog');
+    await user.click(within(confirmDialog).getByRole('button', { name: /^revoke$/i }));
+
+    await waitFor(() => {
+      const alert = within(confirmDialog).getByRole('alert');
+      expect(alert).toHaveTextContent(/couldn't revoke that member/i);
+      expect(alert).toHaveTextContent(/access in other app contexts/i);
+      // Never invents a MORE specific claim than the server actually sent.
+      expect(alert).not.toHaveTextContent(/only remaining owner/i);
+      expect(alert).toHaveTextContent(/reference id:\s*corr-owner-1/i);
+    });
+  });
+
+  it('shows only the generic title (no stray detail line) when the error carries no body message', async () => {
+    const user = userEvent.setup();
+    const err = new VectrosError({ message: 'conflict', statusCode: 409 });
+    renderPage({
+      client: makeMockClient({ deleteUser: vi.fn().mockRejectedValue(err) }),
+    });
+    await screen.findByText('alice@example.com');
+
+    await user.click(screen.getAllByRole('button', { name: /^revoke$/i })[0]!);
+    const confirmDialog = await screen.findByRole('dialog');
+    await user.click(within(confirmDialog).getByRole('button', { name: /^revoke$/i }));
+
+    await waitFor(() => {
+      expect(within(confirmDialog).getByRole('alert')).toHaveTextContent(
+        /couldn't revoke that member/i,
+      );
+    });
+  });
+
   it('disables the confirm button while the revoke is in flight (pending)', async () => {
     const user = userEvent.setup();
     let resolveDelete: (() => void) | undefined;

@@ -94,6 +94,7 @@ import {
   validateClauses,
 } from '../../components/ScopeEditor';
 import type { ScopeClause } from '../../components/ScopeEditor';
+import { extractErrorMessage } from '../../lib/apiError';
 
 // ---------------------------------------------------------------------------
 // Step model
@@ -348,15 +349,17 @@ export function ScopedKeyCreateDialog({
         {submitMutation.isError && step !== 'confirmation' && (
           <Box sx={{ mt: 2 }}>
             <ApiErrorAlert error={submitMutation.error}>
-              <FormattedMessage
-                id="keysWizard.review.submitError"
-                values={{
-                  message:
-                    submitMutation.error instanceof Error
-                      ? submitMutation.error.message
-                      : String(submitMutation.error),
-                }}
-              />
+              <FormattedMessage id="keysWizard.review.submitError" />
+              {/* The server's message is the actionable part here — 0.40.0's 403
+                  when minting bound to a different principal without the
+                  delegate-mint capability, and the uniform 404 that no longer
+                  distinguishes "user doesn't exist" from "no profile in this
+                  context". Surface it rather than dropping it. */}
+              {extractErrorMessage(submitMutation.error) && (
+                <Typography variant="caption" component="p" sx={{ mt: 0.5, opacity: 0.85 }}>
+                  {extractErrorMessage(submitMutation.error)}
+                </Typography>
+              )}
             </ApiErrorAlert>
           </Box>
         )}
@@ -478,11 +481,17 @@ interface BindStepProps {
 function BindStep({ boundUser, onPickUser }: BindStepProps): React.JSX.Element {
   const intl = useIntl();
   const tenant = useActiveTenantId();
-  const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState<UserTypeFilter>(
     boundUser?.type === 'SERVICE' ? 'SERVICE' : 'HUMAN',
   );
   const [createOpen, setCreateOpen] = useState(false);
+
+  // Principals created THIS wizard session via "Create service principal"
+  // below. Held in local state, deliberately NEVER written into the
+  // ['users', tenant] query cache — see onCreated's own comment for why an
+  // earlier version of this fix (writing straight into the cache) was
+  // itself a real regression, not just a race.
+  const [optimisticPrincipals, setOptimisticPrincipals] = useState<UserResponse[]>([]);
 
   const usersQuery = useQuery({
     queryKey: ['users', tenant],
@@ -498,16 +507,43 @@ function BindStep({ boundUser, onPickUser }: BindStepProps): React.JSX.Element {
       ),
   });
 
+  // The rendered list is the server's answer UNIONED with this session's own
+  // optimistic creates — never a cache write, so it can't be reverted or
+  // overwritten by anything react-query does to the query underneath it
+  // (a cancel, a refetch, a window-refocus refetch, a stale resolution — see
+  // onCreated). A created principal is deduped out once the server itself
+  // starts returning it (were that ever to happen — today it structurally
+  // never will, since the confined list this query backs never returns a
+  // profile-less principal; see the module comment on `listConfinedUsers`
+  // in PartnerUserHandler for why), rather than assuming it never will.
+  const users = useMemo(() => {
+    const serverUsers = usersQuery.data ?? [];
+    const serverIds = new Set(serverUsers.map((u) => u.id).filter(Boolean));
+    const extra = optimisticPrincipals.filter((p) => !p.id || !serverIds.has(p.id));
+    return [...serverUsers, ...extra];
+  }, [usersQuery.data, optimisticPrincipals]);
+
   // The backend user record's type defaults to HUMAN for legacy rows (default-on-read
   // in the model). Filter client-side; the API doesn't accept a `type`
   // query param today.
-  const filtered = useMemo(() => {
-    const users = usersQuery.data ?? [];
-    return users.filter((u) => (u.type ?? 'HUMAN') === activeTab);
-  }, [usersQuery.data, activeTab]);
+  const filtered = useMemo(
+    () => users.filter((u) => (u.type ?? 'HUMAN') === activeTab),
+    [users, activeTab],
+  );
+  // The server fetch may still be pending, but once we have at least one
+  // optimistic principal there's something real to show — don't block the
+  // whole picker behind a fetch this step no longer depends on for that row.
+  const isPending = usersQuery.isPending && optimisticPrincipals.length === 0;
 
   return (
     <Box>
+      {/* 0.40.0: minting a key bound to someone OTHER than yourself now requires
+          the delegate-mint capability. Said up front, not just at the final
+          403 — five steps in is the wrong place to first learn a pick you
+          made on step 2 can't complete. */}
+      <Alert severity="info" sx={{ mb: 2 }}>
+        <FormattedMessage id="keysWizard.bind.delegateMintNotice" />
+      </Alert>
       <Tabs
         value={activeTab}
         onChange={(_evt, v: UserTypeFilter) => setActiveTab(v)}
@@ -557,7 +593,7 @@ function BindStep({ boundUser, onPickUser }: BindStepProps): React.JSX.Element {
         </Box>
       )}
 
-      {usersQuery.isPending && (
+      {isPending && (
         <LoadingBlock
           size={24}
           py={3}
@@ -565,7 +601,7 @@ function BindStep({ boundUser, onPickUser }: BindStepProps): React.JSX.Element {
         />
       )}
 
-      {!usersQuery.isPending && !usersQuery.isError && filtered.length === 0 && (
+      {!isPending && !usersQuery.isError && filtered.length === 0 && (
         <Typography
           variant="body2"
           color="text.secondary"
@@ -581,7 +617,7 @@ function BindStep({ boundUser, onPickUser }: BindStepProps): React.JSX.Element {
         </Typography>
       )}
 
-      {!usersQuery.isPending && filtered.length > 0 && (
+      {!isPending && filtered.length > 0 && (
         <Box
           sx={{
             maxHeight: 300,
@@ -652,7 +688,23 @@ function BindStep({ boundUser, onPickUser }: BindStepProps): React.JSX.Element {
         open={createOpen}
         onClose={() => setCreateOpen(false)}
         onCreated={(newUser) => {
-          void queryClient.invalidateQueries({ queryKey: ['users', tenant] });
+          // A freshly-created principal holds no access profile in this
+          // context yet, so the confined-caller list query this list is
+          // backed by will never return it — not on this fetch, not on the
+          // NEXT one, not ever, until it's granted a profile. That ruled out
+          // both an invalidate+refetch (asks a membership-scoped query a
+          // does-this-exist question it structurally can't answer) AND an
+          // earlier version of this fix that wrote the row straight into the
+          // query cache: that stopped the immediate symptom but broke a
+          // DIFFERENT way — cancelling the tenant's only (still-loading)
+          // fetch to protect the write also discarded every REAL existing
+          // user that fetch would have returned, so the picker showed only
+          // the just-created principal until something else refetched.
+          // Track it in local state instead, unioned into the rendered list
+          // (see `users` above) — the real query is free to load, refetch,
+          // get cancelled, whatever react-query wants; this row is immune to
+          // all of it because it never lived in that cache to begin with.
+          setOptimisticPrincipals((prev) => [...prev, newUser]);
           setCreateOpen(false);
           setActiveTab('SERVICE');
           onPickUser(newUser);
@@ -664,9 +716,11 @@ function BindStep({ boundUser, onPickUser }: BindStepProps): React.JSX.Element {
 
 // ---------------------------------------------------------------------------
 // Inline service-principal create — opens from BindStep's Services tab.
-// Submits identity.createUser({externalId, type: 'SERVICE'}) and invalidates
-// the parent's ['users', tenant] query on success so the new row appears
-// AND becomes the selected boundUser without a wizard step back.
+// Submits identity.createUser({externalId, type: 'SERVICE'}) and hands the
+// new row to the parent's onCreated on success (see that handler's own
+// comment for why it's tracked in local state, not the query cache) so the
+// new row appears AND becomes the selected boundUser without a
+// wizard step back.
 // ---------------------------------------------------------------------------
 
 interface ServicePrincipalCreateDialogProps {
@@ -1102,6 +1156,7 @@ function InlineProfileCreateDialog({
           scopes: clauses.map((c) => ({
             allowed_actions: [...c.allowed_actions],
             data_scope: c.data_scope as Record<string, Record<string, unknown>>,
+            granted_capabilities: [...(c.granted_capabilities ?? [])],
           })),
           status: 'active',
         },

@@ -91,6 +91,7 @@ import type {
   UserResponse,
 } from '../../api/vectrosApi';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
+import { extractErrorMessage } from '../../lib/apiError';
 import { ApiErrorAlert } from '../../components/ApiErrorAlert';
 import { RequestIdCaption } from '../../components/RequestIdCaption';
 import { InviteMemberDialog } from './InviteMemberDialog';
@@ -123,10 +124,22 @@ export function MembersPage(): React.JSX.Element {
 
   // Members list — single query keyed on the active tenant. Switching
   // tenants in the TenantSwitcher swaps queryKey → automatic refetch.
+  //
+  // **Known gap: a user with no AccessProfile in this page's context (see
+  // MEMBERS_CONTEXT_ID above) does not appear here, even though the user
+  // exists.** For a context-confined bearer — which every admin-app session
+  // holds, by the same token-mint constraint documented above — the server
+  // resolves this list by joining through that context's AccessProfiles, not
+  // by a plain tenant-wide scan. A user who exists but hasn't (yet) been
+  // granted a profile there is simply absent from the join, with no error and
+  // no indication anything is missing. This is a property of the underlying
+  // list call itself, not of pagination or caching — draining every page (see
+  // below) does not surface such a user, and neither does a refresh.
   const membersQuery = useQuery({
     queryKey: ['members', tenant],
     // identity.listUsers is cursor-paginated (SDK 0.23, default 20/page); drain
-    // so the members table is complete for tenants with more than one page.
+    // so every returned page is read — see the caveat above for what "every
+    // returned page" does and doesn't guarantee.
     queryFn: () =>
       drainPages<UserResponse>((startFrom) =>
         vectrosApiClient(tenant).identity.listUsers(
@@ -304,6 +317,19 @@ export function MembersPage(): React.JSX.Element {
     setRevokeTarget(null);
     deleteMutation.reset();
   };
+
+  // 0.40.0: DELETE /v1/users/{id} now 409s rather than succeeding when it
+  // would remove the account's last OWNER — a real, explained refusal, not a
+  // generic failure. But a 409 here is NOT exclusively that: the same
+  // endpoint also 409s when the target has access in another app context
+  // (a context-confined caller must remove them via the profile-delete
+  // route instead), and on a concurrent-delete race — and the backend
+  // throws the SAME error class for the last-owner and other-context cases,
+  // so there is no status-code-only way to tell them apart. Surface the
+  // server's own message (which DOES name the right cause and the right
+  // next step) beneath the generic title, rather than asserting "last
+  // owner" for every 409 — same pattern as ProfileEditor/RoleEditor.
+  const revokeErrorDetail = extractErrorMessage(deleteMutation.error);
 
   return (
     <Stack spacing={3}>
@@ -626,6 +652,11 @@ export function MembersPage(): React.JSX.Element {
           deleteMutation.isError ? (
             <>
               <FormattedMessage id="members.revokeErrorBody" />
+              {revokeErrorDetail && (
+                <Typography variant="caption" component="p" sx={{ mt: 0.5, opacity: 0.85 }}>
+                  {revokeErrorDetail}
+                </Typography>
+              )}
               <RequestIdCaption error={deleteMutation.error} />
             </>
           ) : undefined

@@ -44,3 +44,19 @@ export function extractRequestId(err: unknown): string | undefined {
   const requestId = (body as { requestId?: unknown }).requestId;
   return typeof requestId === 'string' && requestId !== '' ? requestId : undefined;
 }
+
+/**
+ * Extract the human-readable `message` from a failed SDK call's error envelope,
+ * if present. Reads `err.body.message` — the always-valid partner-API error JSON
+ * whose `message` is a client-facing string (uniform error contract): e.g. a
+ * `400` naming the out-of-range number field and how to fix it. Returns
+ * undefined for a non-API error (network, abort) or a malformed / empty body so
+ * callers fall back to their own generic copy.
+ */
+export function extractErrorMessage(err: unknown): string | undefined {
+  if (typeof err !== 'object' || err === null || !('body' in err)) return undefined;
+  const body = (err as { body?: unknown }).body;
+  if (typeof body !== 'object' || body === null || !('message' in body)) return undefined;
+  const message = (body as { message?: unknown }).message;
+  return typeof message === 'string' && message.trim() !== '' ? message.trim() : undefined;
+}

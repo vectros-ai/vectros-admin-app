@@ -284,6 +284,99 @@ describe('LogsPage', () => {
     expect(within(table).queryByText('null')).not.toBeInTheDocument();
   });
 
+  it('shows who delegated a credential (0.40.0 delegationChain), preferring sub — the delegator\'s own principal — over handle, an opaque revocation id', async () => {
+    // `sub` is the delegator's own principal id — who handed this credential
+    // down; `handle` is only an opaque revocation id, never an identity. Both
+    // present here on purpose, to prove sub wins.
+    const user = userEvent.setup();
+    renderPage({
+      devApi: makeMockDevApi({
+        getAdminLogs: vi.fn().mockResolvedValue({
+          ...SAMPLE_RESPONSE,
+          entries: [
+            {
+              ...SAMPLE_ENTRIES[1],
+              delegationChain: JSON.stringify([
+                { kind: 'key', sub: 'usr_alice', handle: 'key_delegator' },
+              ]),
+            },
+          ],
+        }),
+      }),
+    });
+    await user.click(screen.getByRole('button', { name: /fetch logs/i }));
+
+    const table = await screen.findByRole('table', { name: /api call log entries/i });
+    expect(within(table).getByText(/Delegated by usr_alice/i)).toBeInTheDocument();
+    expect(within(table).queryByText(/Delegated by key_delegator/i)).not.toBeInTheDocument();
+  });
+
+  it('falls back to handle when the delegation-chain entry has no sub', async () => {
+    const user = userEvent.setup();
+    renderPage({
+      devApi: makeMockDevApi({
+        getAdminLogs: vi.fn().mockResolvedValue({
+          ...SAMPLE_RESPONSE,
+          entries: [
+            {
+              ...SAMPLE_ENTRIES[1],
+              delegationChain: JSON.stringify([{ kind: 'key', handle: 'key_delegator' }]),
+            },
+          ],
+        }),
+      }),
+    });
+    await user.click(screen.getByRole('button', { name: /fetch logs/i }));
+
+    const table = await screen.findByRole('table', { name: /api call log entries/i });
+    expect(within(table).getByText(/Delegated by key_delegator/i)).toBeInTheDocument();
+  });
+
+  it('falls back to the raw string, and never throws, on a malformed delegationChain', async () => {
+    const user = userEvent.setup();
+    renderPage({
+      devApi: makeMockDevApi({
+        getAdminLogs: vi.fn().mockResolvedValue({
+          ...SAMPLE_RESPONSE,
+          entries: [
+            { ...SAMPLE_ENTRIES[1], delegationChain: 'not valid json' },
+          ],
+        }),
+      }),
+    });
+    await user.click(screen.getByRole('button', { name: /fetch logs/i }));
+
+    const table = await screen.findByRole('table', { name: /api call log entries/i });
+    // No parsed label to show — falls back to the raw string as the "Delegated
+    // by" value rather than crashing the row or hiding the field.
+    expect(within(table).getByText(/Delegated by not valid json/i)).toBeInTheDocument();
+  });
+
+  it('omits the "Delegated by" caption when delegationChain is absent (SAMPLE_ENTRIES carries no delegation at all)', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole('button', { name: /fetch logs/i }));
+
+    const table = await screen.findByRole('table', { name: /api call log entries/i });
+    expect(within(table).queryByText(/Delegated by/i)).not.toBeInTheDocument();
+  });
+
+  it('omits the "Delegated by" caption when delegationChain is the literal string "null" (rows predating the field normalize this way, same as requestId/errorCode)', async () => {
+    const user = userEvent.setup();
+    renderPage({
+      devApi: makeMockDevApi({
+        getAdminLogs: vi.fn().mockResolvedValue({
+          ...SAMPLE_RESPONSE,
+          entries: [{ ...SAMPLE_ENTRIES[1], delegationChain: 'null' }],
+        }),
+      }),
+    });
+    await user.click(screen.getByRole('button', { name: /fetch logs/i }));
+
+    const table = await screen.findByRole('table', { name: /api call log entries/i });
+    expect(within(table).queryByText(/Delegated by/i)).not.toBeInTheDocument();
+  });
+
   it('renders the empty state when entries is []', async () => {
     const user = userEvent.setup();
     renderPage({

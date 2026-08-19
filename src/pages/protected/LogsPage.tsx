@@ -862,6 +862,16 @@ function LogRow({ entry }: { entry: LogEntry }): React.JSX.Element {
     entry.requestId != null && entry.requestId !== 'null' ? entry.requestId : undefined;
   const errorCode =
     entry.errorCode != null && entry.errorCode !== 'null' ? entry.errorCode : undefined;
+  // `delegationChain` (0.40.0) — present only for a request made under a
+  // delegate-minted ssk_* key; a JSON-encoded array of `{kind, sub, handle}`
+  // entries, opaque server-side. Best-effort readable label off the
+  // delegator's `handle`/`sub`; malformed or unrecognized shapes fall back
+  // to the raw string rather than hiding the field entirely.
+  const delegationChainRaw =
+    entry.delegationChain != null && entry.delegationChain !== 'null'
+      ? entry.delegationChain
+      : undefined;
+  const delegatorLabel = delegationChainRaw ? delegatorLabelOf(delegationChainRaw) : undefined;
 
   return (
     <TableRow sx={{ bgcolor, '&:hover': { bgcolor: 'action.hover' } }}>
@@ -959,9 +969,52 @@ function LogRow({ entry }: { entry: LogEntry }): React.JSX.Element {
         <Tooltip title={entry.keyId ?? ''}>
           <span>{entry.keyId ?? emDash}</span>
         </Tooltip>
+        {/* Who delegated this credential (0.40.0, delegate-mint only). The
+            caption shows the best-effort readable last-delegator label; the
+            tooltip shows the FULL raw chain (not just a repeat of the
+            caption) since MAX_DEPTH==3 means an earlier delegator in a
+            multi-hop chain is otherwise invisible in this UI entirely. */}
+        {delegationChainRaw && (
+          <Tooltip title={delegationChainRaw}>
+            <Typography
+              noWrap
+              variant="caption"
+              component="div"
+              sx={{ fontFamily: 'monospace', fontSize: 10, color: 'text.disabled' }}
+            >
+              <FormattedMessage
+                id="logs.delegatedBy"
+                values={{ delegator: delegatorLabel ?? delegationChainRaw }}
+              />
+            </Typography>
+          </Tooltip>
+        )}
       </TableCell>
     </TableRow>
   );
+}
+
+/**
+ * Best-effort readable label for a `delegationChain` JSON string — the most
+ * recent (last) delegator's `sub`, falling back to `handle`. `sub` is the
+ * delegator's own principal id — who handed this credential down; `handle`
+ * is only a REVOCATION handle (a `jti`/`keyId`, opaque and nullable, not an
+ * identity) — showing it as "who delegated" would be actively wrong, not
+ * just less readable. Returns `undefined` on anything that doesn't parse
+ * into the expected shape so the caller can fall back to showing the raw
+ * string rather than a wrong guess.
+ */
+function delegatorLabelOf(raw: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return undefined;
+    const last = parsed[parsed.length - 1] as { handle?: unknown; sub?: unknown } | undefined;
+    if (typeof last?.sub === 'string' && last.sub !== '') return last.sub;
+    if (typeof last?.handle === 'string' && last.handle !== '') return last.handle;
+    return undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Latency color thresholds — visually flag slow calls without a hard cutoff. */

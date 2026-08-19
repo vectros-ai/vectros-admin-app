@@ -596,6 +596,87 @@ describe('RoleEditor — hardening states', () => {
     expect(screen.queryByText(/could not save this role/i)).not.toBeInTheDocument();
   });
 
+  it('surfaces the server-specific reason beneath the generic title on a non-conflict save failure (0.40.0)', async () => {
+    const user = userEvent.setup();
+    const denial = new VectrosError({
+      message: 'forbidden',
+      statusCode: 403,
+      body: { message: 'The namespace "billing" is not one this credential may write.', requestId: 'req-403-1' },
+    });
+    renderEditor({
+      client: makeMockClient({
+        createRole: vi.fn().mockRejectedValue(denial),
+      }),
+      initialUrl: '/access/contexts/engineering/roles/new',
+    });
+    await screen.findByRole('heading', { level: 1, name: /create role/i });
+    await fillValidCreateForm(user);
+    await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    // ScopeEditor's own info Alert also carries role="alert" — scope to the
+    // element actually carrying the save-error copy, same as the
+    // duplicate-id test above.
+    const errorMsg = await screen.findByText(/could not save this role/i);
+    const alert = errorMsg.closest('[role="alert"]');
+    expect(alert).not.toBeNull();
+    expect(alert).toHaveTextContent(/not one this credential may write/i);
+    expect(alert).toHaveTextContent(/req-403-1/);
+  });
+
+  it('shows only the generic save-error title (no stray detail line) when the error carries no body message', async () => {
+    const user = userEvent.setup();
+    const bare = new VectrosError({ message: 'boom', statusCode: 500 });
+    renderEditor({
+      client: makeMockClient({
+        createRole: vi.fn().mockRejectedValue(bare),
+      }),
+      initialUrl: '/access/contexts/engineering/roles/new',
+    });
+    await screen.findByRole('heading', { level: 1, name: /create role/i });
+    await fillValidCreateForm(user);
+    await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    const errorMsg = await screen.findByText(/could not save this role/i);
+    expect(errorMsg.closest('[role="alert"]')).not.toBeNull();
+  });
+
+  it('a save carries granted_capabilities through untouched (0.40.0 round-trip safety)', async () => {
+    const user = userEvent.setup();
+    const { client } = renderEditor({
+      client: makeMockClient({
+        getRole: vi.fn().mockResolvedValue({
+          contextId: 'engineering',
+          roleId: 'eng-member',
+          name: 'Engineering Team Member',
+          scopes: [
+            {
+              allowed_actions: ['records:r', 'documents:r'],
+              data_scope: {},
+              granted_capabilities: ['context-directory-read'],
+            },
+          ],
+        }),
+      }),
+      initialUrl: '/access/contexts/engineering/roles/eng-member',
+    });
+    await screen.findByRole('heading', { level: 1, name: /edit role eng-member/i });
+    // Edit something ELSE (the name field) — never touch the capabilities
+    // checkboxes — to make the form dirty and enable Save. The form body
+    // (behind `baseline`) mounts asynchronously after the role load resolves.
+    const nameInput = await screen.findByRole('textbox', { name: /^name$/i });
+    await user.type(nameInput, ' (updated)');
+    await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(client.auth.updateRole).toHaveBeenCalledTimes(1));
+    const call = client.auth.updateRole.mock.calls[0]?.[0] as {
+      body: { scopes?: Array<{ granted_capabilities?: string[] }> };
+    };
+    expect(call.body.scopes?.[0]?.granted_capabilities).toEqual(['context-directory-read']);
+  });
+
   it('announces a scope-validation failure via role="alert"', async () => {
     renderEditor();
     await screen.findByRole('heading', { level: 1, name: /create role/i });

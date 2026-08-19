@@ -67,6 +67,7 @@ import type {
   RoleResponse,
 } from '../../api/vectrosApi';
 import { ApiErrorAlert } from '../../components/ApiErrorAlert';
+import { extractErrorMessage } from '../../lib/apiError';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
 
 /**
@@ -548,8 +549,17 @@ function domainInviteError(
  * Best-effort human-readable message for the generic-error branch. The
  * requestId is surfaced separately by {@link ApiErrorAlert}; this is only the
  * prose the `invite.errorGeneric` template interpolates.
+ *
+ * Prefers the server's client-facing `body.message` (`extractErrorMessage`,
+ * the same helper every other save-error surface in this app uses) over the
+ * SDK's generic `err.message` — for an API error the latter is often just
+ * the HTTP reason phrase (e.g. "conflict"), not anything the server actually
+ * wrote for a human to read. Falls back to the old behavior when there's no
+ * body to read from (network/abort errors).
  */
 function genericErrorMessage(err: unknown): string {
+  const bodyMessage = extractErrorMessage(err);
+  if (bodyMessage) return bodyMessage;
   if (err instanceof VectrosError && err.message) return err.message;
   if (err instanceof Error) return err.message;
   return String(err);

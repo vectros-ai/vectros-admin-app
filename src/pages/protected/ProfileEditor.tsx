@@ -133,7 +133,7 @@ import type {
 } from '../../lib/identityOverrides';
 import { MAX_SCOPE_NAMESPACES } from '../../lib/scopeNamespace';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
-import { statusCodeOf } from '../../lib/apiError';
+import { extractErrorMessage, statusCodeOf } from '../../lib/apiError';
 import { useBeforeNavigate } from '../../lib/useBeforeNavigate';
 import { usePrincipalDirectory, userPrincipalId, userLabel } from '../../lib/usePrincipalDirectory';
 
@@ -518,6 +518,7 @@ export function ProfileEditor(): React.JSX.Element {
             scopes: scopes.map((c) => ({
               allowed_actions: [...c.allowed_actions],
               data_scope: c.data_scope as Record<string, Record<string, unknown>>,
+              granted_capabilities: [...(c.granted_capabilities ?? [])],
             })),
           }),
       ...(identityOverridesValue
@@ -567,6 +568,13 @@ export function ProfileEditor(): React.JSX.Element {
   // conflict — fall through to the generic alert.
   const isDuplicateIdConflict =
     isCreate && saveError != null && statusCodeOf(saveError) === 409;
+
+  // The server's message on a save failure is actionable — e.g. 0.40.0's 400 for
+  // a `usr_` principal that isn't a live user in this tenant, or a 403 naming
+  // the namespace/placement a credential may not write. Surface it beneath the
+  // generic title rather than dropping it. Left off the duplicate-id branch
+  // above, which already renders its own specific message.
+  const saveErrorDetail = extractErrorMessage(saveError);
 
   // ── Render ─────────────────────────────────────────────────────────────
 
@@ -990,6 +998,11 @@ export function ProfileEditor(): React.JSX.Element {
             ) : (
               <ApiErrorAlert error={saveError}>
                 <FormattedMessage id="access.profiles.editor.saveErrorBody" />
+                {saveErrorDetail && (
+                  <Typography variant="caption" component="p" sx={{ mt: 0.5, opacity: 0.85 }}>
+                    {saveErrorDetail}
+                  </Typography>
+                )}
               </ApiErrorAlert>
             ))}
         </Stack>
@@ -1163,6 +1176,7 @@ function CloneProfileDialog({
           scopes: (tpl?.scopes ?? []).map((s) => ({
             allowed_actions: [...(s.allowed_actions ?? [])],
             data_scope: (s.data_scope ?? {}) as Record<string, Record<string, unknown>>,
+            granted_capabilities: [...(s.granted_capabilities ?? [])],
           })),
         };
       } else {
@@ -1173,6 +1187,7 @@ function CloneProfileDialog({
           scopes: (source.scopes ?? []).map((s) => ({
             allowed_actions: [...(s.allowed_actions ?? [])],
             data_scope: (s.data_scope ?? {}) as Record<string, Record<string, unknown>>,
+            granted_capabilities: [...(s.granted_capabilities ?? [])],
           })),
         };
       }

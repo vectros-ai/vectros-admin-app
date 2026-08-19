@@ -23,7 +23,7 @@
 //      - Back returns to the prior step from any non-basics step.
 // ---------------------------------------------------------------------------
 
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createIntl, createIntlCache } from 'react-intl';
@@ -484,6 +484,59 @@ describe('<ScopedKeyCreateDialog>', () => {
     );
   });
 
+  it('BindStep — a created principal survives the initial (still in-flight) listUsers fetch resolving late with the pre-create list (#1002 race)', async () => {
+    // #1002's fix writes the created principal straight into the cache. But
+    // BindStep's OWN initial listUsers fetch — the one that's already
+    // running when the dialog mounts — can still be in flight when that
+    // write happens (it may be draining several pages), and its eventual
+    // resolution carries the PRE-create list. If the fix didn't also cancel
+    // that stale fetch, its late resolution would silently overwrite the
+    // write and reproduce #1002's exact symptom. Prove it doesn't: create
+    // while the initial fetch is deliberately held open, THEN let the stale
+    // fetch resolve, and assert the created row survives.
+    let resolveInitialFetch!: (v: { data: readonly (typeof SAMPLE_USERS)[number][]; nextCursor: null }) => void;
+    const initialFetch = new Promise<{ data: readonly (typeof SAMPLE_USERS)[number][]; nextCursor: null }>((resolve) => {
+      resolveInitialFetch = resolve;
+    });
+    const listUsers = vi.fn().mockReturnValue(initialFetch);
+
+    const user = userEvent.setup();
+    renderDialog({ client: makeMockClient({ listUsers }) });
+    await user.type(screen.getByLabelText(/^key name$/i), 'good-name');
+    await user.click(screen.getByRole('button', { name: /^next$/i }));
+
+    await user.click(screen.getByRole('tab', { name: /services/i }));
+    await user.click(screen.getByRole('button', { name: /create service principal/i }));
+    const subDialog = await screen.findByRole('dialog', { name: /create service principal/i });
+    await user.type(within(subDialog).getByLabelText(/^external id$/i), 'new-service-bot');
+    await user.click(within(subDialog).getByRole('button', { name: /^create$/i }));
+
+    // The regression proof itself: the row appears without ever waiting for
+    // the initial fetch — proving the cache write, not that fetch, is what
+    // renders it.
+    const row = await screen.findByRole('option', { name: /new-service-bot/i });
+    expect(row).toHaveAttribute('aria-selected', 'true');
+
+    // Now let the initial fetch resolve, carrying the PRE-create list
+    // (SAMPLE_USERS). Two things must both hold once this settles: the
+    // just-created row must still be there (this fetch's resolution must
+    // not silently become the sole truth), AND SAMPLE_USERS' own rows —
+    // including 'research-bot', another pre-existing SERVICE row — must
+    // ALSO still be there. An earlier version of this fix got the first
+    // half right by cancelling this fetch outright, which broke the second
+    // half: cancelling the tenant's only in-flight fetch to protect the
+    // optimistic write also discarded every real user that fetch would
+    // have returned.
+    await act(async () => {
+      resolveInitialFetch(pageOf(SAMPLE_USERS));
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole('option', { name: /new-service-bot/i })).toBeInTheDocument(),
+    );
+    expect(screen.getByRole('option', { name: /research-bot/i })).toBeInTheDocument();
+  });
+
   it('ServicePrincipalCreateDialog — surfaces a generic create error IN-dialog with requestId + keeps it open', async () => {
     const user = userEvent.setup();
     const err = new VectrosError({
@@ -720,7 +773,9 @@ describe('<ScopedKeyCreateDialog>', () => {
         contextId: 'partner-api',
         body: {
           principalId: 'usr_u_alice',
-          scopes: [{ allowed_actions: ['records:r'], data_scope: {} }],
+          scopes: [
+            { allowed_actions: ['records:r'], data_scope: {}, granted_capabilities: [] },
+          ],
           status: 'active',
         },
       });
@@ -832,7 +887,7 @@ describe('<ScopedKeyCreateDialog>', () => {
     expect(vectrosApiClient).toHaveBeenCalledWith(TEST_TENANT_ID, 'data-eng');
   });
 
-  it('operates in the ENV-selected tenant, not the active tenant, when they differ (#578)', async () => {
+  it('operates in the ENV-selected tenant, not the active tenant, when they differ', async () => {
     const user = userEvent.setup();
     const LIVE_TENANT = 'tnt_live_11111111';
     // Active tenant = test; a second (live) membership exists. The wizard's env
@@ -917,6 +972,8 @@ describe('<ScopedKeyCreateDialog>', () => {
 
   it('submit error stays on review step + shows the error alert', async () => {
     const user = userEvent.setup();
+    // No `body` on this error — the generic title renders alone (no server
+    // message to surface beneath it via extractErrorMessage).
     const err = new VectrosError({ message: 'backend boom', statusCode: 500 });
     renderDialog({
       client: makeMockClient({
@@ -928,12 +985,34 @@ describe('<ScopedKeyCreateDialog>', () => {
     await user.click(screen.getByRole('button', { name: /^create$/i }));
 
     expect(
-      await screen.findByText(/Could not create scoped key\..*backend boom/i),
+      await screen.findByText(/Could not create scoped key\./i),
     ).toBeInTheDocument();
     // Still on review — the intro paragraph remains visible.
     expect(screen.getByText(/Confirm the details below/i)).toBeInTheDocument();
     // The Create button is back to its enabled "Create" label.
     expect(screen.getByRole('button', { name: /^create$/i })).toBeEnabled();
+  });
+
+  it('submit error surfaces the server-specific message beneath the generic title when the error carries a body (e.g. the 403 for a delegate-mint denial)', async () => {
+    const user = userEvent.setup();
+    const err = new VectrosError({
+      message: 'forbidden',
+      statusCode: 403,
+      body: {
+        message: 'Minting a key bound to a different principal requires the delegate-mint capability.',
+      },
+    });
+    renderDialog({
+      client: makeMockClient({
+        createScopedKey: vi.fn().mockRejectedValue(err),
+      }),
+    });
+    await advancePastBind(user);
+    await advancePastContext(user);
+    await user.click(screen.getByRole('button', { name: /^create$/i }));
+
+    expect(await screen.findByText(/Could not create scoped key\./i)).toBeInTheDocument();
+    expect(screen.getByText(/requires the delegate-mint capability/i)).toBeInTheDocument();
   });
 
   it('submit error is ANNOUNCED via role="alert" and carries the requestId', async () => {

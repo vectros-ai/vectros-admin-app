@@ -11,42 +11,47 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 
 import { AuthProvider } from '@vectros-ai/react';
-import { useAuth } from '@vectros-ai/react';
+import { assertEmbeddedAuth, useAuth } from '@vectros-ai/react';
 import {
   getVectrosApiToken,
   setPartnerApiTokenMinter,
   __resetVectrosApiTokenCacheForTest,
 } from '@vectros-ai/react';
-import type { AuthProviderAdapter, AuthUser, SignInResult, SignUpResult } from '@vectros-ai/react';
+import type {
+  AuthContextValue,
+  AuthUser,
+  EmbeddedCredentialAuth,
+  SignInResult,
+  SignUpResult,
+} from '@vectros-ai/react';
+import { makeMockAuthProvider } from '../test/mockAuthProvider';
+import type { FullMockProvider } from '../test/mockAuthProvider';
+
+/**
+ * This suite tests the PACKAGE's own raw `useAuth()` (unnarrowed — every
+ * embedded method is optional there, present only when the passed-in
+ * provider implements it). The mock here always does, so narrow once for
+ * test ergonomics via `assertEmbeddedAuth` — same pattern (and same reason:
+ * a real runtime check, not a bare cast) as admin-app's own
+ * `src/auth/index.ts` `useAuth` wrapper (not reused here since this suite
+ * deliberately exercises the raw package hook, not the app's narrowed one).
+ */
+function useFullAuth(): AuthContextValue & EmbeddedCredentialAuth {
+  const value = useAuth();
+  assertEmbeddedAuth(value);
+  return value;
+}
 
 /** Build a fully-stubbed adapter; tests override individual methods per case. */
-function mockAdapter(overrides: Partial<AuthProviderAdapter> = {}): AuthProviderAdapter {
-  return {
-    getCurrentUser: vi.fn().mockResolvedValue(null),
+function mockAdapter(overrides: Partial<FullMockProvider> = {}): FullMockProvider {
+  return makeMockAuthProvider({
     signIn: vi.fn().mockResolvedValue({ kind: 'COMPLETE' } satisfies SignInResult),
     confirmSignIn: vi.fn().mockResolvedValue({ kind: 'COMPLETE' } satisfies SignInResult),
     signUp: vi
       .fn()
       .mockResolvedValue({ kind: 'CONFIRMATION_REQUIRED', method: 'CODE' } satisfies SignUpResult),
-    confirmSignUp: vi.fn().mockResolvedValue(undefined),
-    resendSignUpCode: vi.fn().mockResolvedValue(undefined),
-    forgotPassword: vi.fn().mockResolvedValue(undefined),
-    confirmForgotPassword: vi.fn().mockResolvedValue(undefined),
-    changePassword: vi.fn().mockResolvedValue(undefined),
-    signOut: vi.fn().mockResolvedValue(undefined),
-    getIdToken: vi.fn().mockResolvedValue(null),
-    getMemberships: vi.fn().mockResolvedValue([]),
-    getActiveTenant: vi.fn().mockResolvedValue(null),
-    getActivePartnerUserId: vi.fn().mockResolvedValue(null),
-    setActiveTenant: vi.fn().mockResolvedValue(undefined),
-    checkUserExists: vi.fn().mockResolvedValue({ exists: false, isMe: false }),
-    linkInvitation: vi.fn().mockResolvedValue({ tenantId: '', partnerUserId: '', role: 'SUB_USER', alreadyActive: false }),
-    getMfaStatus: vi.fn().mockResolvedValue({ enabled: [], preferred: null }),
-    setUpTotp: vi.fn().mockResolvedValue({ secret: 'MOCKSECRET234567', otpauthUri: 'otpauth://totp/Mock:me?secret=MOCKSECRET234567&issuer=Mock' }),
-    verifyTotpSetup: vi.fn().mockResolvedValue(undefined),
-    disableTotp: vi.fn().mockResolvedValue(undefined),
     ...overrides,
-  };
+  });
 }
 
 const aliceUser: AuthUser = {
@@ -56,7 +61,7 @@ const aliceUser: AuthUser = {
   lastName: 'Smith',
 };
 
-function wrap(provider: AuthProviderAdapter) {
+function wrap(provider: FullMockProvider) {
   return function Wrapper({ children }: { readonly children: ReactNode }) {
     return <AuthProvider provider={provider}>{children}</AuthProvider>;
   };
@@ -79,7 +84,7 @@ describe('useAuth', () => {
 describe('<AuthProvider> initial-load behavior', () => {
   it('starts in loading=true with user=null, then resolves to no-session', async () => {
     const provider = mockAdapter({ getCurrentUser: vi.fn().mockResolvedValue(null) });
-    const { result } = renderHook(() => useAuth(), { wrapper: wrap(provider) });
+    const { result } = renderHook(() => useFullAuth(), { wrapper: wrap(provider) });
     expect(result.current.loading).toBe(true);
     expect(result.current.user).toBeNull();
     expect(result.current.isAuthenticated).toBe(false);
@@ -94,7 +99,7 @@ describe('<AuthProvider> initial-load behavior', () => {
     const provider = mockAdapter({
       getCurrentUser: vi.fn().mockResolvedValue(aliceUser),
     });
-    const { result } = renderHook(() => useAuth(), { wrapper: wrap(provider) });
+    const { result } = renderHook(() => useFullAuth(), { wrapper: wrap(provider) });
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
     });
@@ -114,7 +119,7 @@ describe('<AuthProvider> signIn flow', () => {
         .mockResolvedValueOnce(aliceUser),
       signIn: vi.fn().mockResolvedValue({ kind: 'COMPLETE' } satisfies SignInResult),
     });
-    const { result } = renderHook(() => useAuth(), { wrapper: wrap(provider) });
+    const { result } = renderHook(() => useFullAuth(), { wrapper: wrap(provider) });
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
     });
@@ -139,7 +144,7 @@ describe('<AuthProvider> signIn flow', () => {
         .fn()
         .mockResolvedValue({ kind: 'MFA_REQUIRED', methods: ['TOTP'] } satisfies SignInResult),
     });
-    const { result } = renderHook(() => useAuth(), { wrapper: wrap(provider) });
+    const { result } = renderHook(() => useFullAuth(), { wrapper: wrap(provider) });
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
     });
@@ -160,7 +165,7 @@ describe('<AuthProvider> confirmSignIn flow', () => {
       getCurrentUser: vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(aliceUser),
       confirmSignIn: vi.fn().mockResolvedValue({ kind: 'COMPLETE' } satisfies SignInResult),
     });
-    const { result } = renderHook(() => useAuth(), { wrapper: wrap(provider) });
+    const { result } = renderHook(() => useFullAuth(), { wrapper: wrap(provider) });
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
     });
@@ -178,7 +183,7 @@ describe('<AuthProvider> signOut flow', () => {
     const provider = mockAdapter({
       getCurrentUser: vi.fn().mockResolvedValue(aliceUser),
     });
-    const { result } = renderHook(() => useAuth(), { wrapper: wrap(provider) });
+    const { result } = renderHook(() => useFullAuth(), { wrapper: wrap(provider) });
     await waitFor(() => {
       expect(result.current.user).toEqual(aliceUser);
     });
@@ -207,7 +212,7 @@ describe('<AuthProvider> signOut flow', () => {
     setPartnerApiTokenMinter(minter);
 
     const provider = mockAdapter({ getCurrentUser: vi.fn().mockResolvedValue(aliceUser) });
-    const { result } = renderHook(() => useAuth(), { wrapper: wrap(provider) });
+    const { result } = renderHook(() => useFullAuth(), { wrapper: wrap(provider) });
     await waitFor(() => {
       expect(result.current.user).toEqual(aliceUser);
     });
@@ -239,7 +244,7 @@ describe('<AuthProvider> pass-through operations', () => {
     } satisfies SignUpResult);
     const provider = mockAdapter({ signUp: signUpSpy });
 
-    const { result } = renderHook(() => useAuth(), { wrapper: wrap(provider) });
+    const { result } = renderHook(() => useFullAuth(), { wrapper: wrap(provider) });
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
     });
@@ -269,7 +274,7 @@ describe('<AuthProvider> pass-through operations', () => {
     const provider = mockAdapter({
       getIdToken: vi.fn().mockResolvedValue('eyJ.id.token'),
     });
-    const { result } = renderHook(() => useAuth(), { wrapper: wrap(provider) });
+    const { result } = renderHook(() => useFullAuth(), { wrapper: wrap(provider) });
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
     });

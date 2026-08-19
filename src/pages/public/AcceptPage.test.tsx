@@ -16,10 +16,12 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router';
 
-import { AuthProvider } from '../../auth';
+import { AuthProvider, CurrentTenantProvider } from '../../auth';
 import { AuthError } from '../../auth';
 import type * as InviteTokenModule from '../../invitations/token';
-import type { AuthProviderAdapter, SignUpResult } from '../../auth';
+import type { SignUpResult } from '../../auth';
+import { makeMockAuthProvider } from '../../test/mockAuthProvider';
+import type { FullMockProvider } from '../../test/mockAuthProvider';
 import type { InviteTokenDecodeResult } from '../../invitations/token';
 import { AcceptPage } from './AcceptPage';
 import { TestIntlProvider } from '../../test/intl';
@@ -86,45 +88,13 @@ async function structuralMockDecode(raw: string): Promise<InviteTokenDecodeResul
   };
 }
 
-function mockAdapter(overrides: Partial<AuthProviderAdapter> = {}): AuthProviderAdapter {
-  return {
-    getCurrentUser: vi.fn().mockResolvedValue(null),
-    signIn: vi.fn(),
-    confirmSignIn: vi.fn(),
+function mockAdapter(overrides: Partial<FullMockProvider> = {}): FullMockProvider {
+  return makeMockAuthProvider({
     signUp: vi
       .fn()
       .mockResolvedValue({ kind: 'CONFIRMATION_REQUIRED', method: 'CODE' } satisfies SignUpResult),
-    confirmSignUp: vi.fn(),
-    resendSignUpCode: vi.fn(),
-    forgotPassword: vi.fn(),
-    confirmForgotPassword: vi.fn(),
-    changePassword: vi.fn(),
-    signOut: vi.fn(),
-    getIdToken: vi.fn(),
-    getMemberships: vi.fn().mockResolvedValue([]),
-    getActiveTenant: vi.fn().mockResolvedValue(null),
-    getActivePartnerUserId: vi.fn().mockResolvedValue(null),
-    setActiveTenant: vi.fn().mockResolvedValue(undefined),
-    checkUserExists: vi.fn().mockResolvedValue({ exists: false, isMe: false }),
-    linkInvitation: vi
-      .fn()
-      .mockResolvedValue({
-        tenantId: '',
-        partnerUserId: '',
-        role: 'SUB_USER',
-        alreadyActive: false,
-      }),
-    getMfaStatus: vi.fn().mockResolvedValue({ enabled: [], preferred: null }),
-    setUpTotp: vi
-      .fn()
-      .mockResolvedValue({
-        secret: 'MOCKSECRET234567',
-        otpauthUri: 'otpauth://totp/Mock:me?secret=MOCKSECRET234567&issuer=Mock',
-      }),
-    verifyTotpSetup: vi.fn().mockResolvedValue(undefined),
-    disableTotp: vi.fn().mockResolvedValue(undefined),
     ...overrides,
-  };
+  });
 }
 
 function base64UrlEncode(s: string): string {
@@ -147,16 +117,22 @@ function makeToken(overrides: Record<string, unknown> = {}, expSecondsFromNow = 
   return `inv_${header}.${body}.sig`;
 }
 
-function renderAccept(provider: AuthProviderAdapter, queryString = '') {
+function renderAccept(provider: FullMockProvider, queryString = '') {
   return render(
     <TestIntlProvider>
       <MemoryRouter initialEntries={[`/accept${queryString}`]}>
         <AuthProvider provider={provider}>
-          <Routes>
-            <Route path="/accept" element={<AcceptPage />} />
-            <Route path="/confirm" element={<ConfirmCaptured />} />
-            <Route path="/login" element={<div>login page</div>} />
-          </Routes>
+          {/* AutoLinkCard's linkInvitation is a VectrosTenancyProvider method,
+              surfaced via useCurrentTenant() — see AcceptPage.tsx's module
+              header. Seeded so mounting doesn't trigger a real (unmocked)
+              membership load these tests don't care about. */}
+          <CurrentTenantProvider tenancyProvider={provider} initialMemberships={[]}>
+            <Routes>
+              <Route path="/accept" element={<AcceptPage />} />
+              <Route path="/confirm" element={<ConfirmCaptured />} />
+              <Route path="/login" element={<div>login page</div>} />
+            </Routes>
+          </CurrentTenantProvider>
         </AuthProvider>
       </MemoryRouter>
     </TestIntlProvider>,

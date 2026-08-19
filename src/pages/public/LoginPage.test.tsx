@@ -13,49 +13,21 @@ import { MemoryRouter, Route, Routes } from 'react-router';
 
 import { AuthProvider } from '../../auth';
 import { AuthError } from '../../auth';
-import type { AuthProviderAdapter, AuthUser, SignInResult, SignUpResult } from '../../auth';
+import type { AuthUser, SignInResult, SignUpResult } from '../../auth';
+import { makeMockAuthProvider } from '../../test/mockAuthProvider';
+import type { FullMockProvider } from '../../test/mockAuthProvider';
 import { LoginPage } from './LoginPage';
 import { TestIntlProvider } from '../../test/intl';
 
-function mockAdapter(overrides: Partial<AuthProviderAdapter> = {}): AuthProviderAdapter {
-  return {
-    getCurrentUser: vi.fn().mockResolvedValue(null),
+function mockAdapter(overrides: Partial<FullMockProvider> = {}): FullMockProvider {
+  return makeMockAuthProvider({
     signIn: vi.fn().mockResolvedValue({ kind: 'COMPLETE' } satisfies SignInResult),
     confirmSignIn: vi.fn().mockResolvedValue({ kind: 'COMPLETE' } satisfies SignInResult),
     signUp: vi
       .fn()
       .mockResolvedValue({ kind: 'CONFIRMATION_REQUIRED', method: 'CODE' } satisfies SignUpResult),
-    confirmSignUp: vi.fn(),
-    resendSignUpCode: vi.fn(),
-    forgotPassword: vi.fn(),
-    confirmForgotPassword: vi.fn(),
-    changePassword: vi.fn(),
-    signOut: vi.fn(),
-    getIdToken: vi.fn(),
-    getMemberships: vi.fn().mockResolvedValue([]),
-    getActiveTenant: vi.fn().mockResolvedValue(null),
-    getActivePartnerUserId: vi.fn().mockResolvedValue(null),
-    setActiveTenant: vi.fn().mockResolvedValue(undefined),
-    checkUserExists: vi.fn().mockResolvedValue({ exists: false, isMe: false }),
-    linkInvitation: vi
-      .fn()
-      .mockResolvedValue({
-        tenantId: '',
-        partnerUserId: '',
-        role: 'SUB_USER',
-        alreadyActive: false,
-      }),
-    getMfaStatus: vi.fn().mockResolvedValue({ enabled: [], preferred: null }),
-    setUpTotp: vi
-      .fn()
-      .mockResolvedValue({
-        secret: 'MOCKSECRET234567',
-        otpauthUri: 'otpauth://totp/Mock:me?secret=MOCKSECRET234567&issuer=Mock',
-      }),
-    verifyTotpSetup: vi.fn().mockResolvedValue(undefined),
-    disableTotp: vi.fn().mockResolvedValue(undefined),
     ...overrides,
-  };
+  });
 }
 
 const aliceUser: AuthUser = {
@@ -66,7 +38,7 @@ const aliceUser: AuthUser = {
 };
 
 function renderLogin(
-  provider: AuthProviderAdapter,
+  provider: FullMockProvider,
   opts: { initialPath?: string; initialState?: unknown } = {},
 ) {
   return render(

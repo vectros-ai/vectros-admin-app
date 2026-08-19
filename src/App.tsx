@@ -56,7 +56,7 @@ import { NotFoundPage } from './pages/public/NotFoundPage';
 // These are the real `resource:ops` grammar (see `RESOURCE_CATALOG` in
 // components/ScopeEditor.tsx) — NOT the `admin:<resource>` spelling this
 // table previously used. `admin:users`/`admin:keys`/`admin:logs`/
-// `admin:profiles` are unauthorable: TokenScope's action grammar rejects any
+// `admin:profiles` are unauthorable: the platform's scope grammar rejects any
 // op letter outside `cruds`, and none of those legacy strings' post-colon
 // segments are — so no stored scope can ever carry them, and `RequireScope`/
 // `ScopeGate` passed ONLY for a wildcard `*` credential. A sub-user's grant,
@@ -155,15 +155,16 @@ export default function App(): React.JSX.Element {
         {/* App Contexts + their Roles + Profiles. The /access root redirects to
             /access/contexts — the contexts list, which is always the landing
             surface (clicking a row opens its detail).
-            The context list/detail routes gate on ADMIN_ACTIONS.contexts
-            (`app-contexts:r`); the nested role/profile ITEM editors gate on
-            ADMIN_ACTIONS.profiles (`profiles:r`) instead — different backend
-            resource, see that constant's comment. NOTE: ContextDetailPage's
-            OWN list-roles/list-profiles calls also need `profiles:r`, which
-            this route-level gate (app-contexts:r only) doesn't confirm — a
-            session holding app-contexts:r but not profiles:r reaches the page
-            and 403s loading its tabs. Tracked as a follow-up alongside the
-            editors' own action gates (RequireScope only checks ONE action). */}
+            The contexts LIST route gates on ADMIN_ACTIONS.contexts
+            (`app-contexts:r`) alone; the nested role/profile ITEM editors gate
+            on ADMIN_ACTIONS.profiles (`profiles:r`) instead — different
+            backend resource, see that constant's comment.
+            The context DETAIL route requires BOTH: ContextDetailPage's own
+            list-roles/list-profiles calls need `profiles:r` in addition to
+            the `app-contexts:r` its header needs, so a session holding only
+            one of the two is redirected here rather than reaching a page
+            whose tabs silently 403. RequireScope only checks ONE
+            action, so the two gates nest instead of extending the component. */}
         <Route path="/access" element={<Navigate to="/access/contexts" replace />} />
         <Route
           path="/access/contexts"
@@ -171,7 +172,13 @@ export default function App(): React.JSX.Element {
         />
         <Route
           path="/access/contexts/:ctxId"
-          element={<RequireScope action={ADMIN_ACTIONS.contexts}><ContextDetailPage /></RequireScope>}
+          element={
+            <RequireScope action={ADMIN_ACTIONS.contexts}>
+              <RequireScope action={ADMIN_ACTIONS.profiles}>
+                <ContextDetailPage />
+              </RequireScope>
+            </RequireScope>
+          }
         />
         <Route
           path="/access/contexts/:ctxId/roles/:tplId"

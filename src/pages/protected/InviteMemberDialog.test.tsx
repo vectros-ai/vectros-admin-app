@@ -209,6 +209,46 @@ describe('InviteMemberDialog', () => {
     });
   });
 
+  it('renders the generic error, not the email-exists message, on a 409 with no body.error (0.40.0 uniform invite conflict)', async () => {
+    // 0.40.0: a scoped credential (ssk_*/st_*) no longer receives the
+    // structured `email_already_associated` code on this endpoint — all
+    // three collision causes now return the same bare 409. Only a root key
+    // still gets the structured body; this test locks in that the UI's
+    // existing branch (which only matches when body.error is present) falls
+    // through to the generic message rather than mismatching on undefined.
+    const uniformConflict = new VectrosError({
+      message: 'conflict',
+      statusCode: 409,
+      body: { message: 'Address unavailable.', requestId: 'corr-inv-uniform' },
+    });
+    renderDialog({
+      client: makeMockClient({
+        createInvite: vi.fn().mockRejectedValue(uniformConflict),
+      }),
+    });
+
+    const user = userEvent.setup();
+    await waitFor(() =>
+      expect(screen.getByRole('combobox', { name: /access profile role/i })).toBeInTheDocument(),
+    );
+    await user.type(
+      screen.getByLabelText(/email address/i),
+      'alice@example.com',
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /send invite/i })).toBeEnabled(),
+    );
+    await user.click(screen.getByRole('button', { name: /send invite/i }));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/already a member of your organization/i),
+      ).not.toBeInTheDocument();
+      const alert = screen.getByRole('alert');
+      expect(alert).toHaveTextContent(/reference id:\s*corr-inv-uniform/i);
+    });
+  });
+
   it('renders the generic error via ApiErrorAlert (announced + requestId)', async () => {
     const err = new VectrosError({
       message: 'Internal Server Error',

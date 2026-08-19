@@ -12,34 +12,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router';
 
 import { AuthProvider } from '../../auth';
-import type { AuthProviderAdapter, AuthUser } from '../../auth';
+import type { AuthUser } from '../../auth';
+import { makeMockAuthProvider } from '../../test/mockAuthProvider';
+import type { FullMockProvider } from '../../test/mockAuthProvider';
 import { WelcomePage } from './WelcomePage';
 import { TestIntlProvider } from '../../test/intl';
 
-function mockAdapter(user: AuthUser | null): AuthProviderAdapter {
-  return {
-    getCurrentUser: vi.fn().mockResolvedValue(user),
-    signIn: vi.fn(),
-    confirmSignIn: vi.fn(),
-    signUp: vi.fn(),
-    confirmSignUp: vi.fn(),
-    resendSignUpCode: vi.fn(),
-    forgotPassword: vi.fn(),
-    confirmForgotPassword: vi.fn(),
-    changePassword: vi.fn(),
-    signOut: vi.fn(),
-    getIdToken: vi.fn(),
-    getMemberships: vi.fn().mockResolvedValue([]),
-    getActiveTenant: vi.fn().mockResolvedValue(null),
-    getActivePartnerUserId: vi.fn().mockResolvedValue(null),
-    setActiveTenant: vi.fn().mockResolvedValue(undefined),
-    checkUserExists: vi.fn().mockResolvedValue({ exists: false, isMe: false }),
-    linkInvitation: vi.fn().mockResolvedValue({ tenantId: '', partnerUserId: '', role: 'SUB_USER', alreadyActive: false }),
-    getMfaStatus: vi.fn().mockResolvedValue({ enabled: [], preferred: null }),
-    setUpTotp: vi.fn().mockResolvedValue({ secret: 'MOCKSECRET234567', otpauthUri: 'otpauth://totp/Mock:me?secret=MOCKSECRET234567&issuer=Mock' }),
-    verifyTotpSetup: vi.fn().mockResolvedValue(undefined),
-    disableTotp: vi.fn().mockResolvedValue(undefined),
-  };
+function mockAdapter(user: AuthUser | null): FullMockProvider {
+  return makeMockAuthProvider({ getCurrentUser: vi.fn().mockResolvedValue(user) });
 }
 
 function renderWelcome(user: AuthUser | null) {

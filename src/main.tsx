@@ -22,11 +22,10 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
 
 import App from './App';
-import {
-  AuthProvider,
-  CognitoAuthProvider,
-  CurrentTenantProvider,
-} from './auth';
+import { AuthProvider, CurrentTenantProvider } from './auth';
+// CognitoAuthProvider is its own subpath (not value-exported from the main
+// @vectros-ai/react barrel — see that package's tsup.config.ts for why).
+import { CognitoAuthProvider } from '@vectros-ai/react/providers/cognito';
 import { wirePartnerApiTokenMinter } from './auth/wireTokenMinter';
 import { COGNITO_CONFIG, API_CONFIG } from './config';
 import { BRAND } from './brand';
@@ -133,7 +132,7 @@ ReactDOM.createRoot(rootElement).render(
                   memberships from the auth adapter (and on switch, refreshes the
                   JWT + re-keys the partner-API token cache).
                 */}
-                <CurrentTenantProvider>
+                <CurrentTenantProvider tenancyProvider={authProvider}>
                   <App />
                 </CurrentTenantProvider>
               </AuthProvider>

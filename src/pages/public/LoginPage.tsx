@@ -13,10 +13,14 @@
 //                ─confirmSignIn()→ AuthError       ──→ inline error
 //                ─"back to sign in"                ──→ credentials stage
 //
-// The page is auth-provider-agnostic — it consumes only useAuth() + the
-// normalized SignInResult union from src/auth/types.ts + the AuthError code
-// from src/auth/errors.ts. Swap CognitoAuthProvider for Auth0AuthProvider
-// without touching this file.
+// This page is Cognito/embedded-specific by construction: it destructures
+// signIn/confirmSignIn straight off useAuth(), which are
+// EmbeddedCredentialAuth-only methods a hosted-redirect provider (Auth0
+// Universal Login) doesn't implement — this app's useAuth() (src/auth/index.ts)
+// asserts that facet is present, so wiring in Auth0AuthProvider throws
+// immediately on mount here rather than silently degrading. A fork on Auth0
+// wouldn't route through this page at all: sign-in is Auth0's own hosted UI,
+// reached via signInWithRedirect() instead.
 // ---------------------------------------------------------------------------
 
 import { useState } from 'react';
