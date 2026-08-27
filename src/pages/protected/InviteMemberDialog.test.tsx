@@ -8,7 +8,10 @@
 //      acceptUrl + 7-day TTL.
 //   4. Successful invite triggers onSuccess.
 //   5. 409 + body.error === 'email_already_associated' → inline message
-//      explaining the shared-Cognito-pool placeholder.
+//      naming the SUSPENDED-membership-in-another-context cause (the only
+//      cause left that returns this structured body, now that an ACTIVE or
+//      still-PENDING membership in a different context grants access there
+//      instead of colliding).
 //   6. Generic error → generic message.
 //   7. sendEmail=false success surfaces the inviteToken + acceptLink.
 // ---------------------------------------------------------------------------
@@ -173,7 +176,7 @@ describe('InviteMemberDialog', () => {
     expect(onSuccess).toHaveBeenCalled();
   });
 
-  it('shows the email-already-associated message on 409 with body.error', async () => {
+  it('shows the suspended-elsewhere message on 409 with body.error', async () => {
     const conflict = new VectrosError({
       message: 'conflict',
       statusCode: 409,
@@ -204,7 +207,7 @@ describe('InviteMemberDialog', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText(/already a member of your organization/i),
+        screen.getByText(/suspended membership in this tenant/i),
       ).toBeInTheDocument();
     });
   });
@@ -242,7 +245,7 @@ describe('InviteMemberDialog', () => {
 
     await waitFor(() => {
       expect(
-        screen.queryByText(/already a member of your organization/i),
+        screen.queryByText(/suspended membership in this tenant/i),
       ).not.toBeInTheDocument();
       const alert = screen.getByRole('alert');
       expect(alert).toHaveTextContent(/reference id:\s*corr-inv-uniform/i);

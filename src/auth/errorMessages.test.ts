@@ -80,4 +80,12 @@ describe('authErrorToMessage', () => {
       'A network problem occurred. Check your connection and try again.',
     );
   });
+
+  it('matches the EMAIL_NOT_VERIFIED catalog message', () => {
+    const intl = makeIntl();
+    const err = new AuthError('EMAIL_NOT_VERIFIED', 'unauthorized');
+    expect(authErrorToMessage(intl, err)).toBe(
+      'Please verify your email before signing in — check your inbox for a verification link, then come back and try again.',
+    );
+  });
 });

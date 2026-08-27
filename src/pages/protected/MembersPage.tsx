@@ -72,6 +72,7 @@ import {
 import RefreshIcon from '@mui/icons-material/Refresh';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import ForwardToInboxIcon from '@mui/icons-material/ForwardToInbox';
+import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import { FormattedMessage, useIntl } from 'react-intl';
 import {
   useMutation,
@@ -81,7 +82,8 @@ import {
 } from '@tanstack/react-query';
 import { ConfirmDialog, LoadingBlock, useScopeGate } from '@vectros-ai/react';
 
-import { useActiveTenantId, useCurrentTenant } from '../../auth';
+import { useActiveTenantId, useAuth, useCurrentTenant } from '../../auth';
+import type { AccountOwnerTransferResult } from '../../api/developerApi';
 import { RESERVED_DEFAULT_CONTEXT_ID } from '../../lib/reservedContexts';
 import { BRAND } from '../../brand';
 import { VectrosError, vectrosApiClient } from '../../api/vectrosApi';
@@ -95,6 +97,7 @@ import { extractErrorMessage } from '../../lib/apiError';
 import { ApiErrorAlert } from '../../components/ApiErrorAlert';
 import { RequestIdCaption } from '../../components/RequestIdCaption';
 import { InviteMemberDialog } from './InviteMemberDialog';
+import { TransferOwnershipDialog } from './TransferOwnershipDialog';
 
 /**
  * The AppContext this page's member profiles live in. Aliased (rather than
@@ -110,7 +113,13 @@ export function MembersPage(): React.JSX.Element {
   const intl = useIntl();
   const tenant = useActiveTenantId();
   const { activeMembership } = useCurrentTenant();
+  const { user } = useAuth();
   const queryClient = useQueryClient();
+
+  // Only an OWNER's Cognito session can call POST /developer/account-owner —
+  // the developer-API router's OWNER-only-by-default gate 403s a sub-user
+  // unconditionally, so a non-owner never sees the action at all.
+  const isOwner = activeMembership?.role === 'OWNER';
 
   // Invitations always land in the LIVE tenant, whichever tenant is selected
   // here: the server resolves the target tenant from the account, not from the
@@ -201,6 +210,7 @@ export function MembersPage(): React.JSX.Element {
 
   const [inviteOpen, setInviteOpen] = useState(false);
   const [revokeTarget, setRevokeTarget] = useState<UserResponse | null>(null);
+  const [transferTarget, setTransferTarget] = useState<UserResponse | null>(null);
 
   // A transient page-level SUCCESS banner (revoke / resend confirmations).
   // Errors no longer share this surface: a revoke error renders IN the
@@ -209,8 +219,14 @@ export function MembersPage(): React.JSX.Element {
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   // Mutations — both invalidate ['members', tenant] on success so the
-  // table refetches automatically. `actionInFlight` derives from both
-  // mutations' `isPending` flags to guard the per-row action buttons.
+  // table refetches automatically. `actionInFlight` derives from these two
+  // mutations' `isPending` flags PLUS the transfer dialog being open (its
+  // own mutation lives inside TransferOwnershipDialog, so its pending state
+  // isn't visible here — `transferTarget !== null` stands in for it) to
+  // guard the per-row action buttons. Belt-and-braces: the dialog's own
+  // modal backdrop already blocks clicks on the table underneath it while
+  // open, so this is defense in depth, not the only thing stopping a
+  // concurrent Resend/Revoke during a transfer.
   const resendMutation = useMutation({
     mutationFn: (vars: { email: string; roleId: string }) =>
       vectrosApiClient(tenant).auth.resendInvite({
@@ -235,7 +251,8 @@ export function MembersPage(): React.JSX.Element {
     },
   });
 
-  const actionInFlight = resendMutation.isPending || deleteMutation.isPending;
+  const actionInFlight =
+    resendMutation.isPending || deleteMutation.isPending || transferTarget !== null;
 
   // Client-side scope gate for Resend. The backend's `/resend` route requires
   // `users:c` + `users:r` + `users:u` (the `c` requirement is a deliberate,
@@ -275,6 +292,21 @@ export function MembersPage(): React.JSX.Element {
     void queryClient.invalidateQueries({ queryKey: ['members', tenant] });
   };
 
+  // The transfer already happened server-side by the time this fires — the
+  // banner reports it, it doesn't ask for confirmation. Refetching the list
+  // is best-effort: this session's OWNER-gated read of it may itself now
+  // 403 (the caller just gave up the role that let them list AccessProfiles
+  // in MEMBERS_CONTEXT_ID), and the existing `membersQuery.isError` alert
+  // already has a path for that.
+  const handleTransferSuccess = (
+    _result: AccountOwnerTransferResult,
+    email: string,
+  ): void => {
+    setTransferTarget(null);
+    setSuccessMessage(intl.formatMessage({ id: 'members.transferSuccess' }, { email }));
+    void queryClient.invalidateQueries({ queryKey: ['members', tenant] });
+  };
+
   // Resend re-mints a fresh token. The SDK's resendInvite requires the
   // same body shape as createInvite; we re-derive what we can from the
   // current row (email + the bound role). For a fully-fledged resend
@@ -297,6 +329,21 @@ export function MembersPage(): React.JSX.Element {
     const profile = profilesByPrincipal[`usr_${member.id}`];
     const roleId =
       profile && profile !== 'error' ? profile.roleId : undefined;
+    // roleId is absent for a 2+-role composition (roleIds-only, 0.41.0) as
+    // well as for a genuinely role-less member — resendInvite takes a
+    // single roleId (same shape as createInvite), so a multi-role member
+    // can't be resent from here today. Distinguish the two rather than
+    // reporting "no role" for someone who genuinely has roles (the same
+    // roleId-only blind spot as ProfileEditor/RoleEditor/ContextDetailPage).
+    const isMultiRole =
+      !!profile &&
+      profile !== 'error' &&
+      !profile.roleId &&
+      (profile.roleIds?.length ?? 0) > 0;
+    if (isMultiRole) {
+      setResendGuardMessage(intl.formatMessage({ id: 'members.resendMultiRole' }));
+      return;
+    }
     if (!roleId) {
       setResendGuardMessage(intl.formatMessage({ id: 'members.resendNoRole' }));
       return;
@@ -511,6 +558,32 @@ export function MembersPage(): React.JSX.Element {
                 // row index (never Math.random(), which re-keys every render
                 // and would defeat React reconciliation).
                 const rowKey = member.id ?? member.email ?? member.externalId ?? `row-${idx}`;
+                // Transfer-ownership row eligibility. Only an OWNER can call
+                // POST /developer/account-owner (the developer router 403s
+                // any other caller unconditionally), so this hides for a
+                // sub-user rather than rendering permanently disabled on
+                // every row. Row-eligible only: HUMAN (a SERVICE principal
+                // has no Cognito session to sign in with and hold
+                // ownership), ACTIVE (a PENDING invite has no
+                // externalSubject yet — the backend's own 400 for that
+                // case), and not the caller's own row. `isSelf` requires
+                // `user?.sub` to be genuinely present — a bare
+                // `member.externalSubject === user?.sub` would read BOTH
+                // sides as `undefined` (session still loading, or a legacy
+                // row with no externalSubject) and misfire as "this IS me"
+                // for every such row; that legacy case must still show the
+                // action and let the backend refuse with its own "not
+                // signed in" message, not be silently hidden. The backend
+                // remains authoritative for all of this either way.
+                const isSelf = Boolean(user?.sub && member.externalSubject === user.sub);
+                const canTransferOwnership =
+                  isOwner && member.type === 'HUMAN' && member.status === 'ACTIVE' && !isSelf;
+                // Computed once per eligible row and reused for both the Tooltip
+                // title and the IconButton's aria-label below, rather than
+                // formatting the same message twice.
+                const transferLabel = canTransferOwnership
+                  ? intl.formatMessage({ id: 'members.actionTransferOwnership' })
+                  : '';
                 return (
                   <TableRow key={rowKey}>
                     <TableCell>{member.email ?? member.externalId ?? '—'}</TableCell>
@@ -561,12 +634,32 @@ export function MembersPage(): React.JSX.Element {
                           to={`/access/contexts/${MEMBERS_CONTEXT_ID}/profiles/${encodeURIComponent(profile.principalId ?? '')}`}
                           variant="body2"
                         >
-                          {profile.roleId ?? profile.principalId}
+                          {profile.roleId ??
+                            (profile.roleIds && profile.roleIds.length > 0
+                              ? intl.formatMessage(
+                                  { id: 'access.profiles.sourceMultiRole' },
+                                  { count: profile.roleIds.length, roleIds: profile.roleIds.join(', ') },
+                                )
+                              : profile.principalId)}
                         </Link>
                       )}
                     </TableCell>
                     <TableCell align="right">
                       <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                        {canTransferOwnership && (
+                          <Tooltip title={transferLabel}>
+                            <span>
+                              <IconButton
+                                size="small"
+                                onClick={() => setTransferTarget(member)}
+                                disabled={actionInFlight}
+                                aria-label={transferLabel}
+                              >
+                                <SwapHorizIcon fontSize="small" />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                        )}
                         {member.status === 'PENDING' && (
                           <Tooltip
                             title={intl.formatMessage({
@@ -628,6 +721,12 @@ export function MembersPage(): React.JSX.Element {
         open={inviteOpen}
         onClose={() => setInviteOpen(false)}
         onSuccess={handleInviteSuccess}
+      />
+
+      <TransferOwnershipDialog
+        member={transferTarget}
+        onClose={() => setTransferTarget(null)}
+        onSuccess={handleTransferSuccess}
       />
 
       {/* Revoke confirmation — ConfirmDialog bakes in a collision-free

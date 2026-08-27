@@ -405,7 +405,13 @@ function ProfilesTab({ ctxId }: { ctxId: string }): React.JSX.Element {
   // a filter param the tab shows all profiles in the context.
   const visibleProfiles = useMemo(() => {
     if (!filterRoleId) return profiles;
-    return profiles.filter((p) => p.roleId === filterRoleId);
+    // roleId-only misses a profile that references filterRoleId via
+    // multi-role composition (roleIds) — same blind spot as RoleEditor's
+    // own referencingCount, which this filter's callers rely on being
+    // consistent with (the "View referencing profiles" link).
+    return profiles.filter(
+      (p) => p.roleId === filterRoleId || (p.roleIds?.includes(filterRoleId) ?? false),
+    );
   }, [profiles, filterRoleId]);
 
   return (
@@ -529,6 +535,11 @@ function ProfileRow({
   const isUser = principal.kind === 'user';
   const isKey = principal.kind === 'key';
   const sourceIsRole = !!profile.roleId;
+  // `roleId` is absent for a 2+-role composition (roleIds-only, 0.41.0) —
+  // without this, such a profile fell through to the "inline" chip below
+  // showing "Inline: 0 scopes" (scopes is also absent on that shape),
+  // which reads as an empty/broken grant rather than what it actually is.
+  const sourceIsMultiRole = !profile.roleId && (profile.roleIds?.length ?? 0) > 0;
   const updated = profile.lastModified ?? profile.createdAt;
   // Surface the canonical namespaced override VALUES (scope:org / scope:client /
   // custom scope:<ns>), not just a count — ownership dimensions are always
@@ -618,6 +629,16 @@ function ProfileRow({
               );
             }}
             sx={{ cursor: 'pointer' }}
+          />
+        ) : sourceIsMultiRole ? (
+          <Chip
+            size="small"
+            label={
+              <FormattedMessage
+                id="access.profiles.sourceMultiRole"
+                values={{ count: profile.roleIds?.length ?? 0, roleIds: (profile.roleIds ?? []).join(', ') }}
+              />
+            }
           />
         ) : (
           <Chip

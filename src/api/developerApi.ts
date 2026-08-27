@@ -75,6 +75,66 @@ export interface CreateAppContextInput {
 export type TenantKind = 'live' | 'test';
 
 /**
+ * An opt-in self-service signup rule on a registered issuer: a caller-nameable `signupType` paired
+ * with the role a brand-new, no-invite exchange caller is bound to.
+ */
+export interface SelfSignupPolicy {
+  readonly signup_type: string;
+  readonly role_id: string;
+}
+
+/**
+ * A registered trusted third-party IdP issuer, as returned by the Developer API's issuer routes.
+ * Mirrors most of the partner API's issuer shape. Carries no secrets — `jwksUri` is a public
+ * discovery endpoint, not a credential. **Gap:** the platform's `userinfoUri` field (an OIDC
+ * userinfo-endpoint email-resolution fallback) isn't typed here and isn't shown by this UI —
+ * this surface hasn't caught up to it yet. Use the CLI/SDK to read or set it.
+ */
+export interface IssuerSummary {
+  readonly issuerId?: string;
+  readonly issuer?: string;
+  readonly jwksUri?: string;
+  readonly audience?: string;
+  readonly contextId?: string;
+  readonly subClaim?: string;
+  readonly emailClaim?: string;
+  /** `active` | `suspended`. A suspended issuer's tokens are rejected at exchange time identically
+   *  to an unregistered issuer. */
+  readonly status?: string;
+  /** ISO-8601 UTC registration timestamp. */
+  readonly createdAt?: string;
+  readonly selfSignupPolicies?: ReadonlyArray<SelfSignupPolicy>;
+}
+
+/** One page of the `{ data, nextCursor }` issuer list envelope. */
+export interface IssuerPage {
+  readonly data: ReadonlyArray<IssuerSummary>;
+  readonly nextCursor: string | null;
+}
+
+/**
+ * Partial-update request body for a registered issuer's SAFE fields only. `issuer`/`jwksUri`/
+ * `audience`/`contextId` are trust-anchor / routing-pin fields — they are not part of this input
+ * shape at all, so this client can never even attempt to change them; the server would reject a
+ * differing value anyway. Fields omitted here leave the stored value unchanged. **`userinfoUri` is
+ * ALSO a platform safe field but isn't part of this input shape yet** — this UI can't set it; use
+ * the CLI/SDK.
+ */
+export interface UpdateIssuerInput {
+  readonly subClaim?: string;
+  readonly emailClaim?: string;
+  readonly status?: string;
+  readonly selfSignupPolicies?: ReadonlyArray<SelfSignupPolicy>;
+}
+
+/** Response from a successful ownership transfer. */
+export interface AccountOwnerTransferResult {
+  readonly partnerId: string;
+  /** The new owner's member id (the same `targetUserId` that was passed in). */
+  readonly ownerUserId: string;
+}
+
+/**
  * Query for the account activity log. `startTime` is required (ISO-8601 UTC);
  * everything else narrows the result. Omitting `contextId` returns activity
  * across every app context in the account — a single context-pinned credential
@@ -164,6 +224,21 @@ export interface DeveloperApi {
    */
   deleteAppContext(contextId: string): Promise<void>;
   /**
+   * List one page of the tenant's registered trusted issuers. Registering a new issuer requires a
+   * root key or the non-grantable `provisioning:c` capability — neither ever reaches the browser —
+   * so, like app-context creation, no client-side create exists here; this is read + edit only.
+   */
+  listIssuers(startFrom?: string, limit?: number): Promise<IssuerPage>;
+  /**
+   * Update an issuer's safe fields (`subClaim`/`emailClaim`/`status`/`selfSignupPolicies` — NOT the
+   * platform's full safe-field set, see {@link UpdateIssuerInput}'s own doc re: `userinfoUri`).
+   * Setting `status: 'suspended'` rejects the issuer's tokens at exchange time identically to an
+   * unregistered issuer. The trust-anchor fields (`issuer`/`jwksUri`/`audience`) and the routing-pin
+   * `contextId` are immutable and not part of {@link UpdateIssuerInput} at all — rotating one means
+   * deleting and re-registering the issuer (via the CLI/SDK — not exposed in this UI).
+   */
+  updateIssuer(issuerId: string, input: UpdateIssuerInput): Promise<IssuerSummary>;
+  /**
    * List every scoped API key in the account, across both environments and ALL
    * app contexts. A context-pinned bearer only ever sees its own context's keys,
    * so this account-wide view lives on the Developer API instead.
@@ -179,6 +254,24 @@ export interface DeveloperApi {
    * {@link AdminLogsQuery.contextId} is set). Tenant-wide by design.
    */
   getAdminLogs(query: AdminLogsQuery): Promise<AdminLogsResponse>;
+  /**
+   * Transfer this account's OWNER role to another member
+   * (`POST /developer/account-owner`). `targetUserId` is a member id
+   * (the same id MembersPage lists), not a raw Cognito subject; the server
+   * resolves it internally and requires the target to already be a member who
+   * has signed in at least once.
+   *
+   * **Account-wide, not tenant-scoped**: unlike every other method here, this
+   * one never reads {@link TenantKind} — on success the new owner gains OWNER
+   * authority across BOTH the live and test tenants in one call, regardless of
+   * which tenant kind this `DeveloperApi` instance was constructed for.
+   *
+   * **Irreversible for the CALLER**: their own OWNER-gated `/developer/*`
+   * access ends immediately on success; only the new owner can transfer it
+   * back. Already-minted credentials (`st_*`, `ssk_*`, `sk_*`) are NOT
+   * revoked — they keep working until they expire or are rotated.
+   */
+  transferOwnership(targetUserId: string): Promise<AccountOwnerTransferResult>;
 }
 
 /** Construct a {@link DeveloperApi} from its dependencies. */
@@ -237,6 +330,30 @@ export function createDeveloperApi(deps: {
       await parse<void>(resp);
     },
 
+    async listIssuers(startFrom, limit) {
+      const params = new URLSearchParams({ tenant: deps.tenant });
+      if (startFrom) params.set('startFrom', startFrom);
+      if (limit !== undefined) params.set('limit', String(limit));
+      const resp = await fetch(
+        endpoint(deps.baseUrl, `/developer/issuers?${params.toString()}`),
+        { method: 'GET', headers: await authHeader() },
+      );
+      return parse<IssuerPage>(resp);
+    },
+
+    async updateIssuer(issuerId, input) {
+      const params = new URLSearchParams({ tenant: deps.tenant });
+      const resp = await fetch(
+        endpoint(deps.baseUrl, `/developer/issuers/${encodeURIComponent(issuerId)}?${params.toString()}`),
+        {
+          method: 'PUT',
+          headers: { ...(await authHeader()), 'Content-Type': 'application/json' },
+          body: JSON.stringify(input),
+        },
+      );
+      return parse<IssuerSummary>(resp);
+    },
+
     async listScopedKeys() {
       const resp = await fetch(endpoint(deps.baseUrl, `/developer/scoped-keys`), {
         method: 'GET',
@@ -271,6 +388,17 @@ export function createDeveloperApi(deps: {
         { method: 'GET', headers: await authHeader() },
       );
       return parse<AdminLogsResponse>(resp);
+    },
+
+    async transferOwnership(targetUserId) {
+      // No `tenant` param — see the interface doc: this acts on the whole
+      // partner account, not one tenant kind.
+      const resp = await fetch(endpoint(deps.baseUrl, `/developer/account-owner`), {
+        method: 'POST',
+        headers: { ...(await authHeader()), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetUserId }),
+      });
+      return parse<AccountOwnerTransferResult>(resp);
     },
   };
 }
@@ -321,6 +449,22 @@ export function useDeveloperApi(tenantOverride?: TenantKind): DeveloperApi {
       createDeveloperApi({ baseUrl: API_CONFIG.developerApiBase, tenant, getIdToken }).deleteAppContext(contextId),
     [tenant, getIdToken],
   );
+  const listIssuers = useCallback(
+    (startFrom?: string, limit?: number) =>
+      createDeveloperApi({ baseUrl: API_CONFIG.developerApiBase, tenant, getIdToken }).listIssuers(
+        startFrom,
+        limit,
+      ),
+    [tenant, getIdToken],
+  );
+  const updateIssuer = useCallback(
+    (issuerId: string, input: UpdateIssuerInput) =>
+      createDeveloperApi({ baseUrl: API_CONFIG.developerApiBase, tenant, getIdToken }).updateIssuer(
+        issuerId,
+        input,
+      ),
+    [tenant, getIdToken],
+  );
   const listScopedKeys = useCallback(
     () => createDeveloperApi({ baseUrl: API_CONFIG.developerApiBase, tenant, getIdToken }).listScopedKeys(),
     [tenant, getIdToken],
@@ -335,13 +479,23 @@ export function useDeveloperApi(tenantOverride?: TenantKind): DeveloperApi {
       createDeveloperApi({ baseUrl: API_CONFIG.developerApiBase, tenant, getIdToken }).getAdminLogs(query),
     [tenant, getIdToken],
   );
+  const transferOwnership = useCallback(
+    (targetUserId: string) =>
+      createDeveloperApi({ baseUrl: API_CONFIG.developerApiBase, tenant, getIdToken }).transferOwnership(
+        targetUserId,
+      ),
+    [tenant, getIdToken],
+  );
 
   return {
     listAppContexts,
     createAppContext,
     deleteAppContext,
+    listIssuers,
+    updateIssuer,
     listScopedKeys,
     revokeScopedKey,
     getAdminLogs,
+    transferOwnership,
   };
 }

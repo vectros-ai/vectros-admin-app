@@ -139,8 +139,19 @@ export function RoleEditor(): React.JSX.Element {
       ),
     enabled: !isCreate && ctxId !== '',
   });
+  // `roleId` is present only when a profile composes exactly one role
+  // (0.41.0) — a profile referencing this role alongside others returns
+  // `roleIds` only, with `roleId` absent. Counting `roleId` alone
+  // undercounts (down to 0) for a role that's only ever referenced via
+  // multi-role composition, which would show "no profiles reference this
+  // role" and enable Delete when that's false — the server independently
+  // refuses the delete either way (`effectiveRoleIds().contains(roleId)`),
+  // but the UI must not tell the operator the opposite of what's true.
   const referencingCount = useMemo<number>(
-    () => (profilesQuery.data ?? []).filter((p) => p.roleId === tplId).length,
+    () =>
+      (profilesQuery.data ?? []).filter(
+        (p) => p.roleId === tplId || (p.roleIds?.includes(tplId) ?? false),
+      ).length,
     [profilesQuery.data, tplId],
   );
 

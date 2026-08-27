@@ -3,6 +3,76 @@
 All notable changes to the Vectros Admin App are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.18.0 — 2026-08-27
+
+### Fixed
+
+- **`ProfileEditor` no longer misreads a multi-role (`roleIds`) profile as an empty inline-scopes
+  profile.** A profile's `roleId` is present only when exactly one role composes (0.41.0) — a
+  profile composing 2+ roles (buildable today via the CLI/blueprints) returns `roleIds` only, and
+  the editor's `if (loaded.roleId)` read branch fell through to "inline source" for that shape,
+  showing the wrong (empty) scope list and risking silently dropping the composition on save. A
+  loaded multi-role profile now renders as an explicit, read-only "composed of N roles" notice
+  (role names resolved where possible) with Save disabled on that source — this editor doesn't
+  author `roleIds` yet (tracked as a follow-up), so the fix is to stop misrepresenting it, not to
+  build authoring under this fix. Switching to inline scopes (an explicit replacement, same as for
+  a single-role profile) remains possible and is now correctly guarded by the discard-confirm
+  dialog, which the same bug had also silently skipped for this shape (a bare `roleRef !== ''`
+  check reads empty for a multi-role profile too).
+- **The same `roleId`-only blind spot is fixed in three sibling read sites** that weren't caught
+  by the fix above: `ProfileEditor`'s own Clone dialog (would have submitted an empty `scopes`
+  array for a multi-role source, failing closed with an opaque `400` — Clone is now disabled for
+  that shape, with an explanation); `RoleEditor`'s reference count (undercounted to 0 for a role
+  referenced only via multi-role composition, so the delete-safety banner wrongly read "no
+  profiles reference this role" — the delete itself was always independently refused
+  server-side, but the UI must not say the opposite of what's true); and the Access Profiles list
+  (`ContextDetailPage`), whose source-chip and `?roleId=` filter both had the same gap.
+- **A full `grep -rn '\.roleId\b'` census closed out the same blind spot's remaining sites**
+  (`MembersPage`'s Resend-invite gate — falsely reported "no role bound" and blocked Resend for a
+  member who genuinely has roles, just not one this app can resend against yet; `MembersPage`'s
+  access-profile column and `ScopedKeyCreateDialog`'s existing-profile summary, both of which
+  silently omitted role info for a multi-role profile instead of showing it).
+- **`InviteMemberDialog`'s "email already associated" 409 message no longer names the wrong
+  cause.** The platform now grants/attaches access instead of 409ing when an email resolves to an
+  ACTIVE or still-PENDING member of a *different* app context in the same tenant, so this
+  structured 409 fires only for a member SUSPENDED in a different context — the
+  message still said "pending or active membership... cancel that invitation first," which no
+  longer describes any reachable case and told an admin hitting a real suspended-elsewhere
+  collision to do the wrong thing (there's no invitation to cancel). Corrected to name the actual
+  cause and point at reactivating the member in that other context instead.
+
+### Added
+
+- **Trusted Issuers page (`/access/issuers`).** View every third-party identity provider
+  registered in the tenant and edit its safe fields (subject/email claim, active/suspended
+  status, self-signup policies) through the owner-gated developer API. Registering a brand-new
+  issuer still requires a provisioning-scoped credential no browser bearer holds, so this page is
+  intentionally view + edit only — no create/delete affordance. The issuer's trust-anchor fields
+  (issuer URL, JWKS endpoint, audience) and its app context are shown read-only for reference and
+  can't be changed here.
+
+### Changed
+
+- **Repinned to `@vectros-ai/sdk` 0.41.0.** No API surface this app uses through the SDK client
+  changed shape — the Trusted Issuers page above calls `/developer/issuers/{issuerId}` through this
+  app's own hand-rolled `developerApi` fetch wrapper, not the generated SDK client, and the new
+  `roleIds` access-profile field isn't adopted by `InviteMemberDialog` (still single `roleId`); see
+  the [SDK changelog](https://github.com/vectros-ai/sdk/blob/main/CHANGELOG.md) for the full release.
+
+## 0.17.0 — 2026-08-20
+
+### Added
+
+- **Transfer ownership, from the Members page.** A new per-row action on `MembersPage` lets an
+  account owner hand off their OWNER role to another active member, calling the platform's
+  `POST /developer/account-owner` route (which previously had no client anywhere in the product).
+  Offered only to an OWNER session, and only for an eligible target (an ACTIVE, human member who
+  isn't the caller) — the backend remains authoritative either way. Given how consequential the
+  action is, confirming requires typing the target's own email exactly, and the dialog discloses,
+  verbatim, the three things the API is deliberately blunt about: the transfer can't be undone by
+  the caller (only the new owner can transfer it back), it re-points both the live and test
+  tenants' owner slot in one call, and already-minted credentials are not revoked by it.
+
 ## 0.16.0 — 2026-08-19
 
 ### Changed

@@ -437,6 +437,99 @@ describe('ProfileEditor — edit mode', () => {
   });
 });
 
+// Multi-role composed profile (0.41.0): `roleId` is absent whenever 2+
+// roles compose — only `roleIds` is present. Regression coverage for the
+// bug where this was misread as an inline-scopes profile (empty/wrong
+// scopes shown, composition silently dropped on save).
+const PROFILE_ALICE_MULTIROLE = {
+  contextId: 'engineering',
+  principalId: 'usr_alice',
+  roleIds: ['eng-member', 'analyst'],
+};
+
+describe('ProfileEditor — multi-role composition (roleIds) is read-only', () => {
+  it('renders an explicit notice, not a misread empty inline profile — Save disabled', async () => {
+    renderEditor({
+      client: makeMockClient({
+        getAccessProfile: vi.fn().mockResolvedValue(PROFILE_ALICE_MULTIROLE),
+      }),
+      initialUrl: '/access/contexts/engineering/profiles/usr_alice',
+    });
+
+    const roleRadio = (await screen.findByRole('radio', {
+      name: /use a role/i,
+    })) as HTMLInputElement;
+    expect(roleRadio.checked).toBe(true);
+
+    // The single-role Autocomplete must NOT render — nothing to silently
+    // truncate the composition down to.
+    expect(screen.queryByRole('combobox', { name: /^role/i })).not.toBeInTheDocument();
+
+    // The notice names both composing roles, resolved to their human names
+    // (falling back to the raw roleId when a role can't be resolved).
+    const notice = await screen.findByText(/composed of 2 roles/i);
+    expect(notice.textContent).toMatch(/Engineering Team Member/);
+    expect(notice.textContent).toMatch(/Analyst/);
+
+    // Never silently misread as inline — the ScopeEditor is not shown either.
+    expect(screen.queryByText('Scope clauses')).not.toBeInTheDocument();
+
+    // Save stays disabled: this editor can't author roleIds, so it must not
+    // let an untouched multi-role profile be saved (which would submit
+    // whatever the hidden single-role/inline state happened to default to).
+    expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
+  });
+
+  it('grant summary states the composition, not "no permissions yet"', async () => {
+    renderEditor({
+      client: makeMockClient({
+        getAccessProfile: vi.fn().mockResolvedValue(PROFILE_ALICE_MULTIROLE),
+      }),
+      initialUrl: '/access/contexts/engineering/profiles/usr_alice',
+    });
+    const summary = await screen.findByText(/inherits every permission from 2 composed roles/i);
+    expect(summary.textContent).toMatch(/eng-member/);
+    expect(summary.textContent).toMatch(/analyst/);
+  });
+
+  it('switching to inline still opens the discard-confirm guard (composition is a draft too)', async () => {
+    const user = userEvent.setup();
+    renderEditor({
+      client: makeMockClient({
+        getAccessProfile: vi.fn().mockResolvedValue(PROFILE_ALICE_MULTIROLE),
+      }),
+      initialUrl: '/access/contexts/engineering/profiles/usr_alice',
+    });
+    await screen.findByText(/composed of 2 roles/i);
+
+    const inlineRadio = screen.getByRole('radio', {
+      name: /inline scope clauses/i,
+    }) as HTMLInputElement;
+    await user.click(inlineRadio);
+
+    // Without the fix, roleRef stays '' for a multi-role profile and the
+    // existing "does the abandoned side hold a draft?" check would see
+    // nothing to lose — switching away from a real 2-role grant with no
+    // confirmation at all.
+    const dialog = await screen.findByRole('dialog', { name: /discard the other source/i });
+    expect(inlineRadio.checked).toBe(false);
+
+    await user.click(within(dialog).getByRole('button', { name: /discard and switch/i }));
+    await waitFor(() => expect(inlineRadio.checked).toBe(true));
+  });
+
+  it('Clone is disabled for a multi-role profile (would otherwise submit an empty scopes array and 400 opaquely)', async () => {
+    renderEditor({
+      client: makeMockClient({
+        getAccessProfile: vi.fn().mockResolvedValue(PROFILE_ALICE_MULTIROLE),
+      }),
+      initialUrl: '/access/contexts/engineering/profiles/usr_alice',
+    });
+    await screen.findByText(/composed of 2 roles/i);
+    expect(screen.getByRole('button', { name: /^clone$/i })).toBeDisabled();
+  });
+});
+
 // Inline-source profile (no roleId) — exercises the inline `scopes` compare,
 // the locus of the dirty-state bug.
 const PROFILE_KEYBOT_INLINE = {

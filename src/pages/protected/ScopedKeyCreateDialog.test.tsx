@@ -688,6 +688,29 @@ describe('<ScopedKeyCreateDialog>', () => {
     expect(screen.getByText(/tmpl-owner/i)).toBeInTheDocument();
   });
 
+  it('ContextStep — a multi-role (roleIds) profile shows a role-composition detail, not a silently-omitted one', async () => {
+    // roleId is absent for a 2+-role composition (0.41.0), and scopes is
+    // also absent on that shape — without the fix, neither detail chip
+    // rendered and the success alert showed only the status.
+    const user = userEvent.setup();
+    renderDialog({
+      client: makeMockClient({
+        getAccessProfile: vi.fn().mockResolvedValue({
+          principalId: 'usr_u_alice',
+          status: 'active',
+          roleIds: ['hr-admin', 'eng-member'],
+        }),
+      }),
+    });
+    await advancePastBind(user);
+    await user.click(screen.getByRole('combobox', { name: /^app context$/i }));
+    const listbox = await screen.findByRole('listbox');
+    await user.click(within(listbox).getByText(/^partner-api/));
+
+    await screen.findByText(/AccessProfile exists for this/i);
+    expect(screen.getByText(/2 roles.*hr-admin.*eng-member/i)).toBeInTheDocument();
+  });
+
   it('ContextStep — 404 from getAccessProfile shows "No AccessProfile yet" + Create button', async () => {
     const user = userEvent.setup();
     const notFound = new VectrosError({ message: 'not found', statusCode: 404 });

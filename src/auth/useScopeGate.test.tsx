@@ -20,6 +20,7 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  __compressScopeClaimForTest,
   __resetVectrosApiTokenCacheForTest,
   setPartnerApiTokenMinter,
 } from '@vectros-ai/react';
@@ -35,16 +36,20 @@ function base64UrlEncode(s: string): string {
 }
 
 /**
- * Synthetic st_*-shaped token carrying `actions` in the real minted shape:
- * `scope.scopes[]` is a list of clauses, each with an `allowed_actions` array.
- * (The scoped-token endpoint emits a single clause for these mints.)
+ * Synthetic st_*-shaped token carrying `actions` in the real minted shape: a
+ * `scope` claim raw-DEFLATE-compressed against the platform's preset
+ * dictionary, whose decompressed JSON is `scope.scopes[]` — a list of
+ * clauses, each with an `allowed_actions` array. (The scoped-token endpoint
+ * emits a single clause for these mints.) No `live`/`test` env infix — the
+ * mint side has never produced `st_env_`, only the bare `st_` prefix.
  */
-function makeStToken(actions: ReadonlyArray<string>, env: 'live' | 'test' = 'test'): string {
+function makeStToken(actions: ReadonlyArray<string>): string {
   const header = base64UrlEncode(JSON.stringify({ alg: 'ES256', typ: 'JWT' }));
-  const payload = base64UrlEncode(
-    JSON.stringify({ scope: { scopes: [{ allowed_actions: actions }] } }),
+  const compressedScope = __compressScopeClaimForTest(
+    JSON.stringify({ scopes: [{ allowed_actions: actions }] }),
   );
-  return `st_${env}_${header}.${payload}.sig`;
+  const payload = base64UrlEncode(JSON.stringify({ scope: compressedScope }));
+  return `st_${header}.${payload}.sig`;
 }
 
 /** Register a minter that returns `token` for any tenant. */
@@ -102,11 +107,12 @@ describe('useScopeGate', () => {
     expect(result.current.can('*')).toBe(false);
   });
 
-  it('decodes the bare JWT shape (no st_<env>_ prefix)', async () => {
+  it('decodes the bare JWT shape (no st_ prefix)', async () => {
     const header = base64UrlEncode(JSON.stringify({ alg: 'ES256', typ: 'JWT' }));
-    const payload = base64UrlEncode(
-      JSON.stringify({ scope: { scopes: [{ allowed_actions: ['records:r'] }] } }),
+    const compressedScope = __compressScopeClaimForTest(
+      JSON.stringify({ scopes: [{ allowed_actions: ['records:r'] }] }),
     );
+    const payload = base64UrlEncode(JSON.stringify({ scope: compressedScope }));
     mintToken(`${header}.${payload}.sig`);
     const { result } = renderHook(() => useScopeGate(TENANT));
     await waitFor(() => expect(result.current.loading).toBe(false));

@@ -431,6 +431,34 @@ describe('RoleEditor — delete dialog', () => {
     expect(within(dialog).getByRole('button', { name: /delete role/i })).toBeDisabled();
   });
 
+  it('Delete is disabled when the only reference is via multi-role composition (roleIds, not roleId)', async () => {
+    const user = userEvent.setup();
+    // eng-member is referenced ONLY via a roleIds composition — roleId is
+    // absent on this profile shape (0.41.0). A referencingCount that keys
+    // on roleId alone would read 0 here and wrongly enable Delete.
+    renderEditor({
+      client: makeMockClient({
+        listAccessProfiles: vi.fn().mockResolvedValue(
+          pageOf([
+            {
+              contextId: 'engineering',
+              principalId: 'usr_charlie',
+              roleIds: ['hr-admin', 'eng-member'],
+            },
+          ]),
+        ),
+      }),
+      initialUrl: '/access/contexts/engineering/roles/eng-member',
+    });
+    await screen.findByRole('heading', { level: 1, name: /edit role eng-member/i });
+    await screen.findByText(/changes propagate to 1 referencing profile/i);
+
+    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+    const dialog = await screen.findByRole('dialog', { name: /delete role/i });
+    expect(within(dialog).getByText(/1 profile reference/i)).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /delete role/i })).toBeDisabled();
+  });
+
   it('Delete enabled when zero refs; submits envelope and navigates to Roles tab', async () => {
     const user = userEvent.setup();
     // Profiles list with NO refs to eng-member (bot is inline).

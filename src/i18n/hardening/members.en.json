@@ -1,6 +1,7 @@
 {
   "members.loadErrorBody": "We couldn't load your members. Please try again.",
   "members.resendNoRole": "This member has no access profile role bound, so the invite can't be re-sent.",
+  "members.resendMultiRole": "This member's access profile composes multiple roles — resending isn't supported for that yet in this admin app. Use the CLI (vectros access grant --role, repeatable) or contact support.",
   "members.resendErrorBody": "We couldn't re-send that invitation. Please try again.",
   "members.revokeErrorBody": "We couldn't revoke that member. Please try again.",
   "members.profileError": "Couldn't load",

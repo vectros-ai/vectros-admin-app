@@ -331,6 +331,52 @@ describe('ContextDetailPage', () => {
     });
   });
 
+  it('Profiles tab: a multi-role (roleIds) profile shows a distinct chip, not "Inline: 0 clauses"', async () => {
+    // roleId is absent for a 2+-role composition (0.41.0) — this profile
+    // has neither roleId nor scopes, only roleIds. Without the fix it fell
+    // through to the inline branch and rendered as an empty inline grant.
+    renderPage({
+      client: makeMockClient({
+        listAccessProfiles: vi.fn().mockResolvedValue(
+          pageOf([
+            {
+              contextId: 'engineering',
+              principalId: 'usr_charlie',
+              roleIds: ['eng-member', 'analyst'],
+              status: 'active',
+            },
+          ]),
+        ),
+      }),
+      initialUrl: '/access/contexts/engineering?tab=profiles',
+    });
+    const table = await screen.findByRole('table', { name: /access profiles/i });
+    expect(within(table).getByText(/2 roles/i)).toBeInTheDocument();
+    expect(within(table).queryByText(/inline/i)).not.toBeInTheDocument();
+  });
+
+  it('Profiles tab: ?roleId= filter also matches a profile referencing it via multi-role composition', async () => {
+    renderPage({
+      client: makeMockClient({
+        listAccessProfiles: vi.fn().mockResolvedValue(
+          pageOf([
+            PROFILE_BOT_INLINE,
+            {
+              contextId: 'engineering',
+              principalId: 'usr_charlie',
+              roleIds: ['hr-admin', 'eng-member'],
+              status: 'active',
+            },
+          ]),
+        ),
+      }),
+      initialUrl: '/access/contexts/engineering?tab=profiles&roleId=eng-member',
+    });
+    const table = await screen.findByRole('table', { name: /access profiles/i });
+    expect(within(table).getByText('usr_charlie')).toBeInTheDocument();
+    expect(within(table).queryByText('key_research-bot')).not.toBeInTheDocument();
+  });
+
   it('Profiles tab: Edit action URL-encodes the principalId suffix', async () => {
     const user = userEvent.setup();
     renderPage({ initialUrl: '/access/contexts/engineering?tab=profiles' });

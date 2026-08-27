@@ -26,6 +26,7 @@ import ArticleIcon from '@mui/icons-material/Article';
 import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import BarChartIcon from '@mui/icons-material/BarChart';
 import VisibilityIcon from '@mui/icons-material/Visibility';
+import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 
 import { AppLayout, RequireAuth, RequireScope } from '@vectros-ai/react';
 import type { NavItemSpec } from '@vectros-ai/react';
@@ -34,6 +35,7 @@ import { TenantSwitcher } from './components/TenantSwitcher';
 import { AccountPage } from './pages/protected/AccountPage';
 import { ContextDetailPage } from './pages/protected/ContextDetailPage';
 import { ContextsPage } from './pages/protected/ContextsPage';
+import { IssuersPage } from './pages/protected/IssuersPage';
 import { AccessLogPage } from './pages/protected/AccessLogPage';
 import { KeysPage } from './pages/protected/KeysPage';
 import { LogsPage } from './pages/protected/LogsPage';
@@ -87,6 +89,10 @@ const ADMIN_ACTIONS = {
   // Usage gates on the SAME literal the backend enforces on GET /v1/usage
   // (`billing:r` on scoped tokens; an owner's wildcard covers it).
   usage: 'billing:r',
+  // Trusted-issuer registry (view + edit safe fields). The dev-portal route
+  // behind it is owner-gated server-side regardless of scope — mirrors
+  // `contexts` above, which gates the same way for the same reason.
+  issuers: 'issuers:r',
 } as const;
 
 // Admin App sidebar nav (labels are i18n message ids; gateAction is each
@@ -101,6 +107,7 @@ const ADMIN_NAV_ITEMS: ReadonlyArray<NavItemSpec> = [
   { to: '/disclosures', labelId: 'accessLog.nav', gateAction: ADMIN_ACTIONS.accessLog, icon: <VisibilityIcon fontSize="small" /> },
   { to: '/usage', labelId: 'layout.navUsage', gateAction: ADMIN_ACTIONS.usage, icon: <BarChartIcon fontSize="small" /> },
   { to: '/access/contexts', labelId: 'access.nav', gateAction: ADMIN_ACTIONS.contexts, icon: <AdminPanelSettingsIcon fontSize="small" /> },
+  { to: '/access/issuers', labelId: 'access.issuers.nav', gateAction: ADMIN_ACTIONS.issuers, icon: <VerifiedUserIcon fontSize="small" /> },
 ];
 
 export default function App(): React.JSX.Element {
@@ -187,6 +194,10 @@ export default function App(): React.JSX.Element {
         <Route
           path="/access/contexts/:ctxId/profiles/:principalId"
           element={<RequireScope action={ADMIN_ACTIONS.profiles}><ProfileEditor /></RequireScope>}
+        />
+        <Route
+          path="/access/issuers"
+          element={<RequireScope action={ADMIN_ACTIONS.issuers}><IssuersPage /></RequireScope>}
         />
       </Route>
 

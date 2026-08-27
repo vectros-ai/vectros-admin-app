@@ -155,6 +155,7 @@ export default defineConfig({
       '@mui/icons-material/Refresh',
       '@mui/icons-material/Search',
       '@mui/icons-material/SmartToy',
+      '@mui/icons-material/VerifiedUser',
       '@mui/icons-material/Visibility',
       '@mui/icons-material/VisibilityOff',
       '@mui/icons-material/VpnKey',

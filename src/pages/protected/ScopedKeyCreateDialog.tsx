@@ -1047,6 +1047,23 @@ function ContextStep({
                     />
                   </Typography>
                 )}
+                {/* roleId is absent for a 2+-role composition (roleIds-only,
+                    0.41.0) — without this the existing-profile summary
+                    silently omitted role info entirely for that shape
+                    (scopes is also absent, so neither detail chip rendered). */}
+                {!profileQuery.data.roleId &&
+                  profileQuery.data.roleIds &&
+                  profileQuery.data.roleIds.length > 0 && (
+                    <Typography variant="caption" color="text.secondary">
+                      <FormattedMessage
+                        id="keysWizard.context.profileExistsDetailMultiRole"
+                        values={{
+                          count: profileQuery.data.roleIds.length,
+                          roleIds: profileQuery.data.roleIds.join(', '),
+                        }}
+                      />
+                    </Typography>
+                  )}
                 {profileQuery.data.scopes && profileQuery.data.scopes.length > 0 && (
                   <Typography variant="caption" color="text.secondary">
                     <FormattedMessage

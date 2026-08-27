@@ -8,10 +8,15 @@
 //   - "Advanced options" collapses the 4 partner-customizable knobs:
 //     firstName / lastName / ttlDays / sendEmail / fromName / acceptUrl.
 //     acceptUrl auto-fills from `window.location.origin + '/accept'`.
-//   - On 409 with body `{ error: 'email_already_associated' }` (the
-//     shared-Cognito-pool placeholder precheck), show an inline,
-//     domain-specific error explaining the planned-feature limitation.
-//     Other errors render a generic message.
+//   - On 409 with body `{ error: 'email_already_associated' }` — a SUSPENDED membership for
+//     that email already exists in THIS tenant, under a different app context (a root-key-only
+//     structured body; a scoped credential gets the same uniform 409 as any other in-tenant
+//     collision) — show an inline, domain-specific error naming the cause. An ACTIVE or still
+//     PENDING membership under a different context is NOT this case: the invite grants/attaches
+//     access to this context instead and succeeds, it doesn't 409 (this UI has no special
+//     handling for that — it's just a normal success). An email that already has an identity
+//     in the OTHER tenant (test vs. live) is also NOT this case: it creates a genuine second
+//     membership and succeeds. Other errors render a generic message.
 //
 // The dialog is auth-provider-agnostic + tenant-aware via
 // `useCurrentTenant()` — switching the TenantSwitcher in AppLayout while

@@ -89,6 +89,65 @@ describe('createDeveloperApi.createAppContext', () => {
   });
 });
 
+describe('createDeveloperApi.listIssuers', () => {
+  it('GETs the issuers route with the tenant + bearer and returns the page', async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ data: [{ issuerId: 'auth0-prod', status: 'active' }], nextCursor: null }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const page = await makeApi({ tenant: 'live' }).listIssuers();
+
+    expect(page).toEqual({ data: [{ issuerId: 'auth0-prod', status: 'active' }], nextCursor: null });
+    const [url, init] = fetchSpy.mock.calls[0]!;
+    expect(url).toBe('https://api.example.com/developer/issuers?tenant=live');
+    expect(init.method).toBe('GET');
+    expect(init.headers.Authorization).toBe('Bearer id-token-xyz');
+  });
+
+  it('passes startFrom + limit as query params when given', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(jsonResponse({ data: [], nextCursor: null }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await makeApi().listIssuers('cursor-1', 50);
+
+    const url = fetchSpy.mock.calls[0]![0] as string;
+    expect(url).toContain('tenant=test');
+    expect(url).toContain('startFrom=cursor-1');
+    expect(url).toContain('limit=50');
+  });
+});
+
+describe('createDeveloperApi.updateIssuer', () => {
+  it('PUTs only the safe fields with the tenant + bearer and returns the updated issuer', async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ issuerId: 'auth0-prod', status: 'suspended' }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const updated = await makeApi().updateIssuer('auth0-prod', { status: 'suspended' });
+
+    expect(updated).toEqual({ issuerId: 'auth0-prod', status: 'suspended' });
+    const [url, init] = fetchSpy.mock.calls[0]!;
+    expect(url).toBe('https://api.example.com/developer/issuers/auth0-prod?tenant=test');
+    expect(init.method).toBe('PUT');
+    expect(init.headers['Content-Type']).toBe('application/json');
+    // Trust-anchor fields (issuer/jwksUri/audience/contextId) are not part of UpdateIssuerInput at
+    // all — this client cannot even construct a request that names them.
+    expect(JSON.parse(init.body)).toEqual({ status: 'suspended' });
+  });
+
+  it('URL-encodes the issuerId', async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(jsonResponse({ issuerId: 'a/b' }));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    await makeApi().updateIssuer('a/b', { subClaim: 'user_id' });
+
+    const url = fetchSpy.mock.calls[0]![0] as string;
+    expect(url).toContain('/developer/issuers/a%2Fb');
+  });
+});
+
 describe('createDeveloperApi.deleteAppContext', () => {
   it('DELETEs the context route with the tenant + the confirm echo + bearer', async () => {
     const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(undefined, 202));
@@ -231,6 +290,45 @@ describe('createDeveloperApi.getAdminLogs', () => {
     expect(url).toContain('keyId=key_1');
     expect(url).toContain('errorsOnly=true');
     expect(url).toContain('limit=50');
+  });
+});
+
+describe('createDeveloperApi.transferOwnership', () => {
+  it('POSTs {targetUserId} to /developer/account-owner with NO tenant param + the bearer', async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ partnerId: 'ptr_1', ownerUserId: 'u_alice' }, 200));
+    vi.stubGlobal('fetch', fetchSpy);
+
+    // Constructed for 'live', but the route acts on the whole partner
+    // account (both tenants) — see the interface doc. The URL must carry
+    // no `?tenant=` at all, unlike every other method in this file.
+    const result = await makeApi({ tenant: 'live' }).transferOwnership('u_alice');
+
+    expect(result).toEqual({ partnerId: 'ptr_1', ownerUserId: 'u_alice' });
+    const [url, init] = fetchSpy.mock.calls[0]!;
+    expect(url).toBe('https://api.example.com/developer/account-owner');
+    expect(init.method).toBe('POST');
+    expect(init.headers['Content-Type']).toBe('application/json');
+    expect(init.headers.Authorization).toBe('Bearer id-token-xyz');
+    expect(JSON.parse(init.body)).toEqual({ targetUserId: 'u_alice' });
+  });
+
+  it('throws DeveloperApiError with the server envelope on a rejected transfer', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          { message: 'That member has not signed in yet, so they cannot hold ownership.', requestId: 'req_5' },
+          400,
+        ),
+      ),
+    );
+    await expect(makeApi().transferOwnership('u_pending')).rejects.toMatchObject({
+      name: 'DeveloperApiError',
+      statusCode: 400,
+      body: { message: 'That member has not signed in yet, so they cannot hold ownership.', requestId: 'req_5' },
+    });
   });
 });
 

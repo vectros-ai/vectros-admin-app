@@ -70,4 +70,7 @@ export const accessQueryKeys = {
     principalId: string,
   ): readonly ['accessProfiles', string, string] =>
     ['accessProfiles', contextId, principalId] as const,
+
+  /** All registered trusted issuers for the active tenant (#1023). */
+  issuers: (): readonly ['issuers'] => ['issuers'] as const,
 } as const;

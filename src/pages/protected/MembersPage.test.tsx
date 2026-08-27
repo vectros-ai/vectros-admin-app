@@ -31,7 +31,12 @@ import type { ContextBindingRecord } from '../../test/contextBinding';
 import { registerScope } from '../../test/scopeToken';
 import { vectrosApiClient, VectrosError } from '../../api/vectrosApi';
 import type * as VectrosApi from '../../api/vectrosApi';
-import { TestTenantProvider } from '../../test/TestTenantProvider';
+import { useDeveloperApi } from '../../api/developerApi';
+import type * as DeveloperApi from '../../api/developerApi';
+import { AuthProvider, CurrentTenantProvider } from '../../auth';
+import type { TenantMembership } from '../../auth';
+import { TestTenantProvider, TEST_MEMBERSHIPS, TEST_TENANT_ID } from '../../test/TestTenantProvider';
+import { makeMockAuthProvider } from '../../test/mockAuthProvider';
 import { MembersPage } from './MembersPage';
 
 vi.mock('../../api/vectrosApi', async (importOriginal) => {
@@ -39,6 +44,17 @@ vi.mock('../../api/vectrosApi', async (importOriginal) => {
   return {
     ...actual,
     vectrosApiClient: vi.fn(),
+  };
+});
+
+// The new Transfer-ownership action goes through the owner-gated developer
+// API (../../api/developerApi), not the partner SDK — mock the hook the
+// dialog consumes so these page-level tests don't need a real bearer.
+vi.mock('../../api/developerApi', async (importOriginal) => {
+  const actual = await importOriginal<typeof DeveloperApi>();
+  return {
+    ...actual,
+    useDeveloperApi: vi.fn(),
   };
 });
 
@@ -78,19 +94,34 @@ function makeMockClient(overrides: {
   };
 }
 
-function renderPage(opts: { client?: ReturnType<typeof makeMockClient> } = {}) {
+function makeMockDeveloperApi(overrides: { transferOwnership?: ReturnType<typeof vi.fn> } = {}) {
+  return {
+    transferOwnership:
+      overrides.transferOwnership ??
+      vi.fn().mockResolvedValue({ partnerId: 'ptr_1', ownerUserId: 'u_alice' }),
+  };
+}
+
+function renderPage(opts: {
+  client?: ReturnType<typeof makeMockClient>;
+  devApi?: ReturnType<typeof makeMockDeveloperApi>;
+  /** Override the seeded memberships — e.g. a SUB_USER role to prove the transfer action hides. */
+  memberships?: ReadonlyArray<TenantMembership>;
+} = {}) {
   const client = opts.client ?? makeMockClient();
+  const devApi = opts.devApi ?? makeMockDeveloperApi();
   vi.mocked(vectrosApiClient).mockReturnValue(client as never);
+  vi.mocked(useDeveloperApi).mockReturnValue(devApi as never);
   const utils = render(
     <TestIntlProvider>
       <MemoryRouter>
-        <TestTenantProvider kind="live">
+        <TestTenantProvider kind="live" {...(opts.memberships ? { memberships: opts.memberships } : {})}>
           <MembersPage />
         </TestTenantProvider>
       </MemoryRouter>
     </TestIntlProvider>,
   );
-  return { ...utils, client };
+  return { ...utils, client, devApi };
 }
 
 beforeEach(() => {
@@ -136,6 +167,23 @@ describe('MembersPage', () => {
       'href',
       '/access/contexts/default/profiles/usr_u_alice',
     );
+  });
+
+  it('AccessProfile chip shows "N roles" for a multi-role profile, not the bare principalId', async () => {
+    // roleId is absent for a 2+-role composition (0.41.0) — the chip's
+    // `profile.roleId ?? profile.principalId` fallback previously showed
+    // the raw principalId (a valid-looking but uninformative label) for
+    // this shape instead of anything role-related.
+    const getAccessProfile = vi.fn().mockImplementation(
+      ({ principalId }: { principalId: string }) =>
+        Promise.resolve({ principalId, roleIds: ['hr-admin', 'eng-member'], status: 'active' }),
+    );
+    renderPage({ client: makeMockClient({ getAccessProfile }) });
+    const aliceRow = (await screen.findByText('alice@example.com')).closest('tr')!;
+    const chip = await within(aliceRow).findByRole('link', { name: /2 roles/i });
+    expect(chip.textContent).toMatch(/hr-admin/);
+    expect(chip.textContent).toMatch(/eng-member/);
+    expect(chip.textContent).not.toBe('usr_u_alice');
   });
 
   it('drains paginated listUsers across pages, threading the cursor', async () => {
@@ -442,6 +490,36 @@ describe('MembersPage', () => {
     expect(resendInvite).not.toHaveBeenCalled();
   });
 
+  it('blocks resend with a distinct message for a multi-role (roleIds) member — not "no role"', async () => {
+    const user = userEvent.setup();
+    // Bob's profile composes 2+ roles: roleId is absent (0.41.0), only
+    // roleIds is present. Without the fix this reads as "no role bound",
+    // which is false — the member genuinely has roles, just not one this
+    // admin app can resend against yet.
+    const getAccessProfile = vi.fn().mockImplementation(
+      ({ principalId }: { principalId: string }) => {
+        if (principalId === 'usr_u_bob') {
+          return Promise.resolve({ principalId, roleIds: ['hr-admin', 'eng-member'], status: 'active' });
+        }
+        return Promise.resolve({ principalId, roleId: 'tmpl-owner', status: 'active' });
+      },
+    );
+    const resendInvite = vi.fn().mockResolvedValue(undefined);
+    renderPage({ client: makeMockClient({ getAccessProfile, resendInvite }) });
+    await screen.findByText('bob@example.com');
+    await waitFor(() => expect(getAccessProfile).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /resend invite/i })).toBeEnabled(),
+    );
+
+    await user.click(screen.getByRole('button', { name: /resend invite/i }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(/composes multiple roles/i);
+    expect(alert).not.toHaveTextContent(/no access profile role bound/i);
+    expect(resendInvite).not.toHaveBeenCalled();
+  });
+
   // -------------------------------------------------------------------------
   // Client-side scope gate. The backend's `/resend` route requires users:c +
   // users:r + users:u (all three — the `c` requirement is a deliberate,
@@ -694,6 +772,138 @@ describe('MembersPage', () => {
     // wrong calls (add a member to SAMPLE_USERS and one extra profile lookup
     // covers for a resend that stopped naming its context).
     expectContextBindingHolds(records, ['auth.getAccessProfile', 'auth.resendInvite']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The "Transfer ownership" per-row action + its dialog wiring. Full
+// disclosure/typed-confirm coverage lives in TransferOwnershipDialog.test.tsx;
+// these pin only MembersPage's own responsibilities: WHO gets offered the
+// action, WHICH rows are eligible, and the success-banner handoff.
+// ---------------------------------------------------------------------------
+describe('MembersPage — transfer ownership action', () => {
+  const TRANSFER_LABEL = /^transfer ownership$/i;
+
+  it('offers Transfer ownership on an eligible row (OWNER caller, ACTIVE HUMAN target)', async () => {
+    renderPage();
+    await screen.findByText('alice@example.com');
+    expect(screen.getByRole('button', { name: TRANSFER_LABEL })).toBeInTheDocument();
+  });
+
+  it('withholds Transfer ownership on a PENDING row (no externalSubject to hold ownership)', async () => {
+    renderPage();
+    await screen.findByText('bob@example.com');
+    // Alice (ACTIVE) offers it; Bob (PENDING) must not.
+    expect(screen.getAllByRole('button', { name: TRANSFER_LABEL })).toHaveLength(1);
+  });
+
+  it('withholds Transfer ownership on a SERVICE row (no Cognito session to sign in with)', async () => {
+    renderPage();
+    await screen.findByText('research-bot');
+    expect(screen.getAllByRole('button', { name: TRANSFER_LABEL })).toHaveLength(1);
+  });
+
+  it('still offers Transfer ownership on an ACTIVE HUMAN row with no externalSubject (a legacy row) — not silently hidden as "this is me"', async () => {
+    // A row with no externalSubject is NOT the same thing as "this is my
+    // own row" (the caller's own session, when loaded, always has a real
+    // sub). Hiding the action here would be a mistaken self-match; the
+    // right behavior is to still offer it and let the backend's own "that
+    // member has not signed in yet" 400 be the one that explains why, if
+    // it comes to that.
+    const client = makeMockClient({
+      listUsers: vi.fn().mockResolvedValue(
+        pageOf([
+          { id: 'u_legacy', email: 'legacy@example.com', type: 'HUMAN', status: 'ACTIVE' },
+        ]),
+      ),
+    });
+    renderPage({ client });
+    await screen.findByText('legacy@example.com');
+    expect(screen.getByRole('button', { name: TRANSFER_LABEL })).toBeInTheDocument();
+  });
+
+  it('hides Transfer ownership entirely for a SUB_USER caller — only an OWNER can call the route', async () => {
+    renderPage({
+      memberships: [{ ...TEST_MEMBERSHIPS[0]!, role: 'SUB_USER' }],
+    });
+    await screen.findByText('alice@example.com');
+    expect(screen.queryByRole('button', { name: TRANSFER_LABEL })).not.toBeInTheDocument();
+  });
+
+  it("hides Transfer ownership on the caller's own row", async () => {
+    // A custom auth tree (TestTenantProvider has no getCurrentUser override)
+    // whose session's `sub` matches Alice's externalSubject.
+    const client = makeMockClient({
+      listUsers: vi.fn().mockResolvedValue(
+        pageOf([
+          { id: 'u_alice', email: 'alice@example.com', type: 'HUMAN', status: 'ACTIVE', externalSubject: 'sub-alice' },
+          { id: 'u_carol', email: 'carol@example.com', type: 'HUMAN', status: 'ACTIVE', externalSubject: 'sub-carol' },
+        ]),
+      ),
+    });
+    vi.mocked(vectrosApiClient).mockReturnValue(client as never);
+    vi.mocked(useDeveloperApi).mockReturnValue(makeMockDeveloperApi() as never);
+    const adapter = makeMockAuthProvider({
+      getCurrentUser: vi.fn().mockResolvedValue({
+        sub: 'sub-alice',
+        email: 'alice@example.com',
+        firstName: null,
+        lastName: null,
+      }),
+    });
+    render(
+      <TestIntlProvider>
+        <MemoryRouter>
+          <AuthProvider provider={adapter}>
+            <CurrentTenantProvider
+              tenancyProvider={adapter}
+              initialTenant={TEST_TENANT_ID}
+              initialMemberships={TEST_MEMBERSHIPS}
+            >
+              <MembersPage />
+            </CurrentTenantProvider>
+          </AuthProvider>
+        </MemoryRouter>
+      </TestIntlProvider>,
+    );
+
+    await screen.findByText('carol@example.com');
+    // Carol (not the caller) is offered; Alice (the caller) is not.
+    expect(screen.getAllByRole('button', { name: TRANSFER_LABEL })).toHaveLength(1);
+  });
+
+  it('clicking Transfer ownership opens TransferOwnershipDialog for that member', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText('alice@example.com');
+
+    await user.click(screen.getByRole('button', { name: TRANSFER_LABEL }));
+
+    const dialog = await screen.findByRole('dialog', { name: /transfer ownership to/i });
+    expect(dialog).toHaveTextContent('alice@example.com');
+  });
+
+  it('a successful transfer shows the success banner, closes the dialog, and refetches the list', async () => {
+    const user = userEvent.setup();
+    const transferOwnership = vi
+      .fn()
+      .mockResolvedValue({ partnerId: 'ptr_1', ownerUserId: 'u_alice' });
+    const { client } = renderPage({ devApi: makeMockDeveloperApi({ transferOwnership }) });
+    await screen.findByText('alice@example.com');
+
+    await user.click(screen.getByRole('button', { name: TRANSFER_LABEL }));
+    const dialog = await screen.findByRole('dialog', { name: /transfer ownership to/i });
+    await user.type(within(dialog).getByLabelText(/confirm by email/i), 'alice@example.com');
+    await user.click(within(dialog).getByRole('button', { name: /^transfer ownership$/i }));
+
+    await waitFor(() => expect(transferOwnership).toHaveBeenCalledWith('u_alice'));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.getByRole('status')).toHaveTextContent(
+      /ownership transferred to alice@example.com/i,
+    );
+    // The list was invalidated (best-effort refetch — see MembersPage's own
+    // comment on why this session's own read may itself now 403).
+    expect(client.identity.listUsers).toHaveBeenCalledTimes(2);
   });
 });
 

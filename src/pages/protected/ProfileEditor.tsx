@@ -11,6 +11,17 @@
 //   - **XOR source radio**: 'role' vs 'inline'. The backend rejects
 //     bodies with neither or both set; the UI enforces by only showing
 //     ONE of (role Autocomplete | ScopeEditor) at a time.
+//   - **Multi-role composition (`roleIds`, 0.41.0) is READ-ONLY here.** A
+//     profile's `roleId` is present only when exactly one role composes;
+//     one composing 2+ roles returns `roleIds` with `roleId` absent. This
+//     editor does not yet author `roleIds` — a loaded multi-role profile
+//     renders as an explicit, disabled "composed of N roles" notice
+//     (never silently as an empty/inline profile, and never truncated to
+//     its first role on save). Switching away to inline scopes is still
+//     possible (an explicit, confirmed replacement of the composition,
+//     same as switching a single-role profile) — what's blocked is only
+//     the silent misread/truncation. Full `roleIds` authoring is tracked
+//     as a follow-up.
 //   - **Source switching guard**: if the user toggles the radio while
 //     the abandoned side has draft content, confirm via window.confirm
 //     before discarding.
@@ -235,6 +246,10 @@ export function ProfileEditor(): React.JSX.Element {
   const [principalId, setPrincipalId] = useState('');
   const [sourceType, setSourceType] = useState<SourceType>('role');
   const [roleRef, setRoleRef] = useState<string>('');
+  // Non-null only when the loaded profile composes 2+ roles (`roleIds`,
+  // 0.41.0) — `roleId` is absent in that shape. See the module docstring's
+  // "Multi-role composition is READ-ONLY here" note.
+  const [multiRoleIds, setMultiRoleIds] = useState<string[] | null>(null);
   const [scopes, setScopes] = useState<ScopeClause[]>(() => [emptyClause()]);
   // Namespaced identity overrides — dedicated org/client + custom-namespace
   // `extras`, with any unmodellable wire key preserved in `passthrough`.
@@ -300,10 +315,22 @@ export function ProfileEditor(): React.JSX.Element {
       setSourceType('role');
       setRoleRef(loaded.roleId);
       setScopes([emptyClause()]);
+      setMultiRoleIds(null);
+    } else if (loaded.roleIds && loaded.roleIds.length > 0) {
+      // `roleId` is present only when exactly one role composes; this is
+      // 2+ (roleIds is otherwise the same length-1 case `roleId` already
+      // covers). Do NOT fall through to 'inline' — that would show an
+      // empty/wrong scope list and, if saved, silently drop the
+      // composition down to whatever the inline form happened to hold.
+      setSourceType('role');
+      setRoleRef('');
+      setScopes([emptyClause()]);
+      setMultiRoleIds(loaded.roleIds);
     } else {
       setSourceType('inline');
       setRoleRef('');
       setScopes(normalizeScopes(loaded.scopes));
+      setMultiRoleIds(null);
     }
     // Read identityOverrides through the canonical model so a `scope:org`-keyed
     // override (0.34 read-back) is visible + preserved, not silently dropped.
@@ -328,6 +355,10 @@ export function ProfileEditor(): React.JSX.Element {
       setScopes([emptyClause()]);
     } else {
       setRoleRef('');
+      // Switching to inline is an explicit replacement of whatever the
+      // role side held, composition included — clear it so canSubmit/
+      // dirty stop reasoning about a role side that's no longer shown.
+      setMultiRoleIds(null);
     }
     setSourceType(next);
   };
@@ -337,7 +368,11 @@ export function ProfileEditor(): React.JSX.Element {
   const requestSourceSwitch = (next: SourceType): void => {
     if (next === sourceType) return;
     const inlineHasDraft = scopes.some((c) => c.allowed_actions.length > 0);
-    const roleHasDraft = roleRef !== '';
+    // A loaded multi-role composition has no single roleRef (see the
+    // module docstring), so it wouldn't otherwise trip this guard —
+    // abandoning it is exactly as consequential as abandoning a
+    // single-role ref and deserves the same confirm-before-discard.
+    const roleHasDraft = roleRef !== '' || multiRoleIds !== null;
     const abandoning =
       (sourceType === 'inline' && inlineHasDraft) ||
       (sourceType === 'role' && roleHasDraft);
@@ -383,9 +418,21 @@ export function ProfileEditor(): React.JSX.Element {
       );
     }
     if (!baseline) return false;
-    const baseSourceIsRole = !!baseline.roleId;
+    // roleId is absent for a 2+-role composition (roleIds-only) — a
+    // role-sourced profile either way, so this must NOT key on roleId
+    // alone or a freshly-loaded multi-role profile reads as spuriously
+    // dirty against sourceType 'role' before anything was touched.
+    const baseSourceIsRole =
+      !!baseline.roleId || (baseline.roleIds?.length ?? 0) > 0;
     if (baseSourceIsRole !== (sourceType === 'role')) return true;
-    if (sourceType === 'role' && roleRef !== (baseline.roleId ?? '')) {
+    // A loaded multi-role composition can't be edited here (no single
+    // roleRef to compare) — its own dirty state is fully captured by the
+    // sourceType check above (switching away IS the only possible edit).
+    if (
+      sourceType === 'role' &&
+      multiRoleIds === null &&
+      roleRef !== (baseline.roleId ?? '')
+    ) {
       return true;
     }
     // Compare against the baseline projected through the SAME normalizer used
@@ -413,6 +460,7 @@ export function ProfileEditor(): React.JSX.Element {
     principalId,
     sourceType,
     roleRef,
+    multiRoleIds,
     scopes,
     overrides,
   ]);
@@ -434,7 +482,9 @@ export function ProfileEditor(): React.JSX.Element {
     [scopeError, intl],
   );
   const sourceValid =
-    sourceType === 'role' ? roleRef !== '' : scopeError === null;
+    sourceType === 'role'
+      ? multiRoleIds === null && roleRef !== ''
+      : scopeError === null;
   // Identity-overrides validation is independent of the source XOR — it applies
   // to role- and inline-source profiles alike.
   const overridesError = useMemo(
@@ -462,6 +512,14 @@ export function ProfileEditor(): React.JSX.Element {
   // is legible without decoding raw scope clauses (a bare `*` in particular).
   const grantSummary = useMemo<React.ReactNode>(() => {
     if (sourceType === 'role') {
+      if (multiRoleIds !== null) {
+        return (
+          <FormattedMessage
+            id="access.profiles.editor.grantMultiRole"
+            values={{ count: multiRoleIds.length, roleIds: multiRoleIds.join(', ') }}
+          />
+        );
+      }
       return roleRef ? (
         <FormattedMessage id="access.profiles.editor.grantRole" values={{ roleId: roleRef }} />
       ) : (
@@ -483,7 +541,7 @@ export function ProfileEditor(): React.JSX.Element {
         values={{ actions: actions.join(', ') }}
       />
     );
-  }, [sourceType, roleRef, scopes]);
+  }, [sourceType, roleRef, multiRoleIds, scopes]);
 
   // ── Save ───────────────────────────────────────────────────────────────
   const buildBody = () => {
@@ -619,15 +677,29 @@ export function ProfileEditor(): React.JSX.Element {
           <Stack direction="row" spacing={1}>
             {/* Gated on `baseline` so Clone/Delete can't fire before the
                 profile loads — Clone with a null source rejects with "No
-                source". */}
-            <Button
-              variant="outlined"
-              startIcon={<ContentCopyIcon />}
-              onClick={() => setCloneOpen(true)}
-              disabled={baseline == null}
+                source". Also gated on multiRoleIds: CloneProfileDialog's
+                own roleId-only read (source?.roleId) can't tell "inline"
+                from "multi-role composed" either, and would submit an
+                empty scopes array that 400s opaquely — same class of bug
+                as the main load path, just not yet safe to author here. */}
+            <Tooltip
+              title={
+                multiRoleIds !== null
+                  ? intl.formatMessage({ id: 'access.profiles.editor.cloneMultiRoleDisabled' })
+                  : ''
+              }
             >
-              <FormattedMessage id="access.shared.clone" />
-            </Button>
+              <span>
+                <Button
+                  variant="outlined"
+                  startIcon={<ContentCopyIcon />}
+                  onClick={() => setCloneOpen(true)}
+                  disabled={baseline == null || multiRoleIds !== null}
+                >
+                  <FormattedMessage id="access.shared.clone" />
+                </Button>
+              </span>
+            </Tooltip>
             <Button
               variant="outlined"
               color="error"
@@ -764,7 +836,20 @@ export function ProfileEditor(): React.JSX.Element {
           </Box>
 
           {/* Source body — exactly one visible at a time. */}
-          {sourceType === 'role' && (
+          {sourceType === 'role' && multiRoleIds !== null && (
+            <Alert severity="info" sx={{ maxWidth: 720 }}>
+              <FormattedMessage
+                id="access.profiles.editor.multiRoleNotice"
+                values={{
+                  count: multiRoleIds.length,
+                  roleIds: multiRoleIds
+                    .map((id) => roles.find((t) => t.roleId === id)?.name ?? id)
+                    .join(', '),
+                }}
+              />
+            </Alert>
+          )}
+          {sourceType === 'role' && multiRoleIds === null && (
             <Stack spacing={1.5} sx={{ maxWidth: 720 }}>
               {rolesLoadFailed && (
                 <ApiErrorAlert error={rolesQuery.error}>
@@ -1137,7 +1222,14 @@ function CloneProfileDialog({
 
   const idInvalid =
     newPrincipalId !== '' && !PRINCIPAL_ID_PATTERN.test(newPrincipalId);
-  const canSubmit = newPrincipalId !== '' && !idInvalid;
+  // Same roleId-only blind spot as ProfileEditor's own load path: `roleId`
+  // is absent for a 2+-role composition (roleIds-only), so this must not
+  // key on roleId alone. The Clone button itself is disabled for that
+  // shape (see its Tooltip-wrapped disabled state above) — this is a
+  // second, defense-in-depth guard should this dialog ever be reachable
+  // some other way.
+  const sourceIsMultiRole = !source?.roleId && (source?.roleIds?.length ?? 0) > 0;
+  const canSubmit = newPrincipalId !== '' && !idInvalid && !sourceIsMultiRole;
   const sourceIsRole = !!source?.roleId;
   const sourceOverridesRaw = (source?.identityOverrides ?? null) as Record<
     string,
