@@ -60,7 +60,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import { FormattedMessage, useIntl } from 'react-intl';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { LoadingBlock, SubmitButton } from '@vectros-ai/react';
+import { ApiErrorAlert, LoadingBlock, SubmitButton, extractErrorMessage, statusCodeOf } from '@vectros-ai/react';
 
 import {
   ScopeEditor,
@@ -70,13 +70,11 @@ import {
   formatScopeClauseValidationError,
 } from '../../components/ScopeEditor';
 import type { ScopeClause } from '../../components/ScopeEditor';
-import { ApiErrorAlert } from '../../components/ApiErrorAlert';
 import { useActiveTenantId } from '../../auth';
 import { vectrosApiClient } from '../../api/vectrosApi';
 import type { AccessProfileResponse, RoleResponse } from '../../api/vectrosApi';
 import { accessQueryKeys } from '../../lib/accessQueryKeys';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
-import { extractErrorMessage, statusCodeOf } from '../../lib/apiError';
 import { useBeforeNavigate } from '../../lib/useBeforeNavigate';
 
 // ---------------------------------------------------------------------------

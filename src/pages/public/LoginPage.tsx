@@ -61,7 +61,13 @@ export function LoginPage(): React.JSX.Element {
   const intl = useIntl();
 
   const fromState = location.state as LocationFromState | null;
-  const fromPath = fromState?.from?.pathname ?? '/';
+  // Preserve the query string too, not just the path — a redirect target
+  // can carry state that lives only in `search` (e.g. AcceptPage's "sign in
+  // to link" prompt sends the caller back to `/accept?t=<inviteToken>`; a
+  // path-only redirect would land them on a bare /accept with no token).
+  const fromPath = fromState?.from
+    ? `${fromState.from.pathname ?? '/'}${fromState.from.search ?? ''}`
+    : '/';
 
   const [stage, setStage] = useState<Stage>({ kind: 'credentials' });
   const [email, setEmail] = useState('');

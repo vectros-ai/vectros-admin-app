@@ -15,6 +15,12 @@
 //   5. A server-side PostConfirmation hook fires on email-confirmation,
 //      cryptographically verifies the token, and activates the membership.
 //
+// Existing-identity branches (an invitee who already holds a Cognito
+// identity, e.g. from a prior invite to another tenant) pivot away from that
+// signup form: AutoLinkCard/DifferentIdentityCard when they're currently
+// signed in, SignInToLinkCard when they're signed out and step 4's signUp()
+// 409s — see each component's own header comment.
+//
 // The page consumes useAuth()'s embedded-credential methods (signUp, the
 // normalized SignUpResult union) + useCurrentTenant()'s linkInvitation
 // pass-through. This flow is Cognito/embedded-specific by construction — a
@@ -26,13 +32,13 @@
 
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Link as RouterLink, useNavigate, useSearchParams } from 'react-router';
+import { Link as RouterLink, useLocation, useNavigate, useSearchParams } from 'react-router';
 import { Alert, Button, Link, Stack, TextField, Typography } from '@mui/material';
 
 import { FormattedMessage, useIntl } from 'react-intl';
 import type { IntlShape } from 'react-intl';
 
-import { useAuth, useCurrentTenant, authErrorToMessage } from '../../auth';
+import { useAuth, useCurrentTenant, authErrorToMessage, AuthError } from '../../auth';
 import type { SignUpResult } from '../../auth';
 import { AuthCard } from '@vectros-ai/react';
 import { LoadingBlock } from '@vectros-ai/react';
@@ -249,6 +255,62 @@ function DifferentIdentityCard({
   );
 }
 
+/**
+ * Existing-identity, SIGNED-OUT branch. The invitee already holds a
+ * Cognito identity — typically from a prior invite to another tenant — but
+ * isn't currently signed in, so the `user`-gated branch above (AutoLinkCard
+ * for the same email, DifferentIdentityCard for a different one) never runs
+ * and the page falls through to the signup form below. That form's signUp()
+ * call 409s Cognito-side (`UsernameExistsException`, normalized to
+ * `AuthError('USER_ALREADY_EXISTS', ...)`) — this card is what renders
+ * instead of surfacing that as a dead-end inline error.
+ *
+ * Routes to `/login` with `state.from` set to this exact accept URL (path +
+ * query, so the invite token survives the round trip — see LoginPage's
+ * `fromPath`), the same shape `RequireAuth` uses. A successful sign-in lands
+ * the invitee right back on THIS page, at which point `user` is populated
+ * and the existing AutoLinkCard branch takes over — no new linking logic
+ * needed here, only getting them signed in.
+ */
+function SignInToLinkCard({
+  claims,
+}: {
+  readonly claims: InviteTokenClaims;
+}): React.JSX.Element {
+  const intl = useIntl();
+  const location = useLocation();
+
+  return (
+    <AuthCard
+      brandName={BRAND.productName}
+      title={intl.formatMessage({ id: 'accept.existingIdentityTitle' })}
+      subtitle={welcomeSubtitle(intl, claims)}
+    >
+      <Stack spacing={2}>
+        <Typography variant="body1">
+          <FormattedMessage
+            id="accept.existingIdentityBody"
+            values={{ email: claims.email }}
+          />
+        </Typography>
+        <Button
+          variant="contained"
+          size="large"
+          fullWidth
+          component={RouterLink}
+          to="/login"
+          // Pass the whole location, same as RequireAuth — not a hand-picked
+          // subset of fields, so this stays correct if LoginPage ever grows
+          // a reason to read more of it (a hash fragment, `location.state`).
+          state={{ from: location }}
+        >
+          <FormattedMessage id="accept.existingIdentitySignIn" />
+        </Button>
+      </Stack>
+    </AuthCard>
+  );
+}
+
 export function AcceptPage(): React.JSX.Element {
   const [searchParams] = useSearchParams();
   const rawToken = searchParams.get('t');
@@ -287,6 +349,10 @@ export function AcceptPage(): React.JSX.Element {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Set when signUp 409s because a Cognito identity for this email already
+  // exists — pivots the render below to SignInToLinkCard instead of the
+  // doomed signup form + a generic inline error.
+  const [existingIdentity, setExistingIdentity] = useState(false);
 
   // ---- Loading + error states — render and bail ----
 
@@ -340,15 +406,20 @@ export function AcceptPage(): React.JSX.Element {
   // invitee is already signed in:
   //   - as the invited email → auto-link this membership (a signUp would 409).
   //   - as a DIFFERENT email → sign-out-and-retry (identity-confusion guard).
-  // Not signed in → fall through to the first-time signup form below. (A "sign
-  // in to link" path for an existing-but-not-current identity needs a backend
-  // existence probe we don't expose; it degrades to signup, which surfaces a
-  // clear "already exists" error if the email is taken.)
+  // Not signed in → fall through to the first-time signup form below, which
+  // itself pivots to SignInToLinkCard if signUp discovers an existing
+  // identity for this email (no upfront existence probe needed — Cognito's
+  // own 409 tells us).
   if (user) {
     if (user.email.toLowerCase() === claims.email.toLowerCase()) {
       return <AutoLinkCard inviteToken={rawToken} claims={claims} />;
     }
     return <DifferentIdentityCard inviteEmail={claims.email} sessionEmail={user.email} />;
+  }
+
+  // ---- Not signed in, but signUp already told us this email exists ----
+  if (existingIdentity) {
+    return <SignInToLinkCard claims={claims} />;
   }
 
   // ---- Not signed in: first-time signup form ----
@@ -406,6 +477,19 @@ export function AcceptPage(): React.JSX.Element {
         navigate('/login');
       }
     } catch (err) {
+      // An identity for this email already exists (a prior invite to another
+      // tenant) and the invitee is signed out, so the `user`-gated branch
+      // above never ran. Pivot to SignInToLinkCard instead of a generic
+      // inline error on a form that can now only ever fail again.
+      if (err instanceof AuthError && err.code === 'USER_ALREADY_EXISTS') {
+        // Same defense-in-depth as the success path above: don't leave the
+        // just-typed password sitting in state once this mount stops
+        // rendering the form that collected it.
+        setPassword('');
+        setConfirmPassword('');
+        setExistingIdentity(true);
+        return;
+      }
       setError(authErrorToMessage(intl, err));
     } finally {
       setSubmitting(false);

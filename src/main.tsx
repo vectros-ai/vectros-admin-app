@@ -74,13 +74,13 @@ const authProvider = new CognitoAuthProvider({
   productName: BRAND.productName,
 });
 
-// 5a. Wire the partner-API token cache's minter to the just-instantiated
+// 5a. Wire the Vectros API token cache's minter to the just-instantiated
 //     adapter. The cache (consumed by axios interceptors — non-React code that
 //     can't read `useAuth()`) stays provider-agnostic: it knows nothing about
-//     how a partner-API bearer is minted. Extracted to wireTokenMinter.ts
+//     how a Vectros API bearer is minted. Extracted to wireTokenMinter.ts
 //     (with its own unit test) since this module mounts the whole app at
 //     import time and can't itself be unit-tested. Done before React mounts so
-//     the first partner-API call never races this registration.
+//     the first Vectros API call never races this registration.
 wirePartnerApiTokenMinter(authProvider);
 
 // Build id baked in by the versionManifest() plugin in vite.config.ts. The
@@ -130,7 +130,7 @@ ReactDOM.createRoot(rootElement).render(
                 {/*
                   CurrentTenantProvider is inside AuthProvider because it reads
                   memberships from the auth adapter (and on switch, refreshes the
-                  JWT + re-keys the partner-API token cache).
+                  JWT + re-keys the Vectros API token cache).
                 */}
                 <CurrentTenantProvider tenancyProvider={authProvider}>
                   <App />

@@ -67,10 +67,9 @@ import SearchIcon from '@mui/icons-material/Search';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import { FormattedMessage, useIntl } from 'react-intl';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { LoadingBlock, SubmitButton } from '@vectros-ai/react';
+import { ApiErrorAlert, LoadingBlock, SubmitButton } from '@vectros-ai/react';
 
 import { useActiveTenantId } from '../../auth';
-import { ApiErrorAlert } from '../../components/ApiErrorAlert';
 import { vectrosApiClient, VectrosError } from '../../api/vectrosApi';
 import type { GetAccessLogRequest, ReadAccessLogPage, ReadAccessLogRow } from '../../api/vectrosApi';
 import { useDeveloperApi } from '../../api/developerApi';

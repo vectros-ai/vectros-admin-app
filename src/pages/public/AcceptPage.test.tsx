@@ -14,7 +14,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 
 import { AuthProvider, CurrentTenantProvider } from '../../auth';
 import { AuthError } from '../../auth';
@@ -130,7 +130,7 @@ function renderAccept(provider: FullMockProvider, queryString = '') {
             <Routes>
               <Route path="/accept" element={<AcceptPage />} />
               <Route path="/confirm" element={<ConfirmCaptured />} />
-              <Route path="/login" element={<div>login page</div>} />
+              <Route path="/login" element={<LoginCaptured />} />
             </Routes>
           </CurrentTenantProvider>
         </AuthProvider>
@@ -146,6 +146,19 @@ function ConfirmCaptured(): React.JSX.Element {
     <div>
       <div>confirm page</div>
       <div data-testid="confirm-query">{window.location.search /* not used in jsdom */}</div>
+    </div>
+  );
+}
+
+// Helper /login route that exposes the `state.from` it received — lets us
+// assert SignInToLinkCard preserves the accept link (path + query, so the
+// invite token survives) rather than just the bare pathname.
+function LoginCaptured(): React.JSX.Element {
+  const location = useLocation();
+  return (
+    <div>
+      <div>login page</div>
+      <div data-testid="login-from-state">{JSON.stringify(location.state)}</div>
     </div>
   );
 }
@@ -539,6 +552,74 @@ describe('AcceptPage — existing-identity branches', () => {
       expect(screen.getByRole('alert')).toBeInTheDocument();
     });
     expect(screen.getByRole('button', { name: 'Sign out' })).toBeEnabled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Signed-out existing-identity branch. Not signed in at all (so the
+// `user`-gated branches above never run), and signUp discovers the email
+// already has a Cognito identity (from a prior invite to another tenant) —
+// this used to fall through to a doomed signup form and a generic inline
+// "something went wrong" error with no recovery path.
+// ---------------------------------------------------------------------------
+describe('AcceptPage — existing identity, signed out', () => {
+  it('pivots to a "sign in" prompt when signUp reports USER_ALREADY_EXISTS', async () => {
+    const user = userEvent.setup();
+    const provider = mockAdapter({
+      signUp: vi
+        .fn()
+        .mockRejectedValue(
+          new AuthError('USER_ALREADY_EXISTS', 'An account with the given email already exists.'),
+        ),
+    });
+    const t = makeToken({ email: 'invitee@example.com' });
+    renderAccept(provider, `?t=${encodeURIComponent(t)}`);
+
+    await screen.findByRole('heading', { name: 'Welcome!' });
+    await user.type(screen.getByLabelText(/first name/i), 'A');
+    await user.type(screen.getByLabelText(/last name/i), 'B');
+    await user.type(screen.getByLabelText(/^Password/), 'aaaaaaaa');
+    await user.type(screen.getByLabelText(/^Confirm password/), 'aaaaaaaa');
+    await user.click(screen.getByRole('button', { name: 'Create account' }));
+
+    // The doomed form is gone — replaced by the sign-in prompt, not a
+    // generic inline error on a form that can now only ever fail again.
+    expect(
+      await screen.findByRole('heading', { name: 'You already have an account' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText(/first name/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText(/an account already exists for invitee@example\.com/i)).toBeInTheDocument();
+  });
+
+  it('"Sign in" preserves the accept link (path + query) so the invite token survives', async () => {
+    const user = userEvent.setup();
+    const provider = mockAdapter({
+      signUp: vi.fn().mockRejectedValue(new AuthError('USER_ALREADY_EXISTS', 'exists')),
+    });
+    const t = makeToken({ email: 'invitee@example.com' });
+    renderAccept(provider, `?t=${encodeURIComponent(t)}`);
+
+    await screen.findByRole('heading', { name: 'Welcome!' });
+    await user.type(screen.getByLabelText(/first name/i), 'A');
+    await user.type(screen.getByLabelText(/last name/i), 'B');
+    await user.type(screen.getByLabelText(/^Password/), 'aaaaaaaa');
+    await user.type(screen.getByLabelText(/^Confirm password/), 'aaaaaaaa');
+    await user.click(screen.getByRole('button', { name: 'Create account' }));
+
+    await user.click(await screen.findByRole('link', { name: 'Sign in' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('login page')).toBeInTheDocument();
+    });
+    // A path-only redirect would land back on a bare /accept with no `t`,
+    // hitting the "this link is invalid" error state instead of resuming
+    // the flow — the state must carry the full accept URL.
+    const fromState = JSON.parse(
+      screen.getByTestId('login-from-state').textContent ?? 'null',
+    ) as { from?: { pathname?: string; search?: string } };
+    expect(fromState.from?.pathname).toBe('/accept');
+    expect(fromState.from?.search).toBe(`?t=${encodeURIComponent(t)}`);
   });
 });
 

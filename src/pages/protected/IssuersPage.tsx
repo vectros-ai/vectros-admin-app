@@ -62,12 +62,11 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditIcon from '@mui/icons-material/Edit';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { FormattedMessage, useIntl } from 'react-intl';
-import { LoadingBlock, SubmitButton } from '@vectros-ai/react';
+import { ApiErrorAlert, LoadingBlock, SubmitButton } from '@vectros-ai/react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { useDeveloperApi } from '../../api/developerApi';
 import type { IssuerSummary } from '../../api/developerApi';
-import { ApiErrorAlert } from '../../components/ApiErrorAlert';
 import { accessQueryKeys } from '../../lib/accessQueryKeys';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
 

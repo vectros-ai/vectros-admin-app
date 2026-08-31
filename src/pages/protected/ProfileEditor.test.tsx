@@ -28,12 +28,7 @@
 
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import {
-  MemoryRouter,
-  Route,
-  Routes,
-  useLocation,
-} from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -90,6 +85,13 @@ const ROLE_ANALYST = {
   scopes: [{ allowed_actions: ['records:r'], data_scope: {} }],
 };
 
+const ROLE_VIEWER = {
+  contextId: 'engineering',
+  roleId: 'viewer',
+  name: 'Viewer',
+  scopes: [{ allowed_actions: ['records:r'], data_scope: {} }],
+};
+
 const PROFILE_ALICE_ROLED = {
   contextId: 'engineering',
   principalId: 'usr_alice',
@@ -108,22 +110,41 @@ interface MockOverrides {
 function makeMockClient(o: MockOverrides = {}) {
   return {
     auth: {
-      getAccessProfile:
-        o.getAccessProfile ?? vi.fn().mockResolvedValue(PROFILE_ALICE_ROLED),
+      getAccessProfile: o.getAccessProfile ?? vi.fn().mockResolvedValue(PROFILE_ALICE_ROLED),
       createAccessProfile:
         o.createAccessProfile ??
-        vi.fn().mockImplementation(({ body }: { body: { principalId: string } }) =>
-          Promise.resolve({ contextId: 'engineering', ...body }),
-        ),
-      updateAccessProfile:
-        o.updateAccessProfile ?? vi.fn().mockResolvedValue(PROFILE_ALICE_ROLED),
-      deleteAccessProfile:
-        o.deleteAccessProfile ?? vi.fn().mockResolvedValue(undefined),
-      listRoles:
-        o.listRoles ??
-        vi.fn().mockResolvedValue(pageOf([ROLE_ENG_MEMBER, ROLE_ANALYST])),
+        vi
+          .fn()
+          .mockImplementation(({ body }: { body: { principalId: string } }) =>
+            Promise.resolve({ contextId: 'engineering', ...body }),
+          ),
+      updateAccessProfile: o.updateAccessProfile ?? vi.fn().mockResolvedValue(PROFILE_ALICE_ROLED),
+      deleteAccessProfile: o.deleteAccessProfile ?? vi.fn().mockResolvedValue(undefined),
+      listRoles: o.listRoles ?? vi.fn().mockResolvedValue(pageOf([ROLE_ENG_MEMBER, ROLE_ANALYST])),
     },
   };
+}
+
+/** Opens the role Autocomplete and clicks a matching option — the shared
+ *  "select one role" interaction used across create/edit tests below. */
+async function selectRoleOption(user: ReturnType<typeof userEvent.setup>, optionName: RegExp) {
+  const input = screen.getByRole('combobox', { name: /^role/i });
+  await user.click(input);
+  await user.click(await screen.findByRole('option', { name: optionName }));
+}
+
+/** Removes the last-selected role chip via Backspace on the empty input —
+ *  the multi-select Autocomplete's built-in remove gesture (no per-chip
+ *  delete-button accessible name is exposed by MUI's default rendering). */
+async function removeLastRoleChip(user: ReturnType<typeof userEvent.setup>) {
+  const input = screen.getByRole('combobox', { name: /^role/i });
+  await user.click(input);
+  await user.keyboard('{Backspace}');
+  // Close the listbox — clicking the input to focus it also opens the
+  // dropdown, and a still-selectable role's label then appears TWICE (as
+  // a dropdown option, in addition to any remaining chip), which trips up
+  // a plain text query for "is this chip gone".
+  await user.keyboard('{Escape}');
 }
 
 function LocationProbe() {
@@ -144,9 +165,19 @@ function renderEditor(
     isError: false,
     resolve: (pid: string) => {
       const u = DIR_USERS.find((x) => userPrincipalId(x.id) === pid);
-      if (u) return { kind: 'user', label: u.email, hasName: true, principalId: pid, user: u as never, unresolved: false };
-      if (pid.startsWith('key_')) return { kind: 'key', label: pid, hasName: false, principalId: pid, unresolved: false };
-      if (pid.startsWith('usr_')) return { kind: 'user', label: pid, hasName: false, principalId: pid, unresolved: true };
+      if (u)
+        return {
+          kind: 'user',
+          label: u.email,
+          hasName: true,
+          principalId: pid,
+          user: u as never,
+          unresolved: false,
+        };
+      if (pid.startsWith('key_'))
+        return { kind: 'key', label: pid, hasName: false, principalId: pid, unresolved: false };
+      if (pid.startsWith('usr_'))
+        return { kind: 'user', label: pid, hasName: false, principalId: pid, unresolved: true };
       return { kind: 'unknown', label: pid, hasName: false, principalId: pid, unresolved: false };
     },
   });
@@ -207,10 +238,7 @@ describe('ProfileEditor — create mode', () => {
 
     // Fill principalId — Save still disabled (role source selected
     // by default; need a role).
-    await user.type(
-      screen.getByRole('combobox', { name: /user/i }),
-      'usr_charlie',
-    );
+    await user.type(screen.getByRole('combobox', { name: /user/i }), 'usr_charlie');
     expect(saveBtn).toBeDisabled();
 
     // Pick a role via Autocomplete.
@@ -226,10 +254,7 @@ describe('ProfileEditor — create mode', () => {
     const { client } = renderEditor();
     await screen.findByRole('heading', { level: 1, name: /create access profile/i });
 
-    await user.type(
-      screen.getByRole('combobox', { name: /user/i }),
-      'usr_charlie',
-    );
+    await user.type(screen.getByRole('combobox', { name: /user/i }), 'usr_charlie');
     const tplInput = screen.getByRole('combobox', { name: /^role/i });
     await user.click(tplInput);
     await user.click(await screen.findByRole('option', { name: /eng-member/i }));
@@ -289,10 +314,8 @@ describe('ProfileEditor — create mode', () => {
     await screen.findByRole('heading', { level: 1, name: /create access profile/i });
 
     // Set a role draft.
-    const tplInput = screen.getByRole('combobox', { name: /^role/i }) as HTMLInputElement;
-    await user.click(tplInput);
-    await user.click(await screen.findByRole('option', { name: /eng-member/i }));
-    expect(tplInput.value).toContain('eng-member');
+    await selectRoleOption(user, /eng-member/i);
+    expect(screen.getByText('Engineering Team Member (eng-member)')).toBeInTheDocument();
 
     // Attempt to switch to inline, then CANCEL the confirmation.
     await user.click(screen.getByRole('radio', { name: /inline scope clauses/i }));
@@ -301,10 +324,14 @@ describe('ProfileEditor — create mode', () => {
 
     // Dialog closes; the role source + its draft are preserved (no discard).
     await waitFor(() =>
-      expect(screen.queryByRole('dialog', { name: /discard the other source/i })).not.toBeInTheDocument(),
+      expect(
+        screen.queryByRole('dialog', { name: /discard the other source/i }),
+      ).not.toBeInTheDocument(),
     );
-    expect((screen.getByRole('radio', { name: /use a role/i }) as HTMLInputElement).checked).toBe(true);
-    expect((screen.getByRole('combobox', { name: /^role/i }) as HTMLInputElement).value).toContain('eng-member');
+    expect((screen.getByRole('radio', { name: /use a role/i }) as HTMLInputElement).checked).toBe(
+      true,
+    );
+    expect(screen.getByText('Engineering Team Member (eng-member)')).toBeInTheDocument();
   });
 
   // Identity-override AUTHORING is disabled app-wide (this app's credential
@@ -319,10 +346,7 @@ describe('ProfileEditor — create mode', () => {
     const { client } = renderEditor();
     await screen.findByRole('heading', { level: 1, name: /create access profile/i });
 
-    await user.type(
-      screen.getByRole('combobox', { name: /user/i }),
-      'usr_dana',
-    );
+    await user.type(screen.getByRole('combobox', { name: /user/i }), 'usr_dana');
     const tplInput = screen.getByRole('combobox', { name: /^role/i });
     await user.click(tplInput);
     await user.click(await screen.findByRole('option', { name: /analyst/i }));
@@ -389,9 +413,9 @@ describe('ProfileEditor — edit mode', () => {
       name: /use a role/i,
     })) as HTMLInputElement;
     expect(roleRadio.checked).toBe(true);
-    // The autocomplete's selected value renders as the combobox's input value.
-    const tplInput = screen.getByRole('combobox', { name: /^role/i }) as HTMLInputElement;
-    expect(tplInput.value).toContain('eng-member');
+    // The autocomplete's selected value renders as a chip, not input text
+    // (multi-select — see the module docstring).
+    expect(await screen.findByText('Engineering Team Member (eng-member)')).toBeInTheDocument();
   });
 
   it('Edit submits updateAccessProfile envelope', async () => {
@@ -400,12 +424,12 @@ describe('ProfileEditor — edit mode', () => {
       initialUrl: '/access/contexts/engineering/profiles/usr_alice',
     });
 
-    // Wait for the form to mount (baseline loaded → fields rendered).
-    const tplInput = await screen.findByRole('combobox', { name: /^role/i });
-    await user.click(tplInput);
-    await user.clear(tplInput);
-    await user.type(tplInput, 'analyst');
-    await user.click(await screen.findByRole('option', { name: /analyst/i }));
+    // Wait for the form to mount (baseline loaded → fields rendered), then
+    // swap the loaded role (eng-member) for a different single role: remove
+    // its chip, select the other.
+    await screen.findByRole('combobox', { name: /^role/i });
+    await removeLastRoleChip(user);
+    await selectRoleOption(user, /analyst/i);
 
     await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled());
     await user.click(screen.getByRole('button', { name: /^save$/i }));
@@ -416,11 +440,12 @@ describe('ProfileEditor — edit mode', () => {
     const call = client.auth.updateAccessProfile.mock.calls[0]?.[0] as {
       contextId: string;
       principalId: string;
-      body: { roleId: string };
+      body: { roleId?: string; roleIds?: string[] };
     };
     expect(call.contextId).toBe('engineering');
     expect(call.principalId).toBe('usr_alice');
     expect(call.body.roleId).toBe('analyst');
+    expect(call.body.roleIds).toBeUndefined();
   });
 
   it('Identity overrides prefill from loaded profile + expand by default when set', async () => {
@@ -447,8 +472,8 @@ const PROFILE_ALICE_MULTIROLE = {
   roleIds: ['eng-member', 'analyst'],
 };
 
-describe('ProfileEditor — multi-role composition (roleIds) is read-only', () => {
-  it('renders an explicit notice, not a misread empty inline profile — Save disabled', async () => {
+describe('ProfileEditor — multi-role composition (roleIds) authoring', () => {
+  it('loads both roles as chips in the (now single) role Autocomplete — Save disabled while clean', async () => {
     renderEditor({
       client: makeMockClient({
         getAccessProfile: vi.fn().mockResolvedValue(PROFILE_ALICE_MULTIROLE),
@@ -461,22 +486,17 @@ describe('ProfileEditor — multi-role composition (roleIds) is read-only', () =
     })) as HTMLInputElement;
     expect(roleRadio.checked).toBe(true);
 
-    // The single-role Autocomplete must NOT render — nothing to silently
-    // truncate the composition down to.
-    expect(screen.queryByRole('combobox', { name: /^role/i })).not.toBeInTheDocument();
+    // The multi-select Autocomplete renders (no more separate "read-only
+    // notice" branch), pre-filled with both composing roles as chips.
+    expect(await screen.findByRole('combobox', { name: /^role/i })).toBeInTheDocument();
+    expect(screen.getByText('Engineering Team Member (eng-member)')).toBeInTheDocument();
+    expect(screen.getByText('Analyst (analyst)')).toBeInTheDocument();
 
-    // The notice names both composing roles, resolved to their human names
-    // (falling back to the raw roleId when a role can't be resolved).
-    const notice = await screen.findByText(/composed of 2 roles/i);
-    expect(notice.textContent).toMatch(/Engineering Team Member/);
-    expect(notice.textContent).toMatch(/Analyst/);
-
-    // Never silently misread as inline — the ScopeEditor is not shown either.
+    // Never misread as inline — the ScopeEditor is not shown.
     expect(screen.queryByText('Scope clauses')).not.toBeInTheDocument();
 
-    // Save stays disabled: this editor can't author roleIds, so it must not
-    // let an untouched multi-role profile be saved (which would submit
-    // whatever the hidden single-role/inline state happened to default to).
+    // Clean load — nothing touched yet — stays disabled, same as any other
+    // freshly-loaded profile (dirty-state, not a can't-author restriction).
     expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
   });
 
@@ -492,6 +512,98 @@ describe('ProfileEditor — multi-role composition (roleIds) is read-only', () =
     expect(summary.textContent).toMatch(/analyst/);
   });
 
+  it('removing one role down to a single selection saves as `roleId`, not `roleIds`', async () => {
+    const user = userEvent.setup();
+    const { client } = renderEditor({
+      client: makeMockClient({
+        getAccessProfile: vi.fn().mockResolvedValue(PROFILE_ALICE_MULTIROLE),
+      }),
+      initialUrl: '/access/contexts/engineering/profiles/usr_alice',
+    });
+    await screen.findByText('Analyst (analyst)');
+
+    // Backspace removes the last entry of the `value` array as rendered —
+    // ROLE order (ROLE_ENG_MEMBER, ROLE_ANALYST) puts Analyst last.
+    await removeLastRoleChip(user);
+    await waitFor(() => expect(screen.queryByText('Analyst (analyst)')).not.toBeInTheDocument());
+    expect(screen.getByText('Engineering Team Member (eng-member)')).toBeInTheDocument();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(client.auth.updateAccessProfile).toHaveBeenCalledTimes(1));
+    const call = client.auth.updateAccessProfile.mock.calls[0]?.[0] as {
+      body: { roleId?: string; roleIds?: string[] };
+    };
+    expect(call.body.roleId).toBe('eng-member');
+    expect(call.body.roleIds).toBeUndefined();
+  });
+
+  it('adding a third role to a loaded composition saves as `roleIds` (2+, not the deprecated `roleId`)', async () => {
+    const user = userEvent.setup();
+    const { client } = renderEditor({
+      client: makeMockClient({
+        getAccessProfile: vi.fn().mockResolvedValue(PROFILE_ALICE_MULTIROLE),
+        listRoles: vi.fn().mockResolvedValue(pageOf([ROLE_ENG_MEMBER, ROLE_ANALYST, ROLE_VIEWER])),
+      }),
+      initialUrl: '/access/contexts/engineering/profiles/usr_alice',
+    });
+    await screen.findByText('Analyst (analyst)');
+
+    await selectRoleOption(user, /^viewer/i);
+    await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(client.auth.updateAccessProfile).toHaveBeenCalledTimes(1));
+    const call = client.auth.updateAccessProfile.mock.calls[0]?.[0] as {
+      body: { roleId?: string; roleIds?: string[] };
+    };
+    expect(call.body.roleId).toBeUndefined();
+    expect(call.body.roleIds).toEqual(expect.arrayContaining(['eng-member', 'analyst', 'viewer']));
+    expect(call.body.roleIds).toHaveLength(3);
+  });
+
+  it('a composing role no longer in the roles list (deleted from the context) renders as a chip and survives an unrelated add — not silently dropped', async () => {
+    // Regression coverage: deriving the Autocomplete's `value` from the
+    // ROLES list (filtering for ids present in it) instead of from the
+    // `roleIds` state itself would make an unresolvable id invisible, and
+    // the next add/remove — which rebuilds `roleIds` from what's visibly
+    // selected — would then silently drop it even though the user never
+    // touched it.
+    const user = userEvent.setup();
+    const { client } = renderEditor({
+      client: makeMockClient({
+        getAccessProfile: vi.fn().mockResolvedValue({
+          contextId: 'engineering',
+          principalId: 'usr_alice',
+          roleIds: ['eng-member', 'deleted-role'],
+        }),
+        // `deleted-role` is NOT in this list — as if it were removed from
+        // the context after the profile was composed.
+        listRoles: vi.fn().mockResolvedValue(pageOf([ROLE_ENG_MEMBER, ROLE_ANALYST])),
+      }),
+      initialUrl: '/access/contexts/engineering/profiles/usr_alice',
+    });
+    await screen.findByText('Engineering Team Member (eng-member)');
+    // The unresolvable id still renders — falls back to the bare id, same
+    // as the old read-only notice used to (never silently invisible).
+    expect(screen.getByText('deleted-role')).toBeInTheDocument();
+
+    await selectRoleOption(user, /^analyst/i);
+    await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(client.auth.updateAccessProfile).toHaveBeenCalledTimes(1));
+    const call = client.auth.updateAccessProfile.mock.calls[0]?.[0] as {
+      body: { roleIds?: string[] };
+    };
+    // The stale reference survives an edit that never touched it.
+    expect(call.body.roleIds).toEqual(
+      expect.arrayContaining(['eng-member', 'deleted-role', 'analyst']),
+    );
+    expect(call.body.roleIds).toHaveLength(3);
+  });
+
   it('switching to inline still opens the discard-confirm guard (composition is a draft too)', async () => {
     const user = userEvent.setup();
     renderEditor({
@@ -500,17 +612,16 @@ describe('ProfileEditor — multi-role composition (roleIds) is read-only', () =
       }),
       initialUrl: '/access/contexts/engineering/profiles/usr_alice',
     });
-    await screen.findByText(/composed of 2 roles/i);
+    await screen.findByText('Analyst (analyst)');
 
     const inlineRadio = screen.getByRole('radio', {
       name: /inline scope clauses/i,
     }) as HTMLInputElement;
     await user.click(inlineRadio);
 
-    // Without the fix, roleRef stays '' for a multi-role profile and the
-    // existing "does the abandoned side hold a draft?" check would see
-    // nothing to lose — switching away from a real 2-role grant with no
-    // confirmation at all.
+    // The "does the abandoned side hold a draft?" check must see the loaded
+    // composition as a draft to abandon — switching away from a real 2-role
+    // grant with no confirmation at all would be a silent-loss regression.
     const dialog = await screen.findByRole('dialog', { name: /discard the other source/i });
     expect(inlineRadio.checked).toBe(false);
 
@@ -518,14 +629,14 @@ describe('ProfileEditor — multi-role composition (roleIds) is read-only', () =
     await waitFor(() => expect(inlineRadio.checked).toBe(true));
   });
 
-  it('Clone is disabled for a multi-role profile (would otherwise submit an empty scopes array and 400 opaquely)', async () => {
+  it('Clone stays disabled for a multi-role profile (the clone dialog itself does not yet support composing roles)', async () => {
     renderEditor({
       client: makeMockClient({
         getAccessProfile: vi.fn().mockResolvedValue(PROFILE_ALICE_MULTIROLE),
       }),
       initialUrl: '/access/contexts/engineering/profiles/usr_alice',
     });
-    await screen.findByText(/composed of 2 roles/i);
+    await screen.findByText('Analyst (analyst)');
     expect(screen.getByRole('button', { name: /^clone$/i })).toBeDisabled();
   });
 });
@@ -572,8 +683,7 @@ describe('ProfileEditor — dirty-state regression', () => {
     expect(roleRadio.checked).toBe(true);
     // The loaded scope:org override is seeded; the form must still read clean.
     expect(
-      (await screen.findByRole('textbox', { name: /org id/i }) as HTMLInputElement)
-        .value,
+      ((await screen.findByRole('textbox', { name: /org id/i })) as HTMLInputElement).value,
     ).toBe('org_eng');
     expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
   });
@@ -683,28 +793,21 @@ describe('ProfileEditor — identity-override round-trip', () => {
     const { client } = renderEditor({
       client: makeMockClient({
         getAccessProfile: vi.fn().mockResolvedValue(PROFILE_CANONICAL_OVERRIDES),
-        updateAccessProfile: vi
-          .fn()
-          .mockResolvedValue(PROFILE_CANONICAL_OVERRIDES),
+        updateAccessProfile: vi.fn().mockResolvedValue(PROFILE_CANONICAL_OVERRIDES),
       }),
       initialUrl: '/access/contexts/engineering/profiles/usr_alice',
     });
-    // PROFILE_CANONICAL_OVERRIDES already holds 'eng-member' — switch to the
-    // OTHER role so this is a genuine, dirtying change.
-    const tplInput = await screen.findByRole('combobox', { name: /^role/i });
-    await user.click(tplInput);
-    await user.clear(tplInput);
-    await user.type(tplInput, 'analyst');
-    await user.click(await screen.findByRole('option', { name: /analyst/i }));
+    // PROFILE_CANONICAL_OVERRIDES already holds 'eng-member' — swap to the
+    // OTHER role (remove, then select) so this is a genuine, dirtying change,
+    // and the save still ends up single-role (`roleId`, not `roleIds`).
+    await screen.findByRole('combobox', { name: /^role/i });
+    await removeLastRoleChip(user);
+    await selectRoleOption(user, /analyst/i);
 
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled(),
-    );
+    await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled());
     await user.click(screen.getByRole('button', { name: /^save$/i }));
 
-    await waitFor(() =>
-      expect(client.auth.updateAccessProfile).toHaveBeenCalledTimes(1),
-    );
+    await waitFor(() => expect(client.auth.updateAccessProfile).toHaveBeenCalledTimes(1));
     const call = client.auth.updateAccessProfile.mock.calls[0]?.[0] as {
       body: { identityOverrides?: Record<string, unknown>; roleId?: string };
     };
@@ -714,29 +817,21 @@ describe('ProfileEditor — identity-override round-trip', () => {
     expect(call.body.identityOverrides).toBeUndefined();
   });
 
-  it('...and the SAME holds even when the session COULD edit the overrides — being able to isn\'t the same as doing it', async () => {
+  it("...and the SAME holds even when the session COULD edit the overrides — being able to isn't the same as doing it", async () => {
     registerScope(['*'], { 'scope:org': 'org_eng' }); // matches PROFILE_ALICE_ROLED exactly
     const user = userEvent.setup();
     const { client } = renderEditor({
       initialUrl: '/access/contexts/engineering/profiles/usr_alice',
     });
-    const tplInput = await screen.findByRole('combobox', { name: /^role/i });
-    await waitFor(() =>
-      expect(screen.getByRole('textbox', { name: /org id/i })).toBeEnabled(),
-    );
-    await user.click(tplInput);
-    await user.clear(tplInput);
-    await user.type(tplInput, 'analyst');
-    await user.click(await screen.findByRole('option', { name: /analyst/i }));
+    await screen.findByRole('combobox', { name: /^role/i });
+    await waitFor(() => expect(screen.getByRole('textbox', { name: /org id/i })).toBeEnabled());
+    await removeLastRoleChip(user);
+    await selectRoleOption(user, /analyst/i);
 
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled(),
-    );
+    await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled());
     await user.click(screen.getByRole('button', { name: /^save$/i }));
 
-    await waitFor(() =>
-      expect(client.auth.updateAccessProfile).toHaveBeenCalledTimes(1),
-    );
+    await waitFor(() => expect(client.auth.updateAccessProfile).toHaveBeenCalledTimes(1));
     const call = client.auth.updateAccessProfile.mock.calls[0]?.[0] as {
       body: { identityOverrides?: Record<string, unknown>; roleId?: string };
     };
@@ -772,17 +867,12 @@ describe('ProfileEditor — a stale invalid stored override never permanently bl
     // The inline error still renders — informational, not silently dropped.
     expect(await screen.findByText(/1.{0,3}128 characters/i)).toBeInTheDocument();
 
-    const tplInput = screen.getByRole('combobox', { name: /^role/i });
-    await user.click(tplInput);
-    await user.clear(tplInput);
-    await user.type(tplInput, 'analyst');
-    await user.click(await screen.findByRole('option', { name: /analyst/i }));
+    screen.getByRole('combobox', { name: /^role/i });
+    await selectRoleOption(user, /analyst/i);
 
     // Save enables despite the pre-existing override error — this session
     // has no way to fix it, so it must not block an unrelated edit.
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled(),
-    );
+    await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled());
   });
 
   it('DOES still block Save when this session holds an identity and genuinely could fix it', async () => {
@@ -795,20 +885,13 @@ describe('ProfileEditor — a stale invalid stored override never permanently bl
       initialUrl: '/access/contexts/engineering/profiles/usr_alice',
     });
     expect(await screen.findByText(/1.{0,3}128 characters/i)).toBeInTheDocument();
-    await waitFor(() =>
-      expect(screen.getByRole('textbox', { name: /org id/i })).toBeEnabled(),
-    );
+    await waitFor(() => expect(screen.getByRole('textbox', { name: /org id/i })).toBeEnabled());
 
-    const tplInput = screen.getByRole('combobox', { name: /^role/i });
-    await user.click(tplInput);
-    await user.clear(tplInput);
-    await user.type(tplInput, 'analyst');
-    await user.click(await screen.findByRole('option', { name: /analyst/i }));
+    screen.getByRole('combobox', { name: /^role/i });
+    await selectRoleOption(user, /analyst/i);
 
     // Stays disabled — this session COULD fix the override and hasn't.
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled(),
-    );
+    await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled());
   });
 });
 
@@ -829,14 +912,9 @@ describe('ProfileEditor — clone dialog', () => {
     await user.click(cloneOpenBtn);
     const dialog = await screen.findByRole('dialog', { name: /clone access profile/i });
 
-    expect(
-      within(dialog).getByText(/won't be copied to the clone/i),
-    ).toBeInTheDocument();
+    expect(within(dialog).getByText(/won't be copied to the clone/i)).toBeInTheDocument();
 
-    await user.type(
-      within(dialog).getByRole('textbox', { name: /new principal id/i }),
-      'usr_eve',
-    );
+    await user.type(within(dialog).getByRole('textbox', { name: /new principal id/i }), 'usr_eve');
     // Materialize toggle is OFF by default.
     await user.click(within(dialog).getByRole('button', { name: /^clone$/i }));
 
@@ -864,14 +942,9 @@ describe('ProfileEditor — clone dialog', () => {
     await user.click(cloneOpenBtn);
     const dialog = await screen.findByRole('dialog', { name: /clone access profile/i });
 
-    expect(
-      within(dialog).queryByText(/won't be copied to the clone/i),
-    ).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/won't be copied to the clone/i)).not.toBeInTheDocument();
 
-    await user.type(
-      within(dialog).getByRole('textbox', { name: /new principal id/i }),
-      'usr_eve',
-    );
+    await user.type(within(dialog).getByRole('textbox', { name: /new principal id/i }), 'usr_eve');
     await user.click(within(dialog).getByRole('button', { name: /^clone$/i }));
 
     await waitFor(() => {
@@ -897,14 +970,9 @@ describe('ProfileEditor — clone dialog', () => {
     await user.click(cloneOpenBtn);
     const dialog = await screen.findByRole('dialog', { name: /clone access profile/i });
 
-    expect(
-      within(dialog).queryByText(/won't be copied to the clone/i),
-    ).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/won't be copied to the clone/i)).not.toBeInTheDocument();
 
-    await user.type(
-      within(dialog).getByRole('textbox', { name: /new principal id/i }),
-      'key_bot2',
-    );
+    await user.type(within(dialog).getByRole('textbox', { name: /new principal id/i }), 'key_bot2');
     await user.click(within(dialog).getByRole('button', { name: /^clone$/i }));
 
     await waitFor(() => {
@@ -928,16 +996,11 @@ describe('ProfileEditor — clone dialog', () => {
     await user.click(cloneOpenBtn);
     const dialog = await screen.findByRole('dialog', { name: /clone access profile/i });
 
-    await user.type(
-      within(dialog).getByRole('textbox', { name: /new principal id/i }),
-      'usr_eve',
-    );
+    await user.type(within(dialog).getByRole('textbox', { name: /new principal id/i }), 'usr_eve');
     // Toggle materialize ON. MUI Switch's accessible name attaches via
     // the FormControlLabel; clicking the label toggles the underlying
     // input. getByLabelText finds it through the label association.
-    await user.click(
-      within(dialog).getByLabelText(/materialize role into inline scopes/i),
-    );
+    await user.click(within(dialog).getByLabelText(/materialize role into inline scopes/i));
     await user.click(within(dialog).getByRole('button', { name: /^clone$/i }));
 
     await waitFor(() => {
@@ -976,9 +1039,7 @@ describe('ProfileEditor — delete dialog', () => {
     const dialog = await screen.findByRole('dialog', { name: /delete access profile/i });
 
     // Body mentions the ~5-min cache window.
-    expect(
-      within(dialog).getByText(/within ~5 minutes/i),
-    ).toBeInTheDocument();
+    expect(within(dialog).getByText(/within ~5 minutes/i)).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: /delete profile/i }));
 
     await waitFor(() => {
@@ -994,7 +1055,7 @@ describe('ProfileEditor — delete dialog', () => {
     });
   });
 
-  it('disables Delete, with an explanation, when the session identity does not match the profile\'s overrides', async () => {
+  it("disables Delete, with an explanation, when the session identity does not match the profile's overrides", async () => {
     // The default fixture (PROFILE_ALICE_ROLED) has a non-empty scope:org
     // override; the default session (registerScope(['*']) in beforeEach, no
     // identity) holds nothing that matches it — removing it would displace
@@ -1007,9 +1068,7 @@ describe('ProfileEditor — delete dialog', () => {
     await user.click(screen.getByRole('button', { name: /^delete$/i }));
     const dialog = await screen.findByRole('dialog', { name: /delete access profile/i });
 
-    expect(
-      within(dialog).getByText(/this sign-in doesn't hold/i),
-    ).toBeInTheDocument();
+    expect(within(dialog).getByText(/this sign-in doesn't hold/i)).toBeInTheDocument();
     // Disabled — a real click can't even land on it (pointer-events: none),
     // which is the guard itself; nothing more to prove by attempting one. (A
     // trailing `deleteAccessProfile).not.toHaveBeenCalled()` here would be
@@ -1018,7 +1077,7 @@ describe('ProfileEditor — delete dialog', () => {
     expect(within(dialog).getByRole('button', { name: /delete profile/i })).toBeDisabled();
   });
 
-  it('allows Delete when the session holds an identity matching the profile\'s overrides — the false-deny fix', async () => {
+  it("allows Delete when the session holds an identity matching the profile's overrides — the false-deny fix", async () => {
     // Same PROFILE_ALICE_ROLED (scope:org: org_eng); this session holds
     // EXACTLY that value — the platform's displacement rule is satisfied, so
     // this delete is really authorized, not merely appearing to be.
@@ -1084,9 +1143,7 @@ describe('ProfileEditor — hardening states', () => {
       }),
       initialUrl: '/access/contexts/engineering/profiles/usr_alice',
     });
-    expect(
-      await screen.findByLabelText(/loading profiles/i),
-    ).toBeInTheDocument();
+    expect(await screen.findByLabelText(/loading profiles/i)).toBeInTheDocument();
     resolve?.(PROFILE_ALICE_ROLED);
   });
 
@@ -1120,11 +1177,8 @@ describe('ProfileEditor — hardening states', () => {
       }),
       initialUrl: '/access/contexts/engineering/profiles/usr_alice',
     });
-    const tplInput = await screen.findByRole('combobox', { name: /^role/i });
-    await user.click(tplInput);
-    await user.clear(tplInput);
-    await user.type(tplInput, 'analyst');
-    await user.click(await screen.findByRole('option', { name: /analyst/i }));
+    await screen.findByRole('combobox', { name: /^role/i });
+    await selectRoleOption(user, /analyst/i);
 
     const saveBtn = screen.getByRole('button', { name: /^save$/i });
     await waitFor(() => expect(saveBtn).toBeEnabled());
@@ -1151,10 +1205,7 @@ describe('ProfileEditor — hardening states', () => {
       initialUrl: '/access/contexts/engineering/profiles/new',
     });
     await screen.findByRole('heading', { level: 1, name: /create access profile/i });
-    await user.type(
-      screen.getByRole('combobox', { name: /user/i }),
-      'usr_charlie',
-    );
+    await user.type(screen.getByRole('combobox', { name: /user/i }), 'usr_charlie');
     const tplInput = screen.getByRole('combobox', { name: /^role/i });
     await user.click(tplInput);
     await user.click(await screen.findByRole('option', { name: /eng-member/i }));
@@ -1172,7 +1223,10 @@ describe('ProfileEditor — hardening states', () => {
     const notALiveUser = new VectrosError({
       message: 'bad request',
       statusCode: 400,
-      body: { message: "principalId does not name a live user in your tenant.", requestId: 'req-400-1' },
+      body: {
+        message: 'principalId does not name a live user in your tenant.',
+        requestId: 'req-400-1',
+      },
     });
     renderEditor({
       client: makeMockClient({
@@ -1235,10 +1289,7 @@ describe('ProfileEditor — hardening states', () => {
     await waitFor(() => expect(cloneOpenBtn).toBeEnabled());
     await user.click(cloneOpenBtn);
     const dialog = await screen.findByRole('dialog', { name: /clone access profile/i });
-    await user.type(
-      within(dialog).getByRole('textbox', { name: /new principal id/i }),
-      'usr_eve',
-    );
+    await user.type(within(dialog).getByRole('textbox', { name: /new principal id/i }), 'usr_eve');
     await user.click(within(dialog).getByRole('button', { name: /^clone$/i }));
 
     await waitFor(() => expect(within(dialog).getByRole('alert')).toBeInTheDocument());

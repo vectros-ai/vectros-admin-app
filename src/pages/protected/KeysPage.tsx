@@ -47,10 +47,8 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import { ConfirmDialog, LoadingBlock } from '@vectros-ai/react';
+import { ApiErrorAlert, ConfirmDialog, LoadingBlock, RequestIdCaption } from '@vectros-ai/react';
 import { ScopedKeyCreateDialog } from './ScopedKeyCreateDialog';
-import { ApiErrorAlert } from '../../components/ApiErrorAlert';
-import { RequestIdCaption } from '../../components/RequestIdCaption';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import AddIcon from '@mui/icons-material/Add';

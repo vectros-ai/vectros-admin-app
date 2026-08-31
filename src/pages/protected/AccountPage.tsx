@@ -36,13 +36,13 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth, authErrorToMessage } from '../../auth';
 import type { TotpSetupDetails } from '../../auth';
 import {
+  ApiErrorAlert,
   ConfirmDialog,
   LoadingBlock,
   MetaList,
   MetaRow,
   TotpEnrollmentWizard,
 } from '@vectros-ai/react';
-import { ApiErrorAlert } from '../../components/ApiErrorAlert';
 
 const MFA_STATUS_KEY = ['mfaStatus'] as const;
 

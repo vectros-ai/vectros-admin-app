@@ -18,8 +18,13 @@
 //     in the OTHER tenant (test vs. live) is also NOT this case: it creates a genuine second
 //     membership and succeeds. Other errors render a generic message.
 //
+// Live and test tenants are provisioned identically and are interchangeable
+// through this UI, so this dialog submits the same way on either — no
+// client-side tenant gate. The backend resolves whichever tenant the
+// caller's own credential (driven by the TenantSwitcher) is bound to.
+//
 // The dialog is auth-provider-agnostic + tenant-aware via
-// `useCurrentTenant()` — switching the TenantSwitcher in AppLayout while
+// `useActiveTenantId()` — switching the TenantSwitcher in AppLayout while
 // this is open isn't a supported flow, but the SDK client used here is
 // re-resolved per render so a change just routes the next request to the
 // new tenant's VectrosClient.
@@ -60,9 +65,9 @@ import {
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { FormattedMessage, useIntl } from 'react-intl';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { SubmitButton } from '@vectros-ai/react';
+import { ApiErrorAlert, SubmitButton, extractErrorMessage } from '@vectros-ai/react';
 
-import { useActiveTenantId, useCurrentTenant } from '../../auth';
+import { useActiveTenantId } from '../../auth';
 import { RESERVED_DEFAULT_CONTEXT_ID } from '../../lib/reservedContexts';
 import { BRAND } from '../../brand';
 import { VectrosError, vectrosApiClient } from '../../api/vectrosApi';
@@ -71,8 +76,6 @@ import type {
   CreateInviteResponse,
   RoleResponse,
 } from '../../api/vectrosApi';
-import { ApiErrorAlert } from '../../components/ApiErrorAlert';
-import { extractErrorMessage } from '../../lib/apiError';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
 
 /**
@@ -112,17 +115,7 @@ export function InviteMemberDialog({
 }: InviteMemberDialogProps): React.JSX.Element {
   const intl = useIntl();
   const tenant = useActiveTenantId();
-  const { activeMembership } = useCurrentTenant();
   const formId = useId();
-
-  // An invite is written to the account's LIVE tenant whichever tenant is
-  // active here, while the roles offered below come from the active one — so
-  // on a test tenant the role picked does not exist where the invite lands.
-  // MembersPage already withholds the button that opens this dialog; the guard
-  // is repeated here because the dialog is exported and a fork can mount it
-  // itself, and because a silent tenant mismatch produces a member who can
-  // never sign in.
-  const isLiveTenant = activeMembership?.tenantKind === 'live';
 
   // Form state (UI-local — stays as useState).
   const [email, setEmail] = useState('');
@@ -218,7 +211,6 @@ export function InviteMemberDialog({
 
   const emailValid = email === '' || isEmailLike(email);
   const canSubmit =
-    isLiveTenant &&
     !submitting &&
     email.trim() !== '' &&
     emailValid &&
@@ -266,12 +258,6 @@ export function InviteMemberDialog({
             <Typography variant="body2" color="text.secondary">
               <FormattedMessage id="invite.subtitle" />
             </Typography>
-
-            {!isLiveTenant && (
-              <Alert severity="info" role="status">
-                <FormattedMessage id="invite.liveTenantOnly" />
-              </Alert>
-            )}
 
             {/* Success rendering — sendEmail path shows a simple message;
                 manual-send path surfaces the token + accept link (each with

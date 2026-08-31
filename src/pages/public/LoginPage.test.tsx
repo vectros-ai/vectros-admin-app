@@ -9,7 +9,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter, Route, Routes } from 'react-router';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router';
 
 import { AuthProvider } from '../../auth';
 import { AuthError } from '../../auth';
@@ -37,6 +37,13 @@ const aliceUser: AuthUser = {
   lastName: 'Smith',
 };
 
+// Captures the full location it lands on (pathname + search), so a test can
+// assert a redirect preserved a query string rather than just the path.
+function AcceptCaptured(): React.JSX.Element {
+  const location = useLocation();
+  return <div>accept page {location.pathname}{location.search}</div>;
+}
+
 function renderLogin(
   provider: FullMockProvider,
   opts: { initialPath?: string; initialState?: unknown } = {},
@@ -53,6 +60,7 @@ function renderLogin(
             <Route path="/protected" element={<div>protected page</div>} />
             <Route path="/forgot-password" element={<div>forgot page</div>} />
             <Route path="/confirm" element={<div>confirm page</div>} />
+            <Route path="/accept" element={<AcceptCaptured />} />
           </Routes>
         </AuthProvider>
       </MemoryRouter>
@@ -135,6 +143,28 @@ describe('LoginPage credentials stage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('protected page')).toBeInTheDocument();
+    });
+  });
+
+  it('preserves the query string on the redirect-back target, not just the path', async () => {
+    // AcceptPage's "sign in to link" prompt sends the caller here with
+    // `state.from = { pathname: '/accept', search: '?t=...' }` — a
+    // path-only redirect would drop the invite token and land on a bare
+    // /accept, which shows "this link is invalid" instead of resuming.
+    const user = userEvent.setup();
+    const provider = mockAdapter({
+      signIn: vi.fn().mockResolvedValue({ kind: 'COMPLETE' } satisfies SignInResult),
+      getCurrentUser: vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(aliceUser),
+    });
+    renderLogin(provider, {
+      initialState: { from: { pathname: '/accept', search: '?t=inv_abc.def.ghi' } },
+    });
+    await user.type(screen.getByLabelText(/email address/i), 'a@b.com');
+    await user.type(screen.getByLabelText(/^password/i), 'pw');
+    await user.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('accept page /accept?t=inv_abc.def.ghi')).toBeInTheDocument();
     });
   });
 

@@ -7,7 +7,7 @@
 //     (ACTIVE / PENDING / SUSPENDED). The Vectros API's GET /v1/users
 //     doesn't support these as server-side params today, so admin-app
 //     filters in-memory. Acceptable for any tenant with < ~1000 users;
-//     revisit with server-side filtering if a real partner hits the limit.
+//     revisit with server-side filtering if a real account hits the limit.
 //   - "Invite member" button opens `<InviteMemberDialog>` for the
 //     createInvite + AccessProfileRole-dropdown flow.
 //   - Per-row actions: Resend invite (PENDING rows only) + Revoke (DELETE).
@@ -74,13 +74,15 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import ForwardToInboxIcon from '@mui/icons-material/ForwardToInbox';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import { FormattedMessage, useIntl } from 'react-intl';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  useMutation,
-  useQueries,
-  useQuery,
-  useQueryClient,
-} from '@tanstack/react-query';
-import { ConfirmDialog, LoadingBlock, useScopeGate } from '@vectros-ai/react';
+  ApiErrorAlert,
+  ConfirmDialog,
+  LoadingBlock,
+  RequestIdCaption,
+  extractErrorMessage,
+  useScopeGate,
+} from '@vectros-ai/react';
 
 import { useActiveTenantId, useAuth, useCurrentTenant } from '../../auth';
 import type { AccountOwnerTransferResult } from '../../api/developerApi';
@@ -93,9 +95,7 @@ import type {
   UserResponse,
 } from '../../api/vectrosApi';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
-import { extractErrorMessage } from '../../lib/apiError';
-import { ApiErrorAlert } from '../../components/ApiErrorAlert';
-import { RequestIdCaption } from '../../components/RequestIdCaption';
+import { isMultiRoleComposed } from '../../lib/accessProfileRoles';
 import { InviteMemberDialog } from './InviteMemberDialog';
 import { TransferOwnershipDialog } from './TransferOwnershipDialog';
 
@@ -120,16 +120,6 @@ export function MembersPage(): React.JSX.Element {
   // the developer-API router's OWNER-only-by-default gate 403s a sub-user
   // unconditionally, so a non-owner never sees the action at all.
   const isOwner = activeMembership?.role === 'OWNER';
-
-  // Invitations always land in the LIVE tenant, whichever tenant is selected
-  // here: the server resolves the target tenant from the account, not from the
-  // bearer. The rest of this page follows the switcher, so on a test tenant the
-  // two disagree — the roles offered come from the test tenant while the invite
-  // is written to the live one, where that role does not exist. The invite is
-  // still accepted and stores the unresolvable role, and the member it creates
-  // can then never sign in. Rather than let the two flows silently target
-  // different tenants, invite and resend are offered only where they act.
-  const isLiveTenant = activeMembership?.tenantKind === 'live';
 
   // Members list — single query keyed on the active tenant. Switching
   // tenants in the TenantSwitcher swaps queryKey → automatic refetch.
@@ -298,10 +288,7 @@ export function MembersPage(): React.JSX.Element {
   // 403 (the caller just gave up the role that let them list AccessProfiles
   // in MEMBERS_CONTEXT_ID), and the existing `membersQuery.isError` alert
   // already has a path for that.
-  const handleTransferSuccess = (
-    _result: AccountOwnerTransferResult,
-    email: string,
-  ): void => {
+  const handleTransferSuccess = (_result: AccountOwnerTransferResult, email: string): void => {
     setTransferTarget(null);
     setSuccessMessage(intl.formatMessage({ id: 'members.transferSuccess' }, { email }));
     void queryClient.invalidateQueries({ queryKey: ['members', tenant] });
@@ -314,21 +301,11 @@ export function MembersPage(): React.JSX.Element {
   // `{ userId }` shape — captured as a backend follow-up.
   const handleResend = (member: UserResponse): void => {
     if (!member.email || !member.id) return;
-    // Same tenant asymmetry as the invite: resend re-mints against the LIVE
-    // tenant regardless of the switcher, so from a test tenant it looks up a
-    // PENDING row that is not there and reports the invitation as missing.
-    if (!isLiveTenant) {
-      setSuccessMessage(null);
-      resendMutation.reset();
-      setResendGuardMessage(intl.formatMessage({ id: 'members.resendLiveOnly' }));
-      return;
-    }
     setSuccessMessage(null);
     setResendGuardMessage(null);
     resendMutation.reset();
     const profile = profilesByPrincipal[`usr_${member.id}`];
-    const roleId =
-      profile && profile !== 'error' ? profile.roleId : undefined;
+    const roleId = profile && profile !== 'error' ? profile.roleId : undefined;
     // roleId is absent for a 2+-role composition (roleIds-only, 0.41.0) as
     // well as for a genuinely role-less member — resendInvite takes a
     // single roleId (same shape as createInvite), so a multi-role member
@@ -336,10 +313,7 @@ export function MembersPage(): React.JSX.Element {
     // reporting "no role" for someone who genuinely has roles (the same
     // roleId-only blind spot as ProfileEditor/RoleEditor/ContextDetailPage).
     const isMultiRole =
-      !!profile &&
-      profile !== 'error' &&
-      !profile.roleId &&
-      (profile.roleIds?.length ?? 0) > 0;
+      !!profile && profile !== 'error' && !profile.roleId && (profile.roleIds?.length ?? 0) > 0;
     if (isMultiRole) {
       setResendGuardMessage(intl.formatMessage({ id: 'members.resendMultiRole' }));
       return;
@@ -387,10 +361,7 @@ export function MembersPage(): React.JSX.Element {
               <FormattedMessage id="members.title" />
             </Typography>
             <Typography variant="body1" color="text.secondary" sx={{ mt: 1 }}>
-              <FormattedMessage
-                id="members.subtitle"
-                values={{ productName: BRAND.productName }}
-              />
+              <FormattedMessage id="members.subtitle" values={{ productName: BRAND.productName }} />
             </Typography>
           </Box>
           <Tooltip
@@ -408,7 +379,7 @@ export function MembersPage(): React.JSX.Element {
               <Button
                 variant="contained"
                 onClick={() => setInviteOpen(true)}
-                disabled={!isLiveTenant || !canInvite}
+                disabled={!canInvite}
                 // Keep the label on one line so the header Stack can't wrap it.
                 sx={{ whiteSpace: 'nowrap' }}
               >
@@ -418,12 +389,6 @@ export function MembersPage(): React.JSX.Element {
           </Tooltip>
         </Stack>
       </Box>
-
-      {!isLiveTenant && (
-        <Alert severity="info" role="status">
-          <FormattedMessage id="members.inviteLiveOnly" />
-        </Alert>
-      )}
 
       {successMessage && (
         <Alert severity="success" role="status" onClose={() => setSuccessMessage(null)}>
@@ -635,10 +600,13 @@ export function MembersPage(): React.JSX.Element {
                           variant="body2"
                         >
                           {profile.roleId ??
-                            (profile.roleIds && profile.roleIds.length > 0
+                            (isMultiRoleComposed(profile)
                               ? intl.formatMessage(
                                   { id: 'access.profiles.sourceMultiRole' },
-                                  { count: profile.roleIds.length, roleIds: profile.roleIds.join(', ') },
+                                  {
+                                    count: profile.roleIds?.length ?? 0,
+                                    roleIds: (profile.roleIds ?? []).join(', '),
+                                  },
                                 )
                               : profile.principalId)}
                         </Link>

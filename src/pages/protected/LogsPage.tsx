@@ -75,10 +75,9 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import SearchIcon from '@mui/icons-material/Search';
 import { FormattedMessage, useIntl } from 'react-intl';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { LoadingBlock, SubmitButton } from '@vectros-ai/react';
+import { ApiErrorAlert, LoadingBlock, SubmitButton } from '@vectros-ai/react';
 
 import { useActiveTenantId } from '../../auth';
-import { ApiErrorAlert } from '../../components/ApiErrorAlert';
 import { VectrosError } from '../../api/vectrosApi';
 import type { AdminLogsResponse, LogEntry } from '../../api/vectrosApi';
 import { useDeveloperApi } from '../../api/developerApi';
@@ -157,12 +156,36 @@ function toLocalDateTimeInputValue(date: Date): string {
   return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
 }
 
-/** Build a `{ startTime, endTime }` window ending now, going back `minutes`. */
+/**
+ * Build a `{ startTime, endTime }` window ending now, going back `minutes`.
+ *
+ * `endTime` is CEILED to the next whole minute, never floored to "now". The
+ * `datetime-local` input only carries minute precision, so
+ * `toLocalDateTimeInputValue` necessarily truncates whatever instant we hand
+ * it — if that instant were the raw `new Date()`, the truncation silently
+ * DROPS up to 59s of trailing seconds, which can put `endTime` *before* very
+ * recent activity this window was just opened to look for (measured live: a
+ * request generated a moment before "Fetch logs" is clicked can land at, say,
+ * `:22.072` in the current minute; the raw-`new Date()` window truncates to
+ * `:00`, so the server's log query excludes a row that already exists).
+ * Ceiling instead of flooring keeps `endTime` always >= the instant THIS
+ * function was called, so "traffic from just before I clicked Fetch" is
+ * never excluded by rounding.
+ *
+ * That guarantee only holds at the instant this function runs — used to seed
+ * the picker's displayed value at mount/preset-pick, it says nothing about
+ * how fresh a window is by the time a LATER Fetch or Refresh actually fires.
+ * `logsQuery`'s `queryFn` (below) is the one that matters for correctness:
+ * for a relative preset it calls this function again on every execution,
+ * so "ending now" is re-anchored at each actual fetch rather than frozen
+ * into `appliedFilters` at whatever instant the preset was first picked.
+ */
 function windowOfLastMinutes(minutes: number): {
   startTime: string;
   endTime: string;
 } {
-  const end = new Date();
+  const MINUTE_MS = 60_000;
+  const end = new Date(Math.ceil(Date.now() / MINUTE_MS) * MINUTE_MS);
   const start = new Date(end.getTime() - minutes * 60 * 1000);
   return {
     startTime: toLocalDateTimeInputValue(start),
@@ -237,7 +260,7 @@ function buildApiRequest(filters: LogFilters): AdminLogsQuery {
 
 // ---------------------------------------------------------------------------
 // Chip subcomponents — pure render helpers, no own state. Colors use MUI
-// palette tokens (theme.palette.*) so partner forks inherit theme overrides
+// palette tokens (theme.palette.*) so forks inherit theme overrides
 // rather than hardcoded hex.
 // ---------------------------------------------------------------------------
 
@@ -375,10 +398,29 @@ export function LogsPage(): React.JSX.Element {
         // satisfies the type checker.
         return Promise.reject(new Error('No applied filters'));
       }
+      // A relative preset ("last N minutes") means "ending now" at the
+      // ACTUAL moment of every fetch, not whatever instant it happened to be
+      // picked (or last refreshed) at — recompute the window fresh here,
+      // inside the queryFn, rather than trusting whatever start/end strings
+      // are frozen into `appliedFilters`. This is what makes Refresh (and
+      // any other refetch trigger — window refocus, a future retry) always
+      // advance a preset window instead of repeating an increasingly stale
+      // one: `windowOfLastMinutes`'s ceiling only bounds the gap from the
+      // instant it's CALLED, so it has to be called again on every fetch,
+      // not just once when the preset was picked or last applied. Recomputing
+      // here (at actual execution time) also sidesteps a React state-timing
+      // hazard a caller-side recompute would have: `preset` itself doesn't
+      // change on a plain Refresh, so this closure's `preset` is already
+      // correct regardless of which render produced it — only `Date.now()`
+      // needs to be fresh, and calling it here always is. A custom range
+      // (`preset === null`) is the user's own explicit choice and is used
+      // exactly as entered, never overridden.
+      const effectiveFilters =
+        preset !== null ? { ...appliedFilters, ...windowOfLastMinutes(preset) } : appliedFilters;
       // Account-wide read via the owner-gated developer API: no context filter
       // returns activity across every context; a selected context narrows to it.
       return devApi.getAdminLogs({
-        ...buildApiRequest(appliedFilters),
+        ...buildApiRequest(effectiveFilters),
         ...(selectedContext ? { contextId: selectedContext } : {}),
       });
     },
@@ -432,6 +474,18 @@ export function LogsPage(): React.JSX.Element {
     setAppliedFilters(pendingFilters);
   };
 
+  /**
+   * Re-fetches with the currently-applied filters. For a relative preset,
+   * the window itself is recomputed fresh inside `logsQuery`'s `queryFn` on
+   * every execution (see its comment) — `invalidateQueries` here only needs
+   * to force that re-execution, not carry the new window itself. Forcing it
+   * explicitly (rather than relying on `appliedFilters`/`queryKey` having
+   * visibly changed) matters because a preset's freshly-recomputed window
+   * can be byte-identical to the last one — e.g. two Refresh clicks a few
+   * seconds apart, both landing before the next minute's ceiling — in which
+   * case TanStack Query would see no key change and never refetch on its
+   * own.
+   */
   const handleRefresh = (): void => {
     if (appliedFilters === null) return;
     void queryClient.invalidateQueries({ queryKey });

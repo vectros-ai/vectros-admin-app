@@ -40,12 +40,11 @@ import {
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { FormattedMessage, FormattedNumber, useIntl } from 'react-intl';
 import { useQuery } from '@tanstack/react-query';
-import { LoadingBlock } from '@vectros-ai/react';
+import { ApiErrorAlert, LoadingBlock } from '@vectros-ai/react';
 
 import { useActiveTenantId } from '../../auth';
 import { vectrosApiClient } from '../../api/vectrosApi';
 import type { Vectros } from '../../api/vectrosApi';
-import { ApiErrorAlert } from '../../components/ApiErrorAlert';
 
 /** The credit-breakdown categories, in display order. Each maps a
  *  CreditBreakdown field to its i18n label id. */

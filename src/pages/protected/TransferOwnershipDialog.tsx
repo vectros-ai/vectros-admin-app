@@ -34,13 +34,11 @@ import {
 } from '@mui/material';
 import { FormattedMessage, useIntl } from 'react-intl';
 import { useMutation } from '@tanstack/react-query';
-import { SubmitButton } from '@vectros-ai/react';
+import { ApiErrorAlert, SubmitButton, extractErrorMessage } from '@vectros-ai/react';
 
 import { useDeveloperApi } from '../../api/developerApi';
 import type { AccountOwnerTransferResult } from '../../api/developerApi';
 import type { UserResponse } from '../../api/vectrosApi';
-import { extractErrorMessage } from '../../lib/apiError';
-import { ApiErrorAlert } from '../../components/ApiErrorAlert';
 
 interface TransferOwnershipDialogProps {
   /** The member row being offered ownership, or null when the dialog is closed. */

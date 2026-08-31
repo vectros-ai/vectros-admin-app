@@ -62,8 +62,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
-import { LoadingBlock, SubmitButton } from '@vectros-ai/react';
-import { ApiErrorAlert } from '../../components/ApiErrorAlert';
+import { ApiErrorAlert, LoadingBlock, SubmitButton, extractErrorMessage } from '@vectros-ai/react';
 import PersonIcon from '@mui/icons-material/Person';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import AddIcon from '@mui/icons-material/Add';
@@ -94,7 +93,6 @@ import {
   validateClauses,
 } from '../../components/ScopeEditor';
 import type { ScopeClause } from '../../components/ScopeEditor';
-import { extractErrorMessage } from '../../lib/apiError';
 
 // ---------------------------------------------------------------------------
 // Step model

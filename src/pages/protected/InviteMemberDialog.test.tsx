@@ -373,11 +373,10 @@ describe('InviteMemberDialog', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Tenant guard — repeated here rather than relying on MembersPage
-  // withholding the button, because this dialog is exported and a fork can
-  // mount it directly.
+  // Live and test tenants are interchangeable, so this dialog submits
+  // identically on either — no client-side tenant gate.
   // -------------------------------------------------------------------------
-  it('refuses to submit on a test tenant and explains why', async () => {
+  it('submits on a test tenant too', async () => {
     const client = makeMockClient();
     vi.mocked(vectrosApiClient).mockReturnValue(client as never);
     render(
@@ -388,17 +387,16 @@ describe('InviteMemberDialog', () => {
       </TestIntlProvider>,
     );
 
-    expect(
-      await screen.findByText(/invitations are always created in your live tenant/i),
-    ).toBeInTheDocument();
-
     const user = userEvent.setup();
     await user.type(screen.getByLabelText(/email address/i), 'newmember@example.com');
     await waitFor(() => expect(client.auth.listRoles).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /send invite/i })).toBeEnabled(),
+    );
 
-    // Even with a complete, valid form the submit stays disabled.
-    expect(screen.getByRole('button', { name: /send invite/i })).toBeDisabled();
-    expect(client.auth.createInvite).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: /send invite/i }));
+
+    await waitFor(() => expect(client.auth.createInvite).toHaveBeenCalledTimes(1));
   });
 
   // -------------------------------------------------------------------------

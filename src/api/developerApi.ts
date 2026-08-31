@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // Developer API client — the owner-gated control-plane surface.
 //
-// **Why this exists alongside the SDK (./vectrosApi).** The partner API (and
+// **Why this exists alongside the SDK (./vectrosApi).** The Vectros API (and
 // its SDK) is reached with a short-lived bearer that is pinned to a single app
 // context, so it can only ever see or act within that one context. Two
 // operations are inherently tenant-wide and cannot be performed by any single
@@ -9,7 +9,7 @@
 //
 //   - **Listing** every app context in the tenant. A context-pinned bearer
 //     lists only its own context, so an owner cannot enumerate their contexts
-//     through the partner API at all.
+//     through the Vectros API at all.
 //   - **Creating** a new app context. Provisioning a context is an
 //     account-owner act; the capability that authorizes it is never minted into
 //     a browser-held bearer, so a client-side create is rejected.
@@ -19,7 +19,7 @@
 //     back as a `confirm` parameter before it will start the cascade.
 //
 // All three are served by the Developer API, which authenticates with the user's
-// Cognito session (the same identity that mints partner-API bearers) and is
+// Cognito session (the same identity that mints Vectros API bearers) and is
 // gated to account owners on the server. No provisioning-capable credential
 // ever reaches the browser. Everything else about an app context — its detail,
 // roles, and access profiles — is done through the SDK with a bearer minted for
@@ -28,7 +28,7 @@
 // **Forking.** The base URL comes from runtime config and the bearer is the
 // Cognito id token obtained through the auth provider, so a fork that swaps the
 // auth provider (or points at its own deployment) re-skins this file by changing
-// config alone. The HTTP shape mirrors the partner API's: a JSON error envelope
+// config alone. The HTTP shape mirrors the Vectros API's: a JSON error envelope
 // of `{ message, requestId }` and a `{ data, nextCursor }` page envelope.
 // ---------------------------------------------------------------------------
 
@@ -40,7 +40,7 @@ import type { AdminLogsResponse, ScopedKeyResponse } from './vectrosApi';
 
 /**
  * An app context as returned by the Developer API list/create routes. Mirrors
- * the partner API's app-context shape so the same row rendering works against
+ * the Vectros API's app-context shape so the same row rendering works against
  * either source. `name`/`description`/timestamps are optional on the wire.
  */
 export interface AppContextSummary {
@@ -85,7 +85,7 @@ export interface SelfSignupPolicy {
 
 /**
  * A registered trusted third-party IdP issuer, as returned by the Developer API's issuer routes.
- * Mirrors most of the partner API's issuer shape. Carries no secrets — `jwksUri` is a public
+ * Mirrors most of the Vectros API's issuer shape. Carries no secrets — `jwksUri` is a public
  * discovery endpoint, not a credential. **Gap:** the platform's `userinfoUri` field (an OIDC
  * userinfo-endpoint email-resolution fallback) isn't typed here and isn't shown by this UI —
  * this surface hasn't caught up to it yet. Use the CLI/SDK to read or set it.
@@ -163,8 +163,8 @@ export interface AdminLogsQuery {
 /**
  * Error thrown by a failed Developer API call. Shaped to match how the rest of
  * the app reads API errors — `statusCode` and a `body` envelope carrying the
- * server's `message` + `requestId` — so it flows through {@link
- * ../components/ApiErrorAlert} and the request-id correlation line unchanged.
+ * server's `message` + `requestId` — so it flows through `@vectros-ai/react`'s
+ * `ApiErrorAlert` and the request-id correlation line unchanged.
  */
 export class DeveloperApiError extends Error {
   readonly statusCode: number;
@@ -392,7 +392,7 @@ export function createDeveloperApi(deps: {
 
     async transferOwnership(targetUserId) {
       // No `tenant` param — see the interface doc: this acts on the whole
-      // partner account, not one tenant kind.
+      // account, not one tenant kind.
       const resp = await fetch(endpoint(deps.baseUrl, `/developer/account-owner`), {
         method: 'POST',
         headers: { ...(await authHeader()), 'Content-Type': 'application/json' },

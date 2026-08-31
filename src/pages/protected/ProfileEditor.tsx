@@ -11,17 +11,16 @@
 //   - **XOR source radio**: 'role' vs 'inline'. The backend rejects
 //     bodies with neither or both set; the UI enforces by only showing
 //     ONE of (role Autocomplete | ScopeEditor) at a time.
-//   - **Multi-role composition (`roleIds`, 0.41.0) is READ-ONLY here.** A
+//   - **Role composition (`roleIds`, 0.41.0) is a multi-select.** A
 //     profile's `roleId` is present only when exactly one role composes;
-//     one composing 2+ roles returns `roleIds` with `roleId` absent. This
-//     editor does not yet author `roleIds` — a loaded multi-role profile
-//     renders as an explicit, disabled "composed of N roles" notice
-//     (never silently as an empty/inline profile, and never truncated to
-//     its first role on save). Switching away to inline scopes is still
-//     possible (an explicit, confirmed replacement of the composition,
-//     same as switching a single-role profile) — what's blocked is only
-//     the silent misread/truncation. Full `roleIds` authoring is tracked
-//     as a follow-up.
+//     one composing 2+ roles returns `roleIds` with `roleId` absent —
+//     both shapes load into the same `roleIds: string[]` form state, and
+//     save branches back the other way (single selection → `roleId` on
+//     the wire, for minimal wire diff / back-compat; 2+ → `roleIds`).
+//     Switching away to inline scopes discards the composition (an
+//     explicit, confirmed replacement, guarded the same as switching a
+//     single-role profile). Cloning a multi-role-composed profile is
+//     still not supported — see the Clone dialog below.
 //   - **Source switching guard**: if the user toggles the radio while
 //     the abandoned side has draft content, confirm via window.confirm
 //     before discarding.
@@ -64,11 +63,7 @@
 // ---------------------------------------------------------------------------
 
 import { useEffect, useId, useMemo, useState } from 'react';
-import {
-  Link as RouterLink,
-  useNavigate,
-  useParams,
-} from 'react-router';
+import { Link as RouterLink, useNavigate, useParams } from 'react-router';
 import {
   Alert,
   AppBar,
@@ -103,9 +98,13 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import { FormattedMessage, useIntl } from 'react-intl';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  ApiErrorAlert,
   ConfirmDialog,
   LoadingBlock,
+  RequestIdCaption,
   SubmitButton,
+  extractErrorMessage,
+  statusCodeOf,
   useScopeGate,
 } from '@vectros-ai/react';
 
@@ -117,14 +116,9 @@ import {
   formatScopeClauseValidationError,
 } from '../../components/ScopeEditor';
 import type { ScopeClause } from '../../components/ScopeEditor';
-import { ApiErrorAlert } from '../../components/ApiErrorAlert';
-import { RequestIdCaption } from '../../components/RequestIdCaption';
 import { useActiveTenantId } from '../../auth';
 import { vectrosApiClient } from '../../api/vectrosApi';
-import type {
-  AccessProfileResponse,
-  RoleResponse,
-} from '../../api/vectrosApi';
+import type { AccessProfileResponse, RoleResponse } from '../../api/vectrosApi';
 import type { UserResponse } from '../../api/vectrosApi';
 import { accessQueryKeys } from '../../lib/accessQueryKeys';
 import {
@@ -144,9 +138,9 @@ import type {
 } from '../../lib/identityOverrides';
 import { MAX_SCOPE_NAMESPACES } from '../../lib/scopeNamespace';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
-import { extractErrorMessage, statusCodeOf } from '../../lib/apiError';
 import { useBeforeNavigate } from '../../lib/useBeforeNavigate';
 import { usePrincipalDirectory, userPrincipalId, userLabel } from '../../lib/usePrincipalDirectory';
+import { isMultiRoleComposed } from '../../lib/accessProfileRoles';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -159,6 +153,14 @@ import { usePrincipalDirectory, userPrincipalId, userLabel } from '../../lib/use
 const PRINCIPAL_ID_PATTERN = /^(usr|key)_[A-Za-z0-9_-]+$/;
 
 type SourceType = 'role' | 'inline';
+
+/** Set equality for two role-id lists — order doesn't carry meaning for a
+ *  `roleIds` composition, so a same-membership reorder must not read as dirty. */
+function sameRoleIdSet(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  const bSet = new Set(b);
+  return a.every((id) => bSet.has(id));
+}
 
 /**
  * Default formatter for an {@link IdentityOverridesValidationError} — one
@@ -245,17 +247,14 @@ export function ProfileEditor(): React.JSX.Element {
   // ── Form state ─────────────────────────────────────────────────────────
   const [principalId, setPrincipalId] = useState('');
   const [sourceType, setSourceType] = useState<SourceType>('role');
-  const [roleRef, setRoleRef] = useState<string>('');
-  // Non-null only when the loaded profile composes 2+ roles (`roleIds`,
-  // 0.41.0) — `roleId` is absent in that shape. See the module docstring's
-  // "Multi-role composition is READ-ONLY here" note.
-  const [multiRoleIds, setMultiRoleIds] = useState<string[] | null>(null);
+  // The role-sourced composition, as ids — one entry for a single-role
+  // profile, 2+ for a `roleIds` composition (0.41.0). See the module
+  // docstring's "Role composition is a multi-select" note.
+  const [roleIds, setRoleIds] = useState<string[]>([]);
   const [scopes, setScopes] = useState<ScopeClause[]>(() => [emptyClause()]);
   // Namespaced identity overrides — dedicated org/client + custom-namespace
   // `extras`, with any unmodellable wire key preserved in `passthrough`.
-  const [overrides, setOverrides] = useState<IdentityOverridesModel>(
-    emptyIdentityOverrides,
-  );
+  const [overrides, setOverrides] = useState<IdentityOverridesModel>(emptyIdentityOverrides);
   const [overridesExpanded, setOverridesExpanded] = useState(false);
   // Raw save error (null when none) — kept as the thrown error so
   // <ApiErrorAlert> can surface the requestId. A 409 on create is a
@@ -268,8 +267,7 @@ export function ProfileEditor(): React.JSX.Element {
   // Pending source-switch awaiting discard confirmation (null when none).
   // Replaces the old native window.confirm with an a11y-managed, i18n,
   // testable <ConfirmDialog>.
-  const [pendingSourceSwitch, setPendingSourceSwitch] =
-    useState<SourceType | null>(null);
+  const [pendingSourceSwitch, setPendingSourceSwitch] = useState<SourceType | null>(null);
 
   // ── Queries ────────────────────────────────────────────────────────────
   const profileQuery = useQuery({
@@ -296,10 +294,7 @@ export function ProfileEditor(): React.JSX.Element {
       ),
     enabled: ctxId !== '',
   });
-  const roles: RoleResponse[] = useMemo(
-    () => rolesQuery.data ?? [],
-    [rolesQuery.data],
-  );
+  const roles: RoleResponse[] = useMemo(() => rolesQuery.data ?? [], [rolesQuery.data]);
   // A failed role load falls back to [] above, which renders as "this context
   // has no roles" — indistinguishable from the real thing, and the drain now
   // fails rather than returning a partial list. Surfaced instead of implied.
@@ -313,9 +308,8 @@ export function ProfileEditor(): React.JSX.Element {
     setPrincipalId(loaded.principalId ?? '');
     if (loaded.roleId) {
       setSourceType('role');
-      setRoleRef(loaded.roleId);
+      setRoleIds([loaded.roleId]);
       setScopes([emptyClause()]);
-      setMultiRoleIds(null);
     } else if (loaded.roleIds && loaded.roleIds.length > 0) {
       // `roleId` is present only when exactly one role composes; this is
       // 2+ (roleIds is otherwise the same length-1 case `roleId` already
@@ -323,14 +317,12 @@ export function ProfileEditor(): React.JSX.Element {
       // empty/wrong scope list and, if saved, silently drop the
       // composition down to whatever the inline form happened to hold.
       setSourceType('role');
-      setRoleRef('');
+      setRoleIds(loaded.roleIds);
       setScopes([emptyClause()]);
-      setMultiRoleIds(loaded.roleIds);
     } else {
       setSourceType('inline');
-      setRoleRef('');
+      setRoleIds([]);
       setScopes(normalizeScopes(loaded.scopes));
-      setMultiRoleIds(null);
     }
     // Read identityOverrides through the canonical model so a `scope:org`-keyed
     // override (0.34 read-back) is visible + preserved, not silently dropped.
@@ -354,11 +346,10 @@ export function ProfileEditor(): React.JSX.Element {
     if (next === 'role') {
       setScopes([emptyClause()]);
     } else {
-      setRoleRef('');
       // Switching to inline is an explicit replacement of whatever the
       // role side held, composition included — clear it so canSubmit/
       // dirty stop reasoning about a role side that's no longer shown.
-      setMultiRoleIds(null);
+      setRoleIds([]);
     }
     setSourceType(next);
   };
@@ -368,14 +359,9 @@ export function ProfileEditor(): React.JSX.Element {
   const requestSourceSwitch = (next: SourceType): void => {
     if (next === sourceType) return;
     const inlineHasDraft = scopes.some((c) => c.allowed_actions.length > 0);
-    // A loaded multi-role composition has no single roleRef (see the
-    // module docstring), so it wouldn't otherwise trip this guard —
-    // abandoning it is exactly as consequential as abandoning a
-    // single-role ref and deserves the same confirm-before-discard.
-    const roleHasDraft = roleRef !== '' || multiRoleIds !== null;
+    const roleHasDraft = roleIds.length > 0;
     const abandoning =
-      (sourceType === 'inline' && inlineHasDraft) ||
-      (sourceType === 'role' && roleHasDraft);
+      (sourceType === 'inline' && inlineHasDraft) || (sourceType === 'role' && roleHasDraft);
     if (abandoning) {
       setPendingSourceSwitch(next);
       return;
@@ -384,10 +370,8 @@ export function ProfileEditor(): React.JSX.Element {
   };
 
   // ── Identity-override mutators ─────────────────────────────────────────
-  const setOverrideOrg = (v: string): void =>
-    setOverrides((o) => ({ ...o, org: v }));
-  const setOverrideClient = (v: string): void =>
-    setOverrides((o) => ({ ...o, client: v }));
+  const setOverrideOrg = (v: string): void => setOverrides((o) => ({ ...o, org: v }));
+  const setOverrideClient = (v: string): void => setOverrides((o) => ({ ...o, client: v }));
   const addOverrideExtra = (): void =>
     setOverrides((o) => ({
       ...o,
@@ -412,7 +396,7 @@ export function ProfileEditor(): React.JSX.Element {
     if (isCreate) {
       return (
         principalId !== '' ||
-        roleRef !== '' ||
+        roleIds.length > 0 ||
         scopes.some((c) => c.allowed_actions.length > 0) ||
         countOverrideNamespaces(overrides) > 0
       );
@@ -422,16 +406,14 @@ export function ProfileEditor(): React.JSX.Element {
     // role-sourced profile either way, so this must NOT key on roleId
     // alone or a freshly-loaded multi-role profile reads as spuriously
     // dirty against sourceType 'role' before anything was touched.
-    const baseSourceIsRole =
-      !!baseline.roleId || (baseline.roleIds?.length ?? 0) > 0;
+    const baseSourceIsRole = !!baseline.roleId || (baseline.roleIds?.length ?? 0) > 0;
     if (baseSourceIsRole !== (sourceType === 'role')) return true;
-    // A loaded multi-role composition can't be edited here (no single
-    // roleRef to compare) — its own dirty state is fully captured by the
-    // sourceType check above (switching away IS the only possible edit).
+    // Compare role-id SETS, not a single scalar — order doesn't carry
+    // meaning here (composition order comes from the backend response,
+    // never from selection order in this form).
     if (
       sourceType === 'role' &&
-      multiRoleIds === null &&
-      roleRef !== (baseline.roleId ?? '')
+      !sameRoleIdSet(roleIds, baseline.roleId ? [baseline.roleId] : (baseline.roleIds ?? []))
     ) {
       return true;
     }
@@ -450,20 +432,9 @@ export function ProfileEditor(): React.JSX.Element {
     // namespace — not just org/client — is detected.
     return (
       canonicalOverridesKeyOfModel(overrides) !==
-      canonicalOverridesKey(
-        baseline.identityOverrides as Record<string, unknown> | undefined,
-      )
+      canonicalOverridesKey(baseline.identityOverrides as Record<string, unknown> | undefined)
     );
-  }, [
-    isCreate,
-    baseline,
-    principalId,
-    sourceType,
-    roleRef,
-    multiRoleIds,
-    scopes,
-    overrides,
-  ]);
+  }, [isCreate, baseline, principalId, sourceType, roleIds, scopes, overrides]);
 
   useBeforeNavigate(dirty);
 
@@ -475,27 +446,15 @@ export function ProfileEditor(): React.JSX.Element {
     [sourceType, scopes],
   );
   const scopeErrorMessage = useMemo(
-    () =>
-      scopeError !== null
-        ? formatScopeClauseValidationError(scopeError, intl)
-        : null,
+    () => (scopeError !== null ? formatScopeClauseValidationError(scopeError, intl) : null),
     [scopeError, intl],
   );
-  const sourceValid =
-    sourceType === 'role'
-      ? multiRoleIds === null && roleRef !== ''
-      : scopeError === null;
+  const sourceValid = sourceType === 'role' ? roleIds.length > 0 : scopeError === null;
   // Identity-overrides validation is independent of the source XOR — it applies
   // to role- and inline-source profiles alike.
-  const overridesError = useMemo(
-    () => validateIdentityOverrides(overrides),
-    [overrides],
-  );
+  const overridesError = useMemo(() => validateIdentityOverrides(overrides), [overrides]);
   const overridesErrorMessage = useMemo(
-    () =>
-      overridesError !== null
-        ? formatOverridesValidationError(overridesError, intl)
-        : null,
+    () => (overridesError !== null ? formatOverridesValidationError(overridesError, intl) : null),
     [overridesError, intl],
   );
   const canSubmit =
@@ -512,23 +471,24 @@ export function ProfileEditor(): React.JSX.Element {
   // is legible without decoding raw scope clauses (a bare `*` in particular).
   const grantSummary = useMemo<React.ReactNode>(() => {
     if (sourceType === 'role') {
-      if (multiRoleIds !== null) {
+      if (roleIds.length === 0) {
+        return <FormattedMessage id="access.profiles.editor.grantNone" />;
+      }
+      if (roleIds.length === 1) {
         return (
-          <FormattedMessage
-            id="access.profiles.editor.grantMultiRole"
-            values={{ count: multiRoleIds.length, roleIds: multiRoleIds.join(', ') }}
-          />
+          <FormattedMessage id="access.profiles.editor.grantRole" values={{ roleId: roleIds[0] }} />
         );
       }
-      return roleRef ? (
-        <FormattedMessage id="access.profiles.editor.grantRole" values={{ roleId: roleRef }} />
-      ) : (
-        <FormattedMessage id="access.profiles.editor.grantNone" />
+      return (
+        <FormattedMessage
+          id="access.profiles.editor.grantMultiRole"
+          values={{ count: roleIds.length, roleIds: roleIds.join(', ') }}
+        />
       );
     }
-    const actions = Array.from(
-      new Set(scopes.flatMap((c) => c.allowed_actions)),
-    ).filter((a) => a.trim() !== '');
+    const actions = Array.from(new Set(scopes.flatMap((c) => c.allowed_actions))).filter(
+      (a) => a.trim() !== '',
+    );
     if (actions.length === 0) {
       return <FormattedMessage id="access.profiles.editor.grantNone" />;
     }
@@ -541,7 +501,7 @@ export function ProfileEditor(): React.JSX.Element {
         values={{ actions: actions.join(', ') }}
       />
     );
-  }, [sourceType, roleRef, multiRoleIds, scopes]);
+  }, [sourceType, roleIds, scopes]);
 
   // ── Save ───────────────────────────────────────────────────────────────
   const buildBody = () => {
@@ -570,8 +530,14 @@ export function ProfileEditor(): React.JSX.Element {
     );
     return {
       principalId: isCreate ? principalId : principalIdFromUrl,
+      // Single selection sends the deprecated `roleId` alias (minimal wire
+      // diff / back-compat with the pre-0.41.0 shape); 2+ sends `roleIds`.
+      // The backend treats them as equivalent — see AccessProfileRequest's
+      // own doc comment.
       ...(sourceType === 'role'
-        ? { roleId: roleRef }
+        ? roleIds.length === 1
+          ? { roleId: roleIds[0] }
+          : { roleIds: [...roleIds] }
         : {
             scopes: scopes.map((c) => ({
               allowed_actions: [...c.allowed_actions],
@@ -580,7 +546,12 @@ export function ProfileEditor(): React.JSX.Element {
             })),
           }),
       ...(identityOverridesValue
-        ? { identityOverrides: identityOverridesValue as unknown as Record<string, Record<string, unknown>> }
+        ? {
+            identityOverrides: identityOverridesValue as unknown as Record<
+              string,
+              Record<string, unknown>
+            >,
+          }
         : {}),
     };
   };
@@ -605,9 +576,7 @@ export function ProfileEditor(): React.JSX.Element {
       void queryClient.invalidateQueries({ queryKey: accessQueryKeys.profiles(ctxId) });
       if (isCreate && data?.principalId) {
         setBaseline(data);
-        navigate(
-          `/access/contexts/${ctxId}/profiles/${encodeURIComponent(data.principalId)}`,
-        );
+        navigate(`/access/contexts/${ctxId}/profiles/${encodeURIComponent(data.principalId)}`);
       } else if (data) {
         setBaseline(data);
         void queryClient.invalidateQueries({
@@ -624,8 +593,7 @@ export function ProfileEditor(): React.JSX.Element {
   // inline (the principalId is the path key); surface a specific message. On
   // update the principalId is immutable so a 409 can't be a duplicate-id
   // conflict — fall through to the generic alert.
-  const isDuplicateIdConflict =
-    isCreate && saveError != null && statusCodeOf(saveError) === 409;
+  const isDuplicateIdConflict = isCreate && saveError != null && statusCodeOf(saveError) === 409;
 
   // The server's message on a save failure is actionable — e.g. 0.40.0's 400 for
   // a `usr_` principal that isn't a live user in this tenant, or a 403 naming
@@ -633,6 +601,12 @@ export function ProfileEditor(): React.JSX.Element {
   // generic title rather than dropping it. Left off the duplicate-id branch
   // above, which already renders its own specific message.
   const saveErrorDetail = extractErrorMessage(saveError);
+
+  // Whether the SAVED profile (not the live-edited form) composes 2+ roles —
+  // gates Clone below. Keyed on `baseline`, not the in-progress `roleIds`
+  // selection, so toggling the picker mid-edit doesn't itself enable/disable
+  // Clone before the change is saved.
+  const baselineIsMultiRole = isMultiRoleComposed(baseline);
 
   // ── Render ─────────────────────────────────────────────────────────────
 
@@ -677,14 +651,14 @@ export function ProfileEditor(): React.JSX.Element {
           <Stack direction="row" spacing={1}>
             {/* Gated on `baseline` so Clone/Delete can't fire before the
                 profile loads — Clone with a null source rejects with "No
-                source". Also gated on multiRoleIds: CloneProfileDialog's
-                own roleId-only read (source?.roleId) can't tell "inline"
-                from "multi-role composed" either, and would submit an
-                empty scopes array that 400s opaquely — same class of bug
-                as the main load path, just not yet safe to author here. */}
+                source". Also gated on `baselineIsMultiRole`: unlike this
+                editor's own source picker, CloneProfileDialog's
+                body-building logic still keys on a single `source.roleId`
+                and would submit an incomplete body for a 2+-role source —
+                cloning a role composition isn't supported yet. */}
             <Tooltip
               title={
-                multiRoleIds !== null
+                baselineIsMultiRole
                   ? intl.formatMessage({ id: 'access.profiles.editor.cloneMultiRoleDisabled' })
                   : ''
               }
@@ -694,7 +668,7 @@ export function ProfileEditor(): React.JSX.Element {
                   variant="outlined"
                   startIcon={<ContentCopyIcon />}
                   onClick={() => setCloneOpen(true)}
-                  disabled={baseline == null || multiRoleIds !== null}
+                  disabled={baseline == null || baselineIsMultiRole}
                 >
                   <FormattedMessage id="access.shared.clone" />
                 </Button>
@@ -835,21 +809,11 @@ export function ProfileEditor(): React.JSX.Element {
             </RadioGroup>
           </Box>
 
-          {/* Source body — exactly one visible at a time. */}
-          {sourceType === 'role' && multiRoleIds !== null && (
-            <Alert severity="info" sx={{ maxWidth: 720 }}>
-              <FormattedMessage
-                id="access.profiles.editor.multiRoleNotice"
-                values={{
-                  count: multiRoleIds.length,
-                  roleIds: multiRoleIds
-                    .map((id) => roles.find((t) => t.roleId === id)?.name ?? id)
-                    .join(', '),
-                }}
-              />
-            </Alert>
-          )}
-          {sourceType === 'role' && multiRoleIds === null && (
+          {/* Source body — exactly one visible at a time. Role composition is
+              a multi-select: one selection is the common case, 2+ composes
+              additively in the order picked (mirrors the CLI's repeatable
+              `vectros access grant --role <roleId>`). */}
+          {sourceType === 'role' && (
             <Stack spacing={1.5} sx={{ maxWidth: 720 }}>
               {rolesLoadFailed && (
                 <ApiErrorAlert error={rolesQuery.error}>
@@ -857,13 +821,27 @@ export function ProfileEditor(): React.JSX.Element {
                 </ApiErrorAlert>
               )}
               <Autocomplete
+                multiple
                 options={roles}
                 disabled={rolesLoadFailed}
-                getOptionLabel={(t) =>
-                  t.name ? `${t.name} (${t.roleId})` : (t.roleId ?? '')
+                getOptionLabel={(t) => (t.name ? `${t.name} (${t.roleId})` : (t.roleId ?? ''))}
+                // Derive `value` from `roleIds` STATE order (a lookup per id,
+                // falling back to a bare-id placeholder), NOT from `roles`
+                // array order. Two things depend on this: (1) a composing
+                // role that's since been deleted from the context has no
+                // entry in `roles` — filtering `roles` instead would make it
+                // vanish from `value` silently, and the very next add/remove
+                // would then rebuild `roleIds` from that visible set, quietly
+                // dropping the stale reference the user never touched.
+                // (2) `roles`-array order is the roles QUERY's order, not
+                // selection order — deriving `value` from it would silently
+                // reshuffle a freshly-loaded composition's order on first
+                // render, contradicting the "composed... in the order
+                // picked" doc comment above.
+                value={roleIds.map((id) => roles.find((t) => t.roleId === id) ?? { roleId: id })}
+                onChange={(_, next) =>
+                  setRoleIds(next.map((t) => t.roleId).filter((id): id is string => !!id))
                 }
-                value={roles.find((t) => t.roleId === roleRef) ?? null}
-                onChange={(_, next) => setRoleRef(next?.roleId ?? '')}
                 isOptionEqualToValue={(opt, val) => opt.roleId === val.roleId}
                 renderInput={(params) => (
                   <TextField
@@ -871,20 +849,20 @@ export function ProfileEditor(): React.JSX.Element {
                     label={intl.formatMessage({
                       id: 'access.profiles.editor.roleRefLabel',
                     })}
-                    placeholder={intl.formatMessage({
-                      id: 'access.profiles.editor.roleRefPlaceholder',
-                    })}
-                    helperText={
-                      <FormattedMessage id="access.profiles.editor.roleRefHelper" />
+                    placeholder={
+                      roleIds.length === 0
+                        ? intl.formatMessage({ id: 'access.profiles.editor.roleRefPlaceholder' })
+                        : undefined
                     }
+                    helperText={<FormattedMessage id="access.profiles.editor.roleRefHelper" />}
                   />
                 )}
               />
-              {roleRef && (
+              {roleIds.length === 1 && (
                 <Box>
                   <Link
                     component={RouterLink}
-                    to={`/access/contexts/${ctxId}/roles/${roleRef}`}
+                    to={`/access/contexts/${ctxId}/roles/${roleIds[0]}`}
                     underline="hover"
                   >
                     <FormattedMessage id="access.profiles.editor.roleRefViewLink" />
@@ -1009,9 +987,7 @@ export function ProfileEditor(): React.JSX.Element {
                             id: 'access.profiles.editor.identityOverrideNamespacePlaceholder',
                           })}
                           value={extra.namespace}
-                          onChange={(e) =>
-                            updateOverrideExtra(i, { namespace: e.target.value })
-                          }
+                          onChange={(e) => updateOverrideExtra(i, { namespace: e.target.value })}
                           disabled={!canAuthorIdentityOverrides}
                           inputProps={{ spellCheck: false }}
                           sx={{ width: 200, '& input': { fontFamily: 'monospace' } }}
@@ -1022,9 +998,7 @@ export function ProfileEditor(): React.JSX.Element {
                             id: 'access.profiles.editor.identityOverrideValueLabel',
                           })}
                           value={extra.value}
-                          onChange={(e) =>
-                            updateOverrideExtra(i, { value: e.target.value })
-                          }
+                          onChange={(e) => updateOverrideExtra(i, { value: e.target.value })}
                           disabled={!canAuthorIdentityOverrides}
                           inputProps={{ spellCheck: false }}
                           sx={{ flex: 1 }}
@@ -1109,7 +1083,7 @@ export function ProfileEditor(): React.JSX.Element {
                 sourceType === 'role' ? (
                   <FormattedMessage
                     id="access.profiles.sourceRole"
-                    values={{ roleId: roleRef || '—' }}
+                    values={{ roleId: roleIds.length > 0 ? roleIds.join(', ') : '—' }}
                   />
                 ) : (
                   <FormattedMessage
@@ -1145,12 +1119,8 @@ export function ProfileEditor(): React.JSX.Element {
         open={pendingSourceSwitch !== null}
         title={<FormattedMessage id="access.profiles.editor.sourceSwitchTitle" />}
         body={<FormattedMessage id="access.profiles.editor.sourceSwitchBody" />}
-        confirmLabel={
-          <FormattedMessage id="access.profiles.editor.sourceSwitchConfirmCta" />
-        }
-        cancelLabel={
-          <FormattedMessage id="access.profiles.editor.sourceSwitchCancel" />
-        }
+        confirmLabel={<FormattedMessage id="access.profiles.editor.sourceSwitchConfirmCta" />}
+        cancelLabel={<FormattedMessage id="access.profiles.editor.sourceSwitchCancel" />}
         onConfirm={() => {
           if (pendingSourceSwitch !== null) applySourceSwitch(pendingSourceSwitch);
           setPendingSourceSwitch(null);
@@ -1220,21 +1190,17 @@ function CloneProfileDialog({
     setCloneError(null);
   }, [open]);
 
-  const idInvalid =
-    newPrincipalId !== '' && !PRINCIPAL_ID_PATTERN.test(newPrincipalId);
+  const idInvalid = newPrincipalId !== '' && !PRINCIPAL_ID_PATTERN.test(newPrincipalId);
   // Same roleId-only blind spot as ProfileEditor's own load path: `roleId`
   // is absent for a 2+-role composition (roleIds-only), so this must not
   // key on roleId alone. The Clone button itself is disabled for that
   // shape (see its Tooltip-wrapped disabled state above) — this is a
   // second, defense-in-depth guard should this dialog ever be reachable
   // some other way.
-  const sourceIsMultiRole = !source?.roleId && (source?.roleIds?.length ?? 0) > 0;
+  const sourceIsMultiRole = isMultiRoleComposed(source);
   const canSubmit = newPrincipalId !== '' && !idInvalid && !sourceIsMultiRole;
   const sourceIsRole = !!source?.roleId;
-  const sourceOverridesRaw = (source?.identityOverrides ?? null) as Record<
-    string,
-    unknown
-  > | null;
+  const sourceOverridesRaw = (source?.identityOverrides ?? null) as Record<string, unknown> | null;
   const sourceHasIdentityOverrides =
     sourceOverridesRaw != null && Object.keys(sourceOverridesRaw).length > 0;
   // Same conferral rule the main editor applies: this session may confer
@@ -1286,7 +1252,11 @@ function CloneProfileDialog({
       // identityOverrides copy across only when THIS session holds exactly
       // the source's values — carrying over anything else would fail the
       // whole create. The dialog warns above when it can't.
-      if (sourceOverridesRaw != null && sourceHasIdentityOverrides && sessionCanConferSourceOverrides) {
+      if (
+        sourceOverridesRaw != null &&
+        sourceHasIdentityOverrides &&
+        sessionCanConferSourceOverrides
+      ) {
         body.identityOverrides = sourceOverridesRaw;
       }
       return client.auth.createAccessProfile({
@@ -1298,9 +1268,7 @@ function CloneProfileDialog({
       void queryClient.invalidateQueries({ queryKey: accessQueryKeys.profiles(ctxId) });
       onClose();
       if (data?.principalId) {
-        navigate(
-          `/access/contexts/${ctxId}/profiles/${encodeURIComponent(data.principalId)}`,
-        );
+        navigate(`/access/contexts/${ctxId}/profiles/${encodeURIComponent(data.principalId)}`);
       }
     },
     onError: (err: unknown) => {
@@ -1308,8 +1276,7 @@ function CloneProfileDialog({
     },
   });
 
-  const isDuplicateIdConflict =
-    cloneError != null && statusCodeOf(cloneError) === 409;
+  const isDuplicateIdConflict = cloneError != null && statusCodeOf(cloneError) === 409;
 
   return (
     <Dialog
@@ -1344,15 +1311,8 @@ function CloneProfileDialog({
           {sourceIsRole && (
             <Box>
               <FormControlLabel
-                control={
-                  <Switch
-                    checked={materialize}
-                    onChange={(_, v) => setMaterialize(v)}
-                  />
-                }
-                label={
-                  <FormattedMessage id="access.profiles.cloneDialog.materializeToggle" />
-                }
+                control={<Switch checked={materialize} onChange={(_, v) => setMaterialize(v)} />}
+                label={<FormattedMessage id="access.profiles.cloneDialog.materializeToggle" />}
               />
               <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
                 <FormattedMessage id="access.profiles.cloneDialog.materializeHelp" />
@@ -1449,12 +1409,7 @@ function DeleteProfileDialog({
   return (
     <ConfirmDialog
       open={open}
-      title={
-        <FormattedMessage
-          id="access.profiles.deleteConfirm.title"
-          values={{ principalId }}
-        />
-      }
+      title={<FormattedMessage id="access.profiles.deleteConfirm.title" values={{ principalId }} />}
       body={
         <FormattedMessage
           id={

@@ -187,7 +187,7 @@ export const CRUD_OPS = [
 
 /**
  * The `granted_capabilities` names THIS EDITOR offers to author — a subset of
- * the platform's full four-name closed list (see `ScopeClause.granted_capabilities`),
+ * the platform's full five-name closed list (see `ScopeClause.granted_capabilities`),
  * deliberately narrowed to the ones admin-app's own browser bearer can ever
  * back.
  *
@@ -213,8 +213,9 @@ export const CRUD_OPS = [
  * An unrecognized name denies the WHOLE clause server-side rather than being
  * ignored, so this editor never offers one outside this list — toggling only
  * ever adds/removes an exact known name, which is what keeps a name outside
- * THIS list (e.g. `forensic-read` on a role granted some other way, or a
- * future-release name) untouched on save.
+ * THIS list (e.g. `forensic-read` on a role granted some other way, or
+ * `delegate-principal-stamp` — real and grantable platform-side, just not yet
+ * wired into this editor) untouched on save.
  */
 export const KNOWN_CAPABILITIES = [
   { value: 'member-lifecycle', labelId: 'scopeEditor.capability.memberLifecycle' },

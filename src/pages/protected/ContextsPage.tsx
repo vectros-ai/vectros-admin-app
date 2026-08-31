@@ -3,7 +3,7 @@
 //
 // Functional scope:
 //   - Lists every app context in the tenant, and creates new ones, through the
-//     owner-gated developer API (see ../../api/developerApi). The partner-API
+//     owner-gated developer API (see ../../api/developerApi). The Vectros API
 //     bearer is pinned to a single context, so it can neither enumerate the
 //     tenant's contexts nor provision a new one — only the developer API,
 //     authenticated by the Cognito session and gated to owners server-side, can.
@@ -65,6 +65,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { FormattedMessage, useIntl } from 'react-intl';
 import {
+  ApiErrorAlert,
   LoadingBlock,
   SubmitButton,
 } from '@vectros-ai/react';
@@ -83,7 +84,6 @@ import type {
 } from '../../api/vectrosApi';
 import { useDeveloperApi } from '../../api/developerApi';
 import type { AppContextSummary } from '../../api/developerApi';
-import { ApiErrorAlert } from '../../components/ApiErrorAlert';
 import { accessQueryKeys } from '../../lib/accessQueryKeys';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
 import {
@@ -144,7 +144,7 @@ export function ContextsPage(): React.JSX.Element {
     queries: contexts.flatMap((ctx) => {
       const id = ctx.contextId;
       // The reserved control-plane context can't back a context-pinned bearer
-      // (the partner API rejects an explicit mint for it outright), so a
+      // (the Vectros API rejects an explicit mint for it outright), so a
       // per-row count fetch for it would only ever fail — skip it rather than
       // spin forever. Its row shows "—" instead (see ContextRow below).
       if (!id || id === RESERVED_VECTROS_ADMIN_CONTEXT_ID) return [];
@@ -379,7 +379,7 @@ function ContextRow({
     id === RESERVED_VECTROS_ADMIN_CONTEXT_ID || id === RESERVED_DEFAULT_CONTEXT_ID;
   const tearingDown = TEARDOWN_STATUSES.has(context.status ?? '');
   const deletable = Boolean(id) && !reserved && !tearingDown;
-  // The control-plane context can't back a context-pinned bearer (the partner
+  // The control-plane context can't back a context-pinned bearer (the Vectros
   // API rejects an explicit mint for it outright), so its role/profile counts
   // are never fetched (see ContextsPage's countQueries above) and its Edit
   // action — which would mint the same way — would only ever fail. `default`
@@ -708,7 +708,7 @@ function ContextDeleteDialog({
     mutationFn: () => {
       if (!target?.contextId) return Promise.reject(new Error('No target'));
       // Teardown is an owner-gated act like create — developer API, not the
-      // context-pinned partner bearer.
+      // context-pinned Vectros API bearer.
       return devApi.deleteAppContext(target.contextId);
     },
     onSuccess: () => {

@@ -3,6 +3,76 @@
 All notable changes to the Vectros Admin App are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.20.1 — 2026-08-30
+
+### Fixed
+
+- **Activity Logs page (`/logs`): a time-window rounding bug could permanently hide very recent
+  entries.** The time-range presets (and the default "last 1h" window) built their end-of-window
+  timestamp from the current instant, then truncated it to minute precision for the
+  `datetime-local` picker — which could round the query's end boundary to a moment *before* traffic
+  generated only seconds earlier, excluding it from the results. Because "Refresh" re-queries with
+  the same already-applied window rather than recomputing it, a miss was permanent until a preset
+  was picked again. The window's end is now rounded up to the next minute instead of down, so it
+  never lands before the instant it was built.
+
+## 0.20.0 — 2026-08-28
+
+### Changed
+
+- Bundled `@vectros-ai/sdk` refreshed to the current release's staging build.
+- **`ApiErrorAlert`/`RequestIdCaption` and the API-error extraction helpers
+  (`extractErrorMessage`/`extractRequestId`/`statusCodeOf`/`isVersionConflict`) now come from
+  `@vectros-ai/react`**, not a local copy — these were byte-identical (comment-only diffs) across
+  this app, `app-vectros-ai`, and `casework-spa`, so they've been promoted to the shared package
+  (`@vectros-ai/react` 0.10.0). No behavior change; every call site now imports from
+  `@vectros-ai/react`, and this app's own `error.requestId` message catalog entry was removed in
+  favor of the package's base catalog entry.
+
+## 0.19.0 — 2026-08-27
+
+### Fixed
+
+- **`MembersPage`/`InviteMemberDialog` no longer block inviting or resending while a TEST tenant is
+  active.** Both carried a hard-coded live-tenant-only gate (button `disabled`, an explanatory info
+  alert, and a resend-time guard) that assumed an invite always landed in the account's LIVE tenant
+  regardless of which tenant was active. The backend now resolves whichever tenant the caller's own
+  credential is bound to — live and test tenants are provisioned identically and are interchangeable
+  through this UI — so the client-side gate was stale and blocking a legitimate flow. Removed, along
+  with the copy describing the old mechanism.
+- **`AcceptPage` no longer dead-ends when an invitee who already holds a Cognito identity (e.g. from a
+  prior invite to another tenant) opens a second invite link while signed out.** The signup form's
+  `signUp()` call 409s in that case (Cognito's `UsernameExistsException`) — previously this surfaced as
+  a generic "something went wrong" inline error on a form that could now only ever fail again. The page
+  now catches that specific failure and offers a "sign in instead" prompt, routing through `/login`
+  with the accept link preserved so a successful sign-in lands back on this page and the existing
+  auto-link flow (for an invitee already signed in as the invited email) takes over from there.
+
+### Added
+
+- **`LoginPage`'s post-sign-in redirect now preserves the query string of its target, not just the
+  path.** The `AcceptPage` fix above depends on this: the accept link's invite token lives in the query
+  string (`/accept?t=...`), and a path-only redirect would have landed back on a bare `/accept` with no
+  token.
+- **`ProfileEditor`'s role picker now authors a multi-role (`roleIds`) composition, not just displays
+  one.** The single-role Autocomplete is now a multi-select: pick one role for the common case, or two
+  or more to compose them additively (mirroring the CLI's repeatable `access grant --role` flag). A
+  single selection saves as the deprecated `roleId` field for minimal wire diff / back-compat; two or
+  more save as `roleIds`. Loading, editing, and removing roles from an existing composition are all
+  supported now. Cloning a multi-role-composed profile stays unsupported (the Clone action stays
+  disabled for that case, same as before this change).
+
+### Changed
+
+- **Scrubbed "partner" framing from code comments** (`api/developerApi.ts`, `api/vectrosApi.ts`,
+  `main.tsx`, `pages/protected/{ContextsPage,ContextDetailPage,LogsPage,MembersPage}.tsx`).
+  This is a public-mirrored reference app whose reader is a developer building on the Vectros
+  API, never a "partner" — comment prose (`partner API` → `Vectros API`, `partner-API bearer` →
+  `Vectros API bearer`, `Partner Dev Admins` → `Admins`, `partner forks`/`a real partner` →
+  `forks`/`a real account`) now matches that customer-POV bar. Comment prose only — no real API
+  symbols renamed (`setPartnerApiTokenMinter`, `partnerId`, `partnerUserId`, and backend
+  identifiers like the `wirePartnerApiTokenMinter` import are unaffected).
+
 ## 0.18.0 — 2026-08-27
 
 ### Fixed

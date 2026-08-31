@@ -191,6 +191,28 @@ describe('LogsPage', () => {
     }
   });
 
+  it('rounds the window end UP to the next minute, never down to "now"', () => {
+    // A "now" that sits mid-minute (not on a :00 boundary) — the case the
+    // previous test can't exercise, since pinning exactly on a minute
+    // boundary makes ceil() and floor() produce the identical result and
+    // would pass just as well on a regression back to flooring. This test
+    // pins 22.072s into the minute specifically to distinguish the two: a
+    // floored window would end at `15:00:00`, excluding anything that
+    // happened in the 22s before the page loaded; the correct, ceiled
+    // window ends at `15:01:00`, always at-or-after "now".
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-05-30T15:00:22.072Z'));
+    try {
+      renderPage();
+      const endTime = screen.getByLabelText(/^to$/i) as HTMLInputElement;
+      const endMs = new Date(endTime.value).getTime();
+      expect(endMs).toBeGreaterThanOrEqual(Date.now());
+      expect(endMs).toBe(Date.UTC(2026, 4, 30, 15, 1, 0));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('clicking the 6h preset widens the time window without firing a query', async () => {
     const user = userEvent.setup();
     const { devApi } = renderPage();

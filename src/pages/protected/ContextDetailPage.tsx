@@ -15,20 +15,15 @@
 // Cache reuse — and why tab-switch is instant:
 //   ContextsPage's row-count parallel `useQueries` already populate
 //   `accessQueryKeys.roles(ctxId)` and `accessQueryKeys.profiles(ctxId)`
-//   for every context the partner has. When the user clicks into a context,
+//   for every context the account has. When the user clicks into a context,
 //   THIS page's `useQuery` on the same key returns the cached data without
 //   a round-trip. The tab strip then switches between two ALREADY-loaded
 //   tables. The smart-redirect from ContextsPage (when N=1) also benefits
-//   — the partner clicks once and sees the populated tabs immediately.
+//   — the user clicks once and sees the populated tabs immediately.
 // ---------------------------------------------------------------------------
 
 import { useMemo } from 'react';
-import {
-  Link as RouterLink,
-  useNavigate,
-  useParams,
-  useSearchParams,
-} from 'react-router';
+import { Link as RouterLink, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   Alert,
   Box,
@@ -53,17 +48,14 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
 import { FormattedMessage, useIntl } from 'react-intl';
-import { LoadingBlock } from '@vectros-ai/react';
+import { ApiErrorAlert, LoadingBlock } from '@vectros-ai/react';
 import { useQuery } from '@tanstack/react-query';
 
 import { useActiveTenantId } from '../../auth';
 import { vectrosApiClient } from '../../api/vectrosApi';
-import type {
-  AccessProfileResponse,
-  RoleResponse,
-} from '../../api/vectrosApi';
-import { ApiErrorAlert } from '../../components/ApiErrorAlert';
+import type { AccessProfileResponse, RoleResponse } from '../../api/vectrosApi';
 import { accessQueryKeys } from '../../lib/accessQueryKeys';
+import { isMultiRoleComposed } from '../../lib/accessProfileRoles';
 import { describeIdentityOverrides } from '../../lib/identityOverrides';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
 import { usePrincipalDirectory } from '../../lib/usePrincipalDirectory';
@@ -81,9 +73,7 @@ type TabValue = (typeof TABS)[number];
 const DEFAULT_TAB: TabValue = 'roles';
 
 function parseTab(raw: string | null): TabValue {
-  return (TABS as readonly string[]).includes(raw ?? '')
-    ? (raw as TabValue)
-    : DEFAULT_TAB;
+  return (TABS as readonly string[]).includes(raw ?? '') ? (raw as TabValue) : DEFAULT_TAB;
 }
 
 // ---------------------------------------------------------------------------
@@ -97,7 +87,7 @@ export function ContextDetailPage(): React.JSX.Element {
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = parseTab(searchParams.get('tab'));
   // The reserved control-plane context can't back a context-pinned bearer
-  // (the partner API rejects an explicit mint for it outright), so its
+  // (the Vectros API rejects an explicit mint for it outright), so its
   // metadata/roles/profiles are never fetched here — see the reservedNotice
   // rendered below instead of the tabs.
   const isReservedControlPlane = ctxId === RESERVED_VECTROS_ADMIN_CONTEXT_ID;
@@ -125,12 +115,7 @@ export function ContextDetailPage(): React.JSX.Element {
     <Stack spacing={3}>
       {/* Breadcrumb — visible immediately on render (URL-derived). */}
       <Breadcrumbs aria-label={intl.formatMessage({ id: 'access.breadcrumbRoot' })}>
-        <Link
-          component={RouterLink}
-          to="/access/contexts"
-          color="inherit"
-          underline="hover"
-        >
+        <Link component={RouterLink} to="/access/contexts" color="inherit" underline="hover">
           <FormattedMessage id="access.breadcrumbRoot" />
         </Link>
         <Typography color="text.primary" sx={{ fontFamily: 'monospace', fontSize: 14 }}>
@@ -179,14 +164,8 @@ export function ContextDetailPage(): React.JSX.Element {
               onChange={handleTabChange}
               aria-label={intl.formatMessage({ id: 'access.contexts.detail.tabsLabel' })}
             >
-              <Tab
-                value="roles"
-                label={<FormattedMessage id="access.roles.title" />}
-              />
-              <Tab
-                value="profiles"
-                label={<FormattedMessage id="access.profiles.title" />}
-              />
+              <Tab value="roles" label={<FormattedMessage id="access.roles.title" />} />
+              <Tab value="profiles" label={<FormattedMessage id="access.profiles.title" />} />
             </Tabs>
           </Box>
 
@@ -220,10 +199,7 @@ function RolesTab({ ctxId }: { ctxId: string }): React.JSX.Element {
       ),
     enabled: ctxId !== '',
   });
-  const roles: RoleResponse[] = useMemo(
-    () => rolesQuery.data ?? [],
-    [rolesQuery.data],
-  );
+  const roles: RoleResponse[] = useMemo(() => rolesQuery.data ?? [], [rolesQuery.data]);
 
   return (
     <Stack spacing={2}>
@@ -288,11 +264,7 @@ function RolesTab({ ctxId }: { ctxId: string }): React.JSX.Element {
             </TableHead>
             <TableBody>
               {roles.map((t, index) => (
-                <RoleRow
-                  key={t.roleId ?? `role-${index}`}
-                  role={t}
-                  ctxId={ctxId}
-                />
+                <RoleRow key={t.roleId ?? `role-${index}`} role={t} ctxId={ctxId} />
               ))}
             </TableBody>
           </Table>
@@ -302,13 +274,7 @@ function RolesTab({ ctxId }: { ctxId: string }): React.JSX.Element {
   );
 }
 
-function RoleRow({
-  role,
-  ctxId,
-}: {
-  role: RoleResponse;
-  ctxId: string;
-}): React.JSX.Element {
+function RoleRow({ role, ctxId }: { role: RoleResponse; ctxId: string }): React.JSX.Element {
   const intl = useIntl();
   const navigate = useNavigate();
   const tid = role.roleId ?? '';
@@ -334,21 +300,14 @@ function RoleRow({
         ? {
             tabIndex: 0,
             onKeyDown,
-            'aria-label': intl.formatMessage(
-              { id: 'access.roles.openRow' },
-              { roleId: tid },
-            ),
+            'aria-label': intl.formatMessage({ id: 'access.roles.openRow' }, { roleId: tid }),
           }
         : {})}
       sx={{ cursor: tid ? 'pointer' : 'default' }}
     >
-      <TableCell sx={{ fontFamily: 'monospace', fontSize: 13 }}>
-        {role.roleId ?? '—'}
-      </TableCell>
+      <TableCell sx={{ fontFamily: 'monospace', fontSize: 13 }}>{role.roleId ?? '—'}</TableCell>
       <TableCell>{role.name ?? '—'}</TableCell>
-      <TableCell sx={{ color: 'text.secondary' }}>
-        {role.description ?? '—'}
-      </TableCell>
+      <TableCell sx={{ color: 'text.secondary' }}>{role.description ?? '—'}</TableCell>
       <TableCell align="right">{role.scopes?.length ?? 0}</TableCell>
       <TableCell sx={{ color: 'text.secondary', fontSize: 13 }}>
         {updated ? new Date(updated).toLocaleDateString() : '—'}
@@ -446,10 +405,7 @@ function ProfilesTab({ ctxId }: { ctxId: string }): React.JSX.Element {
             </Button>
           }
         >
-          <FormattedMessage
-            id="access.profiles.filteredByRole"
-            values={{ roleId: filterRoleId }}
-          />
+          <FormattedMessage id="access.profiles.filteredByRole" values={{ roleId: filterRoleId }} />
         </Alert>
       )}
 
@@ -539,7 +495,7 @@ function ProfileRow({
   // without this, such a profile fell through to the "inline" chip below
   // showing "Inline: 0 scopes" (scopes is also absent on that shape),
   // which reads as an empty/broken grant rather than what it actually is.
-  const sourceIsMultiRole = !profile.roleId && (profile.roleIds?.length ?? 0) > 0;
+  const sourceIsMultiRole = isMultiRoleComposed(profile);
   const updated = profile.lastModified ?? profile.createdAt;
   // Surface the canonical namespaced override VALUES (scope:org / scope:client /
   // custom scope:<ns>), not just a count — ownership dimensions are always
@@ -624,9 +580,7 @@ function ProfileRow({
             }
             onClick={(e) => {
               e.stopPropagation();
-              navigate(
-                `/access/contexts/${ctxId}/roles/${profile.roleId}`,
-              );
+              navigate(`/access/contexts/${ctxId}/roles/${profile.roleId}`);
             }}
             sx={{ cursor: 'pointer' }}
           />
@@ -636,7 +590,10 @@ function ProfileRow({
             label={
               <FormattedMessage
                 id="access.profiles.sourceMultiRole"
-                values={{ count: profile.roleIds?.length ?? 0, roleIds: (profile.roleIds ?? []).join(', ') }}
+                values={{
+                  count: profile.roleIds?.length ?? 0,
+                  roleIds: (profile.roleIds ?? []).join(', '),
+                }}
               />
             }
           />

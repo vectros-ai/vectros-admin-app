@@ -2,8 +2,8 @@
 // Vectros API client — admin-app's @vectros-ai/sdk wiring.
 //
 // **Why the SDK (not hand-rolled axios):** admin-app is the canonical
-// public-reference app for partners building on top of the Vectros API.
-// "Use our SDK" is the partner story; hand-rolling our own HTTP client
+// public-reference app for developers building on top of the Vectros API.
+// "Use our SDK" is the pitch; hand-rolling our own HTTP client
 // here would contradict the framing. The SDK is type-safe (regenerated
 // from the backend's OpenAPI spec per MR), so admin-app's call sites
 // stay in sync with backend changes by construction — adding a new
@@ -16,7 +16,7 @@
 // race-condition defenses (in-flight Promise coalescing + cacheGeneration
 // counter) carry over unchanged.
 //
-// **Per-(tenant, context) client instances:** Partner Dev Admins manage TWO
+// **Per-(tenant, context) client instances:** Admins manage TWO
 // tenants (live + test), and each tenant has one or more app contexts. The
 // SDK's bearer-token Supplier is closed over both at construction time, so we
 // keep one VectrosClient per (tenant, context) pair, cached lazily in a
@@ -39,7 +39,7 @@
 // action. A fork installs it from npm like any other dependency — the
 // app code stays identical.
 //
-// The SDK is generated from the partner API's OpenAPI spec.
+// The SDK is generated from the Vectros API's OpenAPI spec.
 // ---------------------------------------------------------------------------
 
 import { VectrosClient } from '@vectros-ai/sdk';

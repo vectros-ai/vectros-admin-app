@@ -622,12 +622,11 @@ describe('MembersPage', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Tenant guard. An invite is written to the account's LIVE tenant whichever
-  // tenant is active, while the roles offered come from the active one — so on
-  // a test tenant the two disagree and the invite stores a role that does not
-  // exist where it lands, producing a member who can never sign in. Note the
-  // default TestTenantProvider seeds a TEST tenant, which is why every case
-  // above had to opt into `kind="live"` once this guard existed.
+  // Live and test tenants are provisioned identically and are interchangeable,
+  // so invite/resend act on whichever tenant the caller's own credential (the
+  // TenantSwitcher-driven bearer) is bound to — there is no longer a
+  // client-side tenant gate here. Assert Invite is offered the same way on
+  // both.
   // -------------------------------------------------------------------------
   it('offers Invite on a live tenant', async () => {
     renderPage();
@@ -635,7 +634,7 @@ describe('MembersPage', () => {
     expect(screen.getByRole('button', { name: /invite member/i })).toBeEnabled();
   });
 
-  it('withholds Invite on a test tenant, and says why', async () => {
+  it('offers Invite on a test tenant too', async () => {
     vi.mocked(vectrosApiClient).mockReturnValue(makeMockClient() as never);
     render(
       <TestIntlProvider>
@@ -647,22 +646,7 @@ describe('MembersPage', () => {
       </TestIntlProvider>,
     );
     await screen.findByText('alice@example.com');
-    expect(screen.getByRole('button', { name: /invite member/i })).toBeDisabled();
-    // The "and says why" half. A disabled button is not focusable, so the
-    // reason has to live somewhere announced — not on a hover-only tooltip.
-    expect(screen.getByRole('status')).toHaveTextContent(
-      /invitations are always sent from your live tenant/i,
-    );
-  });
-
-  it('does not show the live-tenant notice on a live tenant', async () => {
-    // Positive control for the case above: without this, a notice rendered
-    // unconditionally would satisfy it.
-    renderPage();
-    await screen.findByText('alice@example.com');
-    expect(
-      screen.queryByText(/invitations are always sent from your live tenant/i),
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /invite member/i })).toBeEnabled();
   });
 
   // -------------------------------------------------------------------------
@@ -691,9 +675,9 @@ describe('MembersPage', () => {
     );
   });
 
-  it('blocks Resend on a test tenant instead of calling the API', async () => {
-    // The failure this prevents is not cosmetic: resend re-mints against the
-    // live tenant, so from here it reports a real invitation as missing.
+  it('resends on a test tenant, same as live', async () => {
+    // Same backend fix as the Invite tests above: resend resolves the
+    // caller's own bound tenant, so it now acts identically on Test.
     const user = userEvent.setup();
     const resendInvite = vi.fn().mockResolvedValue(undefined);
     vi.mocked(vectrosApiClient).mockReturnValue(
@@ -717,8 +701,7 @@ describe('MembersPage', () => {
 
     await user.click(screen.getByRole('button', { name: /resend invite/i }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/live tenant/i);
-    expect(resendInvite).not.toHaveBeenCalled();
+    await waitFor(() => expect(resendInvite).toHaveBeenCalledTimes(1));
   });
 
   // -------------------------------------------------------------------------

@@ -6,8 +6,5 @@
   "members.revokeErrorBody": "We couldn't revoke that member. Please try again.",
   "members.profileError": "Couldn't load",
   "invite.rolesErrorBody": "We couldn't load the available roles. Please try again.",
-  "invite.tokenLabel": "Raw invite token (copy it — it's shown only once)",
-  "members.inviteLiveOnly": "Invitations are always sent from your live tenant. Switch to it to invite a member.",
-  "members.resendLiveOnly": "Invitations live in your live tenant. Switch to it to re-send this one.",
-  "invite.liveTenantOnly": "You're viewing a test tenant. Invitations are always created in your live tenant, so the roles listed here wouldn't apply to the invited member — switch to your live tenant to send an invite."
+  "invite.tokenLabel": "Raw invite token (copy it — it's shown only once)"
 }
