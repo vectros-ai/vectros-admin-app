@@ -6,60 +6,38 @@
 //   2. Specific actions → can() matches literally.
 //   3. Empty allowed_actions → can() false for everything.
 //   4. Loading true until the first mint resolves.
-//   5. Token decode handles base64url + missing prefix + bad shape.
+//   5. A minter that supplies no resolvedScope (older backend, or a fork
+//      mid-migration) degrades to empty rather than throwing.
 //   6. Mint failure → degraded (loading→false, empty allowedActions).
 //   7. Re-runs when the tenant override changes.
 //
-// Strategy: inject a partner-API token MINTER (the cache's new seam) that
-// hands back a hand-built st_*-shaped token whose payload we control. The
-// tenant override is passed directly (no CurrentTenantProvider needed — the
-// override wins over the no-provider fallback).
+// Strategy: inject a partner-API token MINTER (the cache's own seam) that
+// resolves to a mint response carrying the given actions/identity as
+// `resolvedScope` — the shape useScopeGate reads directly now,
+// replacing the old client-decoded compressed-`scope`-claim token this file
+// used to hand-build. The tenant override is passed directly (no
+// CurrentTenantProvider needed — the override wins over the no-provider
+// fallback).
 // ---------------------------------------------------------------------------
 
 import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  __compressScopeClaimForTest,
-  __resetVectrosApiTokenCacheForTest,
-  setPartnerApiTokenMinter,
-} from '@vectros-ai/react';
-import { __resetScopeGateDecodeCacheForTest, useScopeGate } from '@vectros-ai/react';
+import { __resetVectrosApiTokenCacheForTest, setPartnerApiTokenMinter, useScopeGate } from '@vectros-ai/react';
 
 const TENANT = 'tnt_test_0001';
 
-function base64UrlEncode(s: string): string {
-  const bytes = new TextEncoder().encode(s);
-  let binary = '';
-  for (const b of bytes) binary += String.fromCharCode(b);
-  return btoa(binary).replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-}
-
-/**
- * Synthetic st_*-shaped token carrying `actions` in the real minted shape: a
- * `scope` claim raw-DEFLATE-compressed against the platform's preset
- * dictionary, whose decompressed JSON is `scope.scopes[]` — a list of
- * clauses, each with an `allowed_actions` array. (The scoped-token endpoint
- * emits a single clause for these mints.) No `live`/`test` env infix — the
- * mint side has never produced `st_env_`, only the bare `st_` prefix.
- */
-function makeStToken(actions: ReadonlyArray<string>): string {
-  const header = base64UrlEncode(JSON.stringify({ alg: 'ES256', typ: 'JWT' }));
-  const compressedScope = __compressScopeClaimForTest(
-    JSON.stringify({ scopes: [{ allowed_actions: actions }] }),
-  );
-  const payload = base64UrlEncode(JSON.stringify({ scope: compressedScope }));
-  return `st_${header}.${payload}.sig`;
-}
-
-/** Register a minter that returns `token` for any tenant. */
-function mintToken(token: string): void {
-  setPartnerApiTokenMinter(async () => ({ token, expiresAtMs: Date.now() + 900_000 }));
+/** Register a minter that resolves `actions` (and, optionally, `identity`) as resolvedScope. */
+function mintScope(actions: ReadonlyArray<string>, identity: Readonly<Record<string, string>> = {}): void {
+  setPartnerApiTokenMinter(async () => ({
+    token: 'st_test_opaque',
+    expiresAtMs: Date.now() + 900_000,
+    resolvedScope: { allowedActions: actions, identity },
+  }));
 }
 
 beforeEach(() => {
   __resetVectrosApiTokenCacheForTest();
-  __resetScopeGateDecodeCacheForTest();
 });
 
 afterEach(() => {
@@ -68,7 +46,7 @@ afterEach(() => {
 
 describe('useScopeGate', () => {
   it('starts in loading state and resolves after the token mints', async () => {
-    mintToken(makeStToken(['*']));
+    mintScope(['*']);
     const { result } = renderHook(() => useScopeGate(TENANT));
 
     expect(result.current.loading).toBe(true);
@@ -79,7 +57,7 @@ describe('useScopeGate', () => {
   });
 
   it('grants every action when allowed_actions is wildcard', async () => {
-    mintToken(makeStToken(['*']));
+    mintScope(['*']);
     const { result } = renderHook(() => useScopeGate(TENANT));
     await waitFor(() => expect(result.current.loading).toBe(false));
 
@@ -88,7 +66,7 @@ describe('useScopeGate', () => {
   });
 
   it('grants only listed actions when allowed_actions is specific', async () => {
-    mintToken(makeStToken(['admin:users', 'admin:keys']));
+    mintScope(['admin:users', 'admin:keys']);
     const { result } = renderHook(() => useScopeGate(TENANT));
     await waitFor(() => expect(result.current.loading).toBe(false));
 
@@ -98,7 +76,7 @@ describe('useScopeGate', () => {
   });
 
   it('grants nothing when allowed_actions is empty', async () => {
-    mintToken(makeStToken([]));
+    mintScope([]);
     const { result } = renderHook(() => useScopeGate(TENANT));
     await waitFor(() => expect(result.current.loading).toBe(false));
 
@@ -107,26 +85,23 @@ describe('useScopeGate', () => {
     expect(result.current.can('*')).toBe(false);
   });
 
-  it('decodes the bare JWT shape (no st_ prefix)', async () => {
-    const header = base64UrlEncode(JSON.stringify({ alg: 'ES256', typ: 'JWT' }));
-    const compressedScope = __compressScopeClaimForTest(
-      JSON.stringify({ scopes: [{ allowed_actions: ['records:r'] }] }),
-    );
-    const payload = base64UrlEncode(JSON.stringify({ scope: compressedScope }));
-    mintToken(`${header}.${payload}.sig`);
+  it('surfaces the resolved identity alongside allowedActions', async () => {
+    mintScope(['profiles:r'], { userId: 'usr_1', 'scope:org': 'org_a' });
     const { result } = renderHook(() => useScopeGate(TENANT));
     await waitFor(() => expect(result.current.loading).toBe(false));
 
-    expect(result.current.can('records:r')).toBe(true);
-    expect(result.current.can('records:w')).toBe(false);
+    expect(result.current.identity).toEqual({ userId: 'usr_1', 'scope:org': 'org_a' });
   });
 
-  it('handles a malformed token by exposing an empty allowedActions list', async () => {
-    mintToken('not.a.valid.jwt.at.all');
+  it('degrades to empty (not throw) when the minter supplies no resolvedScope at all', async () => {
+    // A fork mid-migration, or an older backend response shape — the mint
+    // itself still succeeds, but nothing to gate on came back.
+    setPartnerApiTokenMinter(async () => ({ token: 'st_no_scope', expiresAtMs: Date.now() + 900_000 }));
     const { result } = renderHook(() => useScopeGate(TENANT));
     await waitFor(() => expect(result.current.loading).toBe(false));
 
     expect(result.current.allowedActions).toEqual([]);
+    expect(result.current.identity).toEqual({});
     expect(result.current.can('admin:users')).toBe(false);
   });
 
@@ -135,7 +110,10 @@ describe('useScopeGate', () => {
       throw new Error('network down');
     });
     const { result } = renderHook(() => useScopeGate(TENANT));
-    await waitFor(() => expect(result.current.loading).toBe(false));
+    // getVectrosApiToken retries once on a genuine mint failure (~1.5s shared
+    // delay) before surfacing the error — see vectrosApiTokenCache.ts's own
+    // SHARED_MINT_RETRY_DELAY_MS — so this needs a longer wait than the default.
+    await waitFor(() => expect(result.current.loading).toBe(false), { timeout: 3000 });
 
     expect(result.current.allowedActions).toEqual([]);
     expect(result.current.can('admin:users')).toBe(false);
@@ -143,8 +121,12 @@ describe('useScopeGate', () => {
 
   it('re-runs when the tenant override changes', async () => {
     setPartnerApiTokenMinter(async (tenantId) => ({
-      token: makeStToken([tenantId === 'tnt_a' ? 'admin:a_scope' : 'admin:b_scope']),
+      token: 'st_test_opaque',
       expiresAtMs: Date.now() + 900_000,
+      resolvedScope: {
+        allowedActions: [tenantId === 'tnt_a' ? 'admin:a_scope' : 'admin:b_scope'],
+        identity: {},
+      },
     }));
     const { result, rerender } = renderHook(({ tid }: { tid: string }) => useScopeGate(tid), {
       initialProps: { tid: 'tnt_a' },

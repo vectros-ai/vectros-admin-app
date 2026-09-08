@@ -26,7 +26,7 @@ import {
 import type { ScopeNamespaceError } from './scopeNamespace';
 
 /**
- * Whether a SESSION (identified by its own decoded `identity` claim — see
+ * Whether a SESSION (identified by its own resolved `identity` — see
  * `useScopeGate().identity` in `@vectros-ai/react`) holds any identity of its
  * own at all. This is a LIVE, per-session question, not a fixed fact about
  * the app: an owner session's credential carries no identity (nothing to
@@ -40,9 +40,9 @@ import type { ScopeNamespaceError } from './scopeNamespace';
  * impossible for this session", the coarse question the editor's overall
  * shown-but-disabled state needs).
  *
- * `sessionIdentity` is the raw decoded claim (canonical `scope:<ns>` keys,
- * plus a non-namespace `partnerUserId` key this reuses `parseIdentityOverrides`
- * to filter out via `passthrough`).
+ * `sessionIdentity` is the raw resolved identity (canonical `scope:<ns>` keys,
+ * plus a non-namespace `userId` key this reuses `parseIdentityOverrides` to
+ * filter out via `passthrough`).
  */
 export function sessionHoldsAnyIdentity(
   sessionIdentity: Readonly<Record<string, string>>,

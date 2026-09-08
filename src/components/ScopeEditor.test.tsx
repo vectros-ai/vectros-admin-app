@@ -13,7 +13,7 @@
 // ---------------------------------------------------------------------------
 
 import { useState } from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { createIntl, createIntlCache } from 'react-intl';
@@ -22,6 +22,7 @@ import { TestIntlProvider } from '../test/intl';
 import { I18N_DEFAULT_LOCALE } from '../i18n/IntlProvider';
 import enMessages from '../i18n/messages.en.json';
 import {
+  CRUD_OPS,
   RESOURCE_CATALOG,
   ScopeEditor,
   emptyClause,
@@ -29,6 +30,7 @@ import {
   normalizeScopes,
   parseClauseActions,
   serializeClauseActions,
+  toWireScopeClauses,
   validateClauses,
 } from './ScopeEditor';
 import type { ScopeClause } from './ScopeEditor';
@@ -73,6 +75,29 @@ describe('normalizeScopes()', () => {
     expect(normalizeScopes([scope])).toEqual([
       { allowed_actions: ['read'], data_scope: { 'scope:org': ['org_1'] }, granted_capabilities: [] },
     ]);
+  });
+
+  it('carries assignable_roles through untouched, and OMITS it when absent or empty', () => {
+    expect(
+      normalizeScopes([
+        { allowed_actions: ['profiles:c'], data_scope: {}, assignable_roles: ['support'] },
+      ]),
+    ).toEqual([
+      {
+        allowed_actions: ['profiles:c'],
+        data_scope: {},
+        granted_capabilities: [],
+        assignable_roles: ['support'],
+      },
+    ]);
+    // Absent is the platform's "no restriction"; an EMPTY list is rejected
+    // outright, so neither may become `assignable_roles: []` here.
+    expect(normalizeScopes([{ allowed_actions: ['records:r'] }])[0]).not.toHaveProperty(
+      'assignable_roles',
+    );
+    expect(
+      normalizeScopes([{ allowed_actions: ['records:r'], assignable_roles: [] }])[0],
+    ).not.toHaveProperty('assignable_roles');
   });
 
   it('carries granted_capabilities through untouched (0.40.0 — the same class of bug: a role/profile carrying a capability grant must not lose it on load/save)', () => {
@@ -276,6 +301,223 @@ describe('RESOURCE_CATALOG (grantable scope resources)', () => {
         (enMessages as Record<string, string>)[`scopeEditor.resource.${value}`],
       ).toBeTruthy();
     }
+  });
+
+  // 0.43.0 added the execute letter. `x` is accepted by the platform's grammar
+  // on EVERY resource but has an effect on `scripts` alone (`records:x` is a
+  // valid grant that grants nothing), so offering it anywhere else would be a
+  // checkbox that silently does nothing.
+  it('offers the execute letter on `scripts` and on no other resource', () => {
+    for (const { value, ops } of RESOURCE_CATALOG) {
+      expect(ops.includes('x')).toBe(value === 'scripts');
+    }
+  });
+
+  it('offers execute SEPARATELY from the script create/read/delete verbs', () => {
+    const scripts = RESOURCE_CATALOG.find((r) => r.value === 'scripts');
+    // Pushing a script version must never imply permission to run one, so the
+    // catalog carries `x` as its own selectable op rather than folding it in.
+    expect(scripts?.ops).toBe('crdx');
+    // And still no `u`: a script version is immutable, a push is a create.
+    expect(scripts?.ops).not.toContain('u');
+  });
+
+  it('has an i18n label for every operation column', () => {
+    for (const { labelId } of CRUD_OPS) {
+      expect((enMessages as Record<string, string>)[labelId]).toBeTruthy();
+    }
+  });
+
+  it('serializes every letter the catalog offers (a letter the canonical order omits is dropped silently)', () => {
+    // Regression lock on the trap that made this suite necessary: the ops
+    // serializer builds its output by walking a canonical letter string, so a
+    // catalog letter missing from that string is DROPPED at save with the box
+    // still ticked in the UI — a grant that looks authored and is not.
+    for (const { value, ops } of RESOURCE_CATALOG) {
+      expect(
+        serializeClauseActions({ wildcard: false, grants: { [value]: ops }, advanced: [] }),
+      ).toEqual([`${value}:${ops}`]);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The Advanced hint is customer-facing copy that TEACHES the scope grammar.
+// It ships to anyone who forks this app, and it is the one place in the UI that
+// tells an admin what a qualifier segment may look like — so an example it
+// invites that the platform refuses is worse than an omission: the admin types
+// it, saves, and gets a rejection the copy told them to expect to work.
+//
+// The qualifier rules are per-resource and NOT uniform, which is exactly why
+// this drifts. Transcribed from the platform's four independent qualifier
+// axes (its own grammar check admits an entry only when the qualifier applies
+// to EVERY letter the entry grants):
+//
+//   records, entities  — any letters
+//   documents, users   — the reveal letter alone
+//   profiles           — the three authoring letters alone
+//   scripts            — the execute letter alone
+//
+// The trap this guards is a real one, not a hypothetical: three separate
+// passes over the sibling app's version of this same string each produced a
+// plausible-sounding sentence naming the wrong resource set, because the
+// grammar splits one user-facing idea across four places.
+// ---------------------------------------------------------------------------
+
+/** Does the platform admit `<resource>:<ops>:<qualifier>`? */
+function qualifierIsLegal(resource: string, ops: string): boolean {
+  const every = (allowed: string): boolean => [...ops].every((c) => allowed.includes(c));
+  switch (resource) {
+    case 'records':
+    case 'entities':
+      return true;
+    case 'documents':
+    case 'users':
+      return every('s');
+    case 'profiles':
+      return every('cud');
+    case 'scripts':
+      return every('x');
+    default:
+      return false;
+  }
+}
+
+describe('scopeEditor.advancedHint (customer-facing grammar copy)', () => {
+  const hint = (enMessages as Record<string, string>)['scopeEditor.advancedHint'] ?? '';
+  const placeholder = (enMessages as Record<string, string>)['scopeEditor.advancedPlaceholder'] ?? '';
+  const copy = `${hint} ${placeholder}`;
+
+  // Every `resource:ops:qualifier` triple the copy shows the reader, each tagged
+  // with whether the copy presents it as something to DO or as a counter-example
+  // it explicitly calls refused. Both kinds are checked, in opposite directions.
+  const QUALIFIED = [...copy.matchAll(/\b([a-z][a-z-]*):([crudsx]+):([A-Za-z_][\w-]*)/g)].map(
+    (m) => ({
+      text: m[0],
+      resource: m[1] as string,
+      ops: m[2] as string,
+      // A counter-example is only a counter-example if the copy says so NEAR it.
+      calledRefused: /\b(refused|rejected|not accepted|inert)\b/i.test(
+        copy.slice(m.index ?? 0, (m.index ?? 0) + 80),
+      ),
+    }),
+  );
+
+  it('shows at least one qualified example of each kind (the sweeps below are vacuous otherwise)', () => {
+    expect(QUALIFIED.filter((q) => !q.calledRefused).length).toBeGreaterThan(0);
+    expect(QUALIFIED.filter((q) => q.calledRefused).length).toBeGreaterThan(0);
+  });
+
+  it('never invites a qualified form the platform refuses', () => {
+    const invited = QUALIFIED.filter((q) => !q.calledRefused);
+    expect(invited.filter((q) => !qualifierIsLegal(q.resource, q.ops)).map((q) => q.text)).toEqual(
+      [],
+    );
+  });
+
+  it('and every form it calls refused really is refused — a counter-example that is actually legal teaches the reader to avoid something that works', () => {
+    const counterExamples = QUALIFIED.filter((q) => q.calledRefused);
+    expect(
+      counterExamples.filter((q) => qualifierIsLegal(q.resource, q.ops)).map((q) => q.text),
+    ).toEqual([]);
+  });
+
+  it('keeps the reveal-only resources reveal-only — the exact drift that shipped in the sibling app', () => {
+    // The regression this guards: copy that says the qualifier "narrows to a
+    // type on records/documents" reads fine and invites `documents:r:<type>`,
+    // which the platform rejects because the qualifier is inert on that letter.
+    // Naming that form is fine; naming it WITHOUT saying it is refused is not.
+    for (const form of ['documents:r:', 'documents:c:', 'documents:u:', 'documents:d:', 'users:r:']) {
+      if (!copy.includes(form)) continue;
+      const idx = copy.indexOf(form);
+      expect(
+        copy.slice(idx, idx + 80),
+        `"${form}…" appears without being marked refused`,
+      ).toMatch(/refused|rejected|not accepted|inert/i);
+    }
+  });
+
+  it('mentions every op letter the catalog can author, so a new letter cannot land unmentioned', () => {
+    for (const letter of new Set(RESOURCE_CATALOG.flatMap((r) => [...r.ops]))) {
+      // Either named in the letter enumeration ("c/r/u/d plus s … and x") or
+      // shown in an example's op segment — both teach the reader it exists.
+      const named = new RegExp(`(^|[^a-z])${letter}([^a-z]|$)`).test(copy);
+      const shown = new RegExp(`\\b[a-z][a-z-]*:[crudsx]*${letter}[crudsx]*(:|\\b)`).test(copy);
+      expect(named || shown, `op letter "${letter}" is unmentioned in the Advanced hint`).toBe(true);
+    }
+  });
+
+  it('names the per-script execute qualifier, which the matrix deliberately cannot author', () => {
+    // `scripts:x:<name>` is the one qualifier form with no checkbox — the
+    // matrix emits no qualifiers — so this copy is its ONLY discovery path.
+    expect(copy).toMatch(/scripts:x:[a-z]/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// toWireScopeClauses() — the single save-path projection
+// ---------------------------------------------------------------------------
+
+describe('toWireScopeClauses()', () => {
+  it('carries assignable_roles through untouched (dropping it would silently REMOVE a role-composition restriction)', () => {
+    expect(
+      toWireScopeClauses([
+        { allowed_actions: ['profiles:c'], data_scope: {}, assignable_roles: ['support', 'viewer'] },
+      ]),
+    ).toEqual([
+      {
+        allowed_actions: ['profiles:c'],
+        data_scope: {},
+        granted_capabilities: [],
+        assignable_roles: ['support', 'viewer'],
+      },
+    ]);
+  });
+
+  it('OMITS assignable_roles when the clause has none — the platform rejects an empty list, and absent means "unrestricted"', () => {
+    const [wire] = toWireScopeClauses([{ allowed_actions: ['records:r'], data_scope: {} }]);
+    expect(wire).not.toHaveProperty('assignable_roles');
+  });
+
+  it('never emits an empty assignable_roles list even when handed one', () => {
+    const [wire] = toWireScopeClauses([
+      { allowed_actions: ['records:r'], data_scope: {}, assignable_roles: [] },
+    ]);
+    expect(wire).not.toHaveProperty('assignable_roles');
+  });
+
+  it('copies into fresh arrays (no aliasing of the source clause)', () => {
+    const source = [
+      { allowed_actions: ['records:r'], data_scope: {}, assignable_roles: ['support'] },
+    ];
+    const [wire] = toWireScopeClauses(source);
+    expect(wire?.allowed_actions).not.toBe(source[0]?.allowed_actions);
+    expect(wire?.assignable_roles).not.toBe(source[0]?.assignable_roles);
+  });
+
+  it('carries data_scope and granted_capabilities through, defaulting the latter to []', () => {
+    expect(
+      toWireScopeClauses([
+        {
+          allowed_actions: ['records:r'],
+          data_scope: { 'scope:org': { values: ['acme'] } },
+          granted_capabilities: ['delegate-mint'],
+        },
+        { allowed_actions: ['search:r'] },
+      ]),
+    ).toEqual([
+      {
+        allowed_actions: ['records:r'],
+        data_scope: { 'scope:org': { values: ['acme'] } },
+        granted_capabilities: ['delegate-mint'],
+      },
+      { allowed_actions: ['search:r'], data_scope: {}, granted_capabilities: [] },
+    ]);
+  });
+
+  it('maps null / undefined to an empty list', () => {
+    expect(toWireScopeClauses(null)).toEqual([]);
+    expect(toWireScopeClauses(undefined)).toEqual([]);
   });
 });
 
@@ -598,6 +840,47 @@ describe('parseClauseActions() / serializeClauseActions()', () => {
     const actions = ['records:cru', 'documents:r'];
     expect(serializeClauseActions(parseClauseActions(actions))).toEqual(actions);
   });
+
+  // --- the execute letter, behaviourally (not just as catalog data) --------
+
+  it('promotes a bare `scripts:x` into the matrix', () => {
+    expect(parseClauseActions(['scripts:x'])).toEqual({
+      wildcard: false,
+      grants: { scripts: 'x' },
+      advanced: [],
+    });
+  });
+
+  it('keeps `records:x` OUT of the matrix — the platform accepts the letter there and gives it no effect, so a checkbox would grant nothing', () => {
+    expect(parseClauseActions(['records:x'])).toEqual({
+      wildcard: false,
+      grants: {},
+      advanced: ['records:x'],
+    });
+  });
+
+  it('keeps the per-script form `scripts:x:<name>` in advanced and round-trips it byte-identically', () => {
+    // The matrix emits no qualifiers, so this is Advanced's job — and the
+    // Advanced hint is the only place that teaches the form exists.
+    const actions = ['scripts:x:daily-report'];
+    expect(parseClauseActions(actions)).toEqual({
+      wildcard: false,
+      grants: {},
+      advanced: actions,
+    });
+    expect(serializeClauseActions(parseClauseActions(actions))).toEqual(actions);
+  });
+
+  it('canonicalises a pre-existing split grant (`scripts:crd` + `scripts:x`) into `scripts:crdx` — same authority, one entry', () => {
+    // A clause authored BEFORE the Execute column existed carries `scripts:x`
+    // in advanced alongside a matrix grant. Both now parse structurally and
+    // merge. The authorizer matches op letters with indexOf, so the merged
+    // form is equivalent — but it IS a wire-shape change on stored data, so
+    // pin it rather than discover it in a diff of someone's saved role.
+    expect(serializeClauseActions(parseClauseActions(['scripts:crd', 'scripts:x']))).toEqual([
+      'scripts:crdx',
+    ]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -653,6 +936,91 @@ describe('<ScopeEditor> permission matrix', () => {
     expect(screen.getByRole('checkbox', { name: /read search/i })).toBeInTheDocument();
     expect(screen.queryByRole('checkbox', { name: /create search/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('checkbox', { name: /delete search/i })).not.toBeInTheDocument();
+  });
+
+  // --- the Execute column, as rendered ------------------------------------
+
+  it('renders Execute on scripts and on NO other resource', () => {
+    render(
+      <TestIntlProvider>
+        <ScopeEditor value={[emptyClause()]} onChange={() => {}} />
+      </TestIntlProvider>,
+    );
+    expect(screen.getByRole('checkbox', { name: /execute scripts/i })).toBeInTheDocument();
+    // The platform accepts `x` on every resource and gives it an effect on
+    // none of the others, so a checkbox anywhere else would grant nothing.
+    for (const resource of ['records', 'documents', 'folders', 'schemas', 'triggers', 'users']) {
+      expect(
+        screen.queryByRole('checkbox', { name: new RegExp(`execute ${resource}`, 'i') }),
+        `Execute must not be offered on ${resource}`,
+      ).not.toBeInTheDocument();
+    }
+  });
+
+  it('keeps PUSH and RUN separate — granting create on scripts never emits the execute letter', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <TestIntlProvider>
+        <ScopeEditor value={[emptyClause()]} onChange={onChange} />
+      </TestIntlProvider>,
+    );
+    await user.click(screen.getByRole('checkbox', { name: /create scripts/i }));
+    expect(onChange).toHaveBeenCalledWith([
+      { allowed_actions: ['scripts:c'], data_scope: {}, granted_capabilities: [] },
+    ]);
+  });
+
+  it('and the converse — a clause that can PUSH shows Execute unticked, and ticking it adds only the execute letter', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <TestIntlProvider>
+        <ScopeEditor
+          value={[{ allowed_actions: ['scripts:c'], data_scope: {} }]}
+          onChange={onChange}
+        />
+      </TestIntlProvider>,
+    );
+    const execute = screen.getByRole('checkbox', { name: /execute scripts/i });
+    expect(execute).not.toBeChecked();
+    await user.click(execute);
+    // The emitted clause is a spread of the one supplied, so it carries exactly
+    // the keys that came in — asserted as a whole rather than with
+    // objectContaining, so an ADDED key would fail this too.
+    expect(onChange).toHaveBeenCalledWith([
+      { allowed_actions: ['scripts:cx'], data_scope: {} },
+    ]);
+  });
+
+  // --- clause fields the editor does not author must survive editing -------
+
+  it('preserves assignable_roles across an unrelated matrix edit', () => {
+    // The editor cannot author this field, so the ONLY thing standing between a
+    // tenant's role-composition restriction and silent removal is that every
+    // clause updater spreads the existing clause. A refactor to explicit field
+    // construction — the exact mistake this branch fixes at the save sites —
+    // would break it here instead, and nothing else would notice.
+    const onChange = vi.fn();
+    render(
+      <TestIntlProvider>
+        <ScopeEditor
+          value={[
+            {
+              allowed_actions: ['records:r'],
+              data_scope: {},
+              granted_capabilities: [],
+              assignable_roles: ['support'],
+            },
+          ]}
+          onChange={onChange}
+        />
+      </TestIntlProvider>,
+    );
+    fireEvent.click(screen.getByRole('checkbox', { name: /create records/i }));
+    expect(onChange).toHaveBeenCalledWith([
+      expect.objectContaining({ assignable_roles: ['support'] }),
+    ]);
   });
 });
 

@@ -135,12 +135,12 @@ describe('sessionHoldsAnyIdentity', () => {
     expect(sessionHoldsAnyIdentity({})).toBe(false);
   });
 
-  it('is false for a claim that carries only partnerUserId (no ownership dimension)', () => {
-    expect(sessionHoldsAnyIdentity({ partnerUserId: 'u_123' })).toBe(false);
+  it('is false for a claim that carries only userId (no ownership dimension)', () => {
+    expect(sessionHoldsAnyIdentity({ userId: 'u_123' })).toBe(false);
   });
 
   it('is true once the session holds a real ownership dimension', () => {
-    expect(sessionHoldsAnyIdentity({ partnerUserId: 'u_123', 'scope:org': 'org_a' })).toBe(true);
+    expect(sessionHoldsAnyIdentity({ userId: 'u_123', 'scope:org': 'org_a' })).toBe(true);
   });
 });
 

@@ -583,12 +583,77 @@ describe('LogsPage', () => {
     expect(payload.method).toBe('POST');
   });
 
+  // The server's own accepted set, transcribed from its allow-list. Every
+  // option this page offers must be in here and every value in here should be
+  // offered: an option the server does not accept is not a filter that returns
+  // nothing, it is a dropdown entry whose only possible outcome is a 400 raised
+  // BEFORE the log query runs.
+  const SERVER_ACCEPTED_RESOURCES = [
+    'documents',
+    'records',
+    'search',
+    'schemas',
+    'folders',
+    'entities',
+    'namespaces',
+    'users',
+    'usage',
+    'auth',
+    'models',
+    'ping',
+    'issuers',
+    'rag',
+    'chat',
+    'ask',
+    'erasure-requests',
+    'export',
+  ];
+
+  it('offers exactly the server-accepted resource filters, and nothing else', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByLabelText(/^resource$/i));
+    const offered = (await screen.findAllByRole('option'))
+      .map((o) => o.textContent?.trim() ?? '')
+      // Drop ONLY the "All resources" clear item, by exact text. A looser
+      // /^all/i predicate would also swallow any unexpected option starting
+      // with "all", turning a real drift into a silent pass.
+      .filter((t) => t !== 'All resources');
+    expect([...offered].sort()).toEqual([...SERVER_ACCEPTED_RESOURCES].sort());
+  });
+
+  it('does NOT offer `clients` or `orgs` — retired routes the server dropped from its allow-list, so both are a guaranteed 400', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByLabelText(/^resource$/i));
+    // Wait for the listbox before asserting an ABSENCE, or the assertion
+    // passes vacuously against a menu that has not rendered yet.
+    expect(await screen.findByRole('option', { name: /^entities$/ })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /^clients$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /^orgs$/ })).not.toBeInTheDocument();
+  });
+
+  it('does NOT offer `scripts` or `triggers` — 0.43.0 surfaces the server does not accept as log filters', async () => {
+    // Two values, not three: the trigger-failures route reports itself as
+    // `triggers`, so `trigger-failures` is not a resource any log row can
+    // carry and would be a filter for a value that does not exist. Adding
+    // either real one here would move the 400 rather than remove it — the
+    // server's allow-list is the gate, and neither is on it.
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByLabelText(/^resource$/i));
+    expect(await screen.findByRole('option', { name: /^entities$/ })).toBeInTheDocument();
+    for (const r of ['scripts', 'triggers']) {
+      expect(screen.queryByRole('option', { name: new RegExp(`^${r}$`) })).not.toBeInTheDocument();
+    }
+  });
+
   it('offers the identity + generalized resource filters (matches the backend allow-list)', async () => {
     const user = userEvent.setup();
     const { devApi } = renderPage();
     await user.click(screen.getByLabelText(/^resource$/i));
     // The generic IdentityEntityDB surface + the previously-drifted resource types.
-    for (const r of ['entities', 'namespaces', 'erasure-requests', 'export']) {
+    for (const r of ['entities', 'namespaces', 'erasure-requests', 'export', 'issuers']) {
       expect(await screen.findByRole('option', { name: new RegExp(`^${r}$`) })).toBeInTheDocument();
     }
     // And a new value flows through to the request unchanged.

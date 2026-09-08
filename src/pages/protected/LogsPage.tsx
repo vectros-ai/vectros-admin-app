@@ -91,7 +91,28 @@ import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
 // automated check for frontend drift today.
 // ---------------------------------------------------------------------------
 
-/** Resources the backend will accept. Out-of-list values are rejected with 400. */
+/**
+ * Resources the backend will accept. Out-of-list values are rejected with 400
+ * BEFORE the log query runs, so an option here that the server does not accept
+ * is not a filter that returns nothing — it is a dropdown entry that can only
+ * ever produce an error.
+ *
+ * This list is the server's allow-list verbatim, in the server's own order.
+ * `clients` and `orgs` are deliberately ABSENT: those routes were retired onto
+ * `entities`, the server dropped them from its allow-list rather than
+ * deprecating them, and there are no historical log rows carrying either — so
+ * there is nothing for them to match even in principle. `issuers` is present
+ * because the server accepts it and this app administers issuers.
+ *
+ * Not every value a log row can carry is offered: the server keeps its
+ * allow-list to the customer-facing, filterable subset, so control-plane
+ * resources appear ON rows without being accepted AS filters. Adding one here
+ * would move the 400, not remove it — check the server's list before extending
+ * this one. `scripts` and `triggers` are the live example: both are on neither
+ * twin list, so 0.43.0's automation traffic is not filterable from here yet.
+ * (There is no `trigger-failures` value to add — that route reports itself as
+ * `triggers`.)
+ */
 const RESOURCES = [
   'documents',
   'records',
@@ -100,13 +121,12 @@ const RESOURCES = [
   'folders',
   'entities',
   'namespaces',
-  'clients',
-  'orgs',
   'users',
   'usage',
   'auth',
   'models',
   'ping',
+  'issuers',
   'rag',
   'chat',
   'ask',

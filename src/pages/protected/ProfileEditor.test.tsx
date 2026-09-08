@@ -734,6 +734,37 @@ describe('ProfileEditor — dirty-state regression', () => {
     };
     expect(call.body.scopes?.[0]?.granted_capabilities).toEqual(['forensic-read']);
   });
+
+  it('a save carries assignable_roles through untouched — dropping it silently WIDENS the grant', async () => {
+    // 0.43.0 twin of the test above; see RoleEditor's copy for why this asserts
+    // on the save body rather than on the extracted projection helper.
+    const user = userEvent.setup();
+    const { client } = renderEditor({
+      client: makeMockClient({
+        getAccessProfile: vi.fn().mockResolvedValue({
+          ...PROFILE_KEYBOT_INLINE,
+          scopes: [
+            {
+              allowed_actions: ['records:r'],
+              data_scope: {},
+              assignable_roles: ['support'],
+            },
+          ],
+        }),
+      }),
+      initialUrl: '/access/contexts/engineering/profiles/key_bot',
+    });
+    await screen.findByRole('radio', { name: /inline scope clauses/i });
+    await user.click(await screen.findByRole('checkbox', { name: /update records/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(client.auth.updateAccessProfile).toHaveBeenCalledTimes(1));
+    const call = client.auth.updateAccessProfile.mock.calls[0]?.[0] as {
+      body: { scopes?: Array<{ assignable_roles?: string[] }> };
+    };
+    expect(call.body.scopes?.[0]?.assignable_roles).toEqual(['support']);
+  });
 });
 
 // Canonical overrides: org via `scope:org`, plus a custom `scope:group`. Both
@@ -896,6 +927,36 @@ describe('ProfileEditor — a stale invalid stored override never permanently bl
 });
 
 describe('ProfileEditor — clone dialog', () => {
+  it('keeps a suspended source suspended — an uncopied status does not mean "unchanged", it means ACTIVE', async () => {
+    // Create applies whatever status it is handed and treats a missing one as
+    // active, so dropping the field is not a no-op — it silently restores
+    // access someone had deliberately withdrawn. Third field in the same family
+    // as `assumable`: present on the response, accepted by create, and invisible
+    // to a body assembled field by field.
+    const user = userEvent.setup();
+    const { client } = renderEditor({
+      client: makeMockClient({
+        getAccessProfile: vi
+          .fn()
+          .mockResolvedValue({ ...PROFILE_KEYBOT_INLINE, status: 'suspended' }),
+      }),
+      initialUrl: '/access/contexts/engineering/profiles/key_bot',
+    });
+    await screen.findByRole('heading', { level: 1, name: /edit profile for key_bot/i });
+    const cloneOpenBtn = screen.getByRole('button', { name: /^clone$/i });
+    await waitFor(() => expect(cloneOpenBtn).toBeEnabled());
+    await user.click(cloneOpenBtn);
+    const dialog = await screen.findByRole('dialog', { name: /clone access profile/i });
+    await user.type(within(dialog).getByRole('textbox', { name: /new principal id/i }), 'usr_eve');
+    await user.click(within(dialog).getByRole('button', { name: /^clone$/i }));
+
+    await waitFor(() => expect(client.auth.createAccessProfile).toHaveBeenCalledTimes(1));
+    const call = client.auth.createAccessProfile.mock.calls[0]?.[0] as {
+      body: { status?: string };
+    };
+    expect(call.body.status).toBe('suspended');
+  });
+
   it('Materialize OFF (default) keeps roleId reference; identity overrides are NOT copied, and the dialog warns', async () => {
     // Source (usr_alice / PROFILE_ALICE_ROLED) has a non-empty scope:org
     // override — this app's credential can't author one, so carrying it

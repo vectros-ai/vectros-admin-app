@@ -196,15 +196,17 @@ describe('vectrosApiTokenCache', () => {
 
   describe('clear-during-mint generation defense', () => {
     it('discards the mint result if clearVectrosApiTokenCache fires mid-flight', async () => {
+      // The promise is created EAGERLY, before the minter is even called — not
+      // inside the minter's own body. getVectrosApiToken's internal mint IIFE
+      // yields once (an unconditional `await Promise.resolve()`, load-bearing —
+      // see that module's own comment) before it ever invokes the minter, so a
+      // `resolveMint` assigned lazily INSIDE the minter body wouldn't exist yet
+      // by the time this test's own synchronous code below tries to call it.
       let resolveMint!: (v: { token: string; expiresAtMs: number }) => void;
-      setPartnerApiTokenMinter(
-        vi.fn(
-          () =>
-            new Promise<{ token: string; expiresAtMs: number }>((resolve) => {
-              resolveMint = resolve;
-            }),
-        ),
-      );
+      const mintPromise = new Promise<{ token: string; expiresAtMs: number }>((resolve) => {
+        resolveMint = resolve;
+      });
+      setPartnerApiTokenMinter(vi.fn(() => mintPromise));
 
       const pending = getVectrosApiToken(TENANT_A);
       pending.catch(() => undefined); // pre-attach so the rejection isn't "unhandled"

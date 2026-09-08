@@ -114,6 +114,7 @@ import {
   normalizeScopes,
   validateClauses,
   formatScopeClauseValidationError,
+  toWireScopeClauses,
 } from '../../components/ScopeEditor';
 import type { ScopeClause } from '../../components/ScopeEditor';
 import { useActiveTenantId } from '../../auth';
@@ -538,13 +539,7 @@ export function ProfileEditor(): React.JSX.Element {
         ? roleIds.length === 1
           ? { roleId: roleIds[0] }
           : { roleIds: [...roleIds] }
-        : {
-            scopes: scopes.map((c) => ({
-              allowed_actions: [...c.allowed_actions],
-              data_scope: c.data_scope as Record<string, Record<string, unknown>>,
-              granted_capabilities: [...(c.granted_capabilities ?? [])],
-            })),
-          }),
+        : { scopes: toWireScopeClauses(scopes) }),
       ...(identityOverridesValue
         ? {
             identityOverrides: identityOverridesValue as unknown as Record<
@@ -1228,27 +1223,47 @@ function CloneProfileDialog({
         };
       } else if (sourceIsRole && materialize) {
         // Materialize: find the source role + copy its scopes inline.
+        //
+        // `assumable` comes from the ROLE here, not from the profile: a
+        // role-referencing profile has no grant of its own, so the entitlement
+        // lives on the role and materializing is precisely the moment it has to
+        // be brought down with the clauses. Dropping it produces an inline
+        // profile that reads like the role it was made from and cannot assume
+        // anything. (Accepted only alongside inline `scopes`, which is this
+        // branch by construction.)
         const tpl = roles.find((t) => t.roleId === source.roleId);
         body = {
           principalId: newPrincipalId,
-          scopes: (tpl?.scopes ?? []).map((s) => ({
-            allowed_actions: [...(s.allowed_actions ?? [])],
-            data_scope: (s.data_scope ?? {}) as Record<string, Record<string, unknown>>,
-            granted_capabilities: [...(s.granted_capabilities ?? [])],
-          })),
+          scopes: toWireScopeClauses(tpl?.scopes),
+          ...(tpl?.assumable ? { assumable: tpl.assumable } : {}),
         };
       } else {
         // Source is already inline — copy scopes verbatim. (Materialize
         // toggle is a no-op visually but we still surface it for symmetry.)
+        // `assumable` rides along for the same reason as the branch above: it
+        // is not a clause field, so the clause-level carry-through cannot see
+        // it, and a clone without it is silently less than its source.
         body = {
           principalId: newPrincipalId,
-          scopes: (source.scopes ?? []).map((s) => ({
-            allowed_actions: [...(s.allowed_actions ?? [])],
-            data_scope: (s.data_scope ?? {}) as Record<string, Record<string, unknown>>,
-            granted_capabilities: [...(s.granted_capabilities ?? [])],
-          })),
+          scopes: toWireScopeClauses(source.scopes),
+          ...(source.assumable ? { assumable: source.assumable } : {}),
         };
       }
+      // `status` is the third field in this family — accepted by create, present
+      // on the source, and previously not carried. Create applies it
+      // unconditionally and defaults a missing one to active, so cloning a
+      // SUSPENDED profile silently produced an ACTIVE one.
+      //
+      // Carried deliberately, and the choice is between two bad outcomes rather
+      // than an obvious one. Dropping it fails OPEN: an admin who suspended a
+      // profile clones it and gets live access back without being told.
+      // Carrying it fails SAFE but lands the clone somewhere this app cannot
+      // rescue it from — nothing here authors a status transition (the one
+      // `status` this app sends is a hard-coded `active` on a FRESH profile in
+      // the scoped-key wizard, not a control). A disclosed dead end beats a
+      // silent grant on an access-control artifact, and the CHANGELOG says so
+      // rather than leaving the admin to discover it.
+      if (source.status) body.status = source.status;
       // identityOverrides copy across only when THIS session holds exactly
       // the source's values — carrying over anything else would fail the
       // whole create. The dialog warns above when it can't.

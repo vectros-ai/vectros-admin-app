@@ -68,6 +68,7 @@ import {
   normalizeScopes,
   validateClauses,
   formatScopeClauseValidationError,
+  toWireScopeClauses,
 } from '../../components/ScopeEditor';
 import type { ScopeClause } from '../../components/ScopeEditor';
 import { useActiveTenantId } from '../../auth';
@@ -223,11 +224,7 @@ export function RoleEditor(): React.JSX.Element {
         roleId: isCreate ? roleId : tplId,
         name: name.trim(),
         ...(description.trim() ? { description: description.trim() } : {}),
-        scopes: scopes.map((c) => ({
-          allowed_actions: [...c.allowed_actions],
-          data_scope: c.data_scope as Record<string, Record<string, unknown>>,
-          granted_capabilities: [...(c.granted_capabilities ?? [])],
-        })),
+        scopes: toWireScopeClauses(scopes),
       };
       if (isCreate) {
         return client.auth.createRole({ contextId: ctxId, body });
@@ -562,16 +559,26 @@ function CloneRoleDialog({
           roleId: newId,
           name: newName.trim(),
           ...(source.description ? { description: source.description } : {}),
-          // Carry data_scope + granted_capabilities through verbatim —
-          // dropping data_scope would widen a row-scoped clause to ALL tenant
-          // rows, and dropping granted_capabilities would silently clone the
-          // role WITHOUT a capability grant it actually has (a silent
-          // narrowing, the opposite failure mode, equally worth avoiding).
-          scopes: (source.scopes ?? []).map((s) => ({
-            allowed_actions: [...(s.allowed_actions ?? [])],
-            data_scope: (s.data_scope ?? {}) as Record<string, Record<string, unknown>>,
-            granted_capabilities: [...(s.granted_capabilities ?? [])],
-          })),
+          // Every clause field carried through verbatim — dropping data_scope
+          // would widen a row-scoped clause to ALL tenant rows, dropping
+          // assignable_roles would widen a restricted clause back to composing
+          // any role, and dropping granted_capabilities would clone the role
+          // WITHOUT a capability grant it actually has (a silent narrowing, the
+          // opposite failure mode, equally worth avoiding).
+          scopes: toWireScopeClauses(source.scopes),
+          // `assumable` is NOT a clause field, which is exactly why the sweep
+          // above kept missing it: it sits one level up, on the role itself,
+          // and the loop that carries clause fields cannot see it. It is the
+          // role's /assume entitlement grant — the only thing that can move a
+          // credential's identity — so a clone that drops it is a clone that
+          // silently does less than the role it copied.
+          //
+          // Carrying it makes the clone REFUSE when the cloner cannot back the
+          // grant, because create runs the same subset-of-caller check every
+          // other authority-bearing write does. That is the right trade and the
+          // same one the capabilities line above already makes: a loud refusal
+          // beats a quiet, wrong clone.
+          ...(source.assumable ? { assumable: source.assumable } : {}),
         },
       });
     },

@@ -484,14 +484,15 @@ describe('<ScopedKeyCreateDialog>', () => {
     );
   });
 
-  it('BindStep — a created principal survives the initial (still in-flight) listUsers fetch resolving late with the pre-create list (#1002 race)', async () => {
-    // #1002's fix writes the created principal straight into the cache. But
+  it('BindStep — a created principal survives the initial (still in-flight) listUsers fetch resolving late with the pre-create list', async () => {
+    // The fix for the vanishing-principal race writes the created principal
+    // straight into the cache. But
     // BindStep's OWN initial listUsers fetch — the one that's already
     // running when the dialog mounts — can still be in flight when that
     // write happens (it may be draining several pages), and its eventual
     // resolution carries the PRE-create list. If the fix didn't also cancel
     // that stale fetch, its late resolution would silently overwrite the
-    // write and reproduce #1002's exact symptom. Prove it doesn't: create
+    // write and reproduce that same symptom. Prove it doesn't: create
     // while the initial fetch is deliberately held open, THEN let the stale
     // fetch resolve, and assert the created row survives.
     let resolveInitialFetch!: (v: { data: readonly (typeof SAMPLE_USERS)[number][]; nextCursor: null }) => void;

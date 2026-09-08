@@ -5,17 +5,20 @@
 // `allowed_actions` covers it AND the clause's `data_scope` matches the row.
 // The platform authorizer matches each `allowed_actions` entry as either:
 //   - `*` (wildcard — grants every action), or
-//   - the compact `resource:ops[:qualifier]` form, where ops are the letters
-//     c/r/u/d (and `s` for sensitive/PHI reveal). An entry WITHOUT a colon
-//     (e.g. a bare `read`) matches NOTHING — so a resource MUST be named.
+//   - the compact `resource:ops[:qualifier]` form, where each op is ONE letter
+//     from a closed set the platform extends occasionally: c/r/u/d, plus `s`
+//     for sensitive/PHI reveal and `x` for EXECUTE (running a stored script).
+//     An entry WITHOUT a colon (e.g. a bare `read`) matches NOTHING — so a
+//     resource MUST be named.
 //
 // Because a resource is mandatory, this editor is built around a
 // resource × operations matrix: per clause you pick, for each resource, which
-// of Create / Read / Update / Delete to grant — emitting `records:cru`,
-// `documents:r`, etc. A "Full access" shortcut emits `*`. An Advanced escape
-// hatch keeps the full grammar reachable (custom action verbs, per-type
-// sensitive-reveal like `records:rs:patient`, qualifiers) and round-trips any
-// entry the matrix can't represent, so loading never drops data.
+// of Create / Read / Update / Delete / Execute to grant — emitting
+// `records:cru`, `documents:r`, `scripts:x`, etc. A "Full access" shortcut
+// emits `*`. An Advanced escape hatch keeps the full grammar reachable (custom
+// action verbs, per-type sensitive-reveal like `records:rs:patient`,
+// qualifiers such as `scripts:x:<name>`) and round-trips any entry the matrix
+// can't represent, so loading never drops data.
 //
 // v1 scope: `data_scope` (row-level ownership filters) stays `{}` — narrowing a
 // clause to specific `scope:<ns>` rows is a later iteration. Apps needing
@@ -96,6 +99,40 @@ export interface ScopeClause {
    * opened in this editor.
    */
   readonly granted_capabilities?: readonly string[];
+
+  /**
+   * roleIds this clause may compose into a delegated access profile (0.43.0) —
+   * a designated-role allow-list, orthogonal to `data_scope`/`allowed_actions`:
+   * it narrows WHICH named roles this clause's authority may hand out, not how
+   * much data it reaches.
+   *
+   * **Absent means two opposite things, and conflating them is the trap.** At
+   * ENFORCEMENT, absent is "no restriction" — the permissive default. At
+   * AUTHORING it is the MAXIMAL value: a caller whose own covering clause
+   * carries a restriction may not write a clause that omits one, because
+   * claiming "unrestricted" is strictly wider than any list they could offer.
+   * An EMPTY list is rejected outright on both paths.
+   *
+   * So this field is carried through only when the clause actually has one, and
+   * is never defaulted to `[]` the way {@link granted_capabilities} is.
+   *
+   * ⚠️ **This editor cannot AUTHOR the list, and that is a live limitation, not
+   * just a missing convenience.** Because {@link emptyClause} emits no
+   * restriction, an admin whose OWN covering clause carries one cannot create a
+   * new clause here at all — every save is refused by the authoring rule above.
+   * Editing an existing restricted clause still works, since the field rides
+   * through untouched, which is what makes the failure look arbitrary. An
+   * admin whose covering clause is unrestricted — the ordinary shape — is
+   * unaffected.
+   *
+   * What this editor DOES guarantee is that the list survives load → save:
+   * dropping it would silently REMOVE a restriction a tenant deliberately opted
+   * into, handing the delegate back the unrestricted role-composing power the
+   * field exists to close. That is the same round-trip contract
+   * `granted_capabilities` carries, in the more dangerous direction — a silent
+   * WIDENING rather than a silent narrowing.
+   */
+  readonly assignable_roles?: readonly string[];
 }
 
 /**
@@ -144,12 +181,16 @@ interface ScopeEditorProps {
 // ---------------------------------------------------------------------------
 // Resource catalog
 //
-// `ops` lists the CRUD letters meaningful for that resource (so the matrix only
+// `ops` lists the op letters meaningful for that resource (so the matrix only
 // offers create/update/delete on resources that have them — search/inference/
 // logs are read-only; whole-context delete is root-only so app-contexts omits
-// `d`; scoped keys aren't updated so `keys` omits `u`). Over/under-listing is
-// not a safety boundary — the authorizer is the authority and unmatched grants
-// simply fail closed — and the Advanced field can express anything omitted.
+// `d`; scoped keys aren't updated so `keys` omits `u`; and `x` is listed ONLY
+// on `scripts`, because the platform accepts the letter on every resource but
+// gives it an effect on none of the others — `records:x` is a valid grant that
+// grants nothing, so offering it would be a checkbox that does nothing).
+// Over/under-listing is not a safety boundary — the authorizer is the
+// authority and unmatched grants simply fail closed — and the Advanced field
+// can express anything omitted.
 // ---------------------------------------------------------------------------
 
 export interface ResourceSpec {
@@ -163,6 +204,21 @@ export const RESOURCE_CATALOG: readonly ResourceSpec[] = [
   { value: 'documents', group: 'data', ops: 'crud' },
   { value: 'folders', group: 'data', ops: 'crud' },
   { value: 'schemas', group: 'data', ops: 'crud' },
+  // Scripts are immutable per version (no update surface); pushing a version is a
+  // create, not an execution trigger — so no `u`. Execution is its OWN letter,
+  // `x` (POST /v1/scripts/execute), and it is a separate Execute column rather
+  // than a letter folded into the create/read/delete set: a grant to PUSH a
+  // script version must never imply a grant to RUN one. The narrowed per-script
+  // form `scripts:x:<name>` (one name, every version) is the only qualifier the
+  // platform correlates on this resource; author it in Advanced, which
+  // round-trips it untouched.
+  { value: 'scripts', group: 'data', ops: 'crdx' },
+  // Trigger rules FIRE: a matching record write dispatches the rule's script
+  // under the grant the rule was provisioned with. Granting these verbs is
+  // granting authority over live automation, not over an inert declaration.
+  // Unlike scripts, a trigger rule is upsert-based (a blueprint re-apply
+  // reconciles it in place), so it carries the full crud verb set.
+  { value: 'triggers', group: 'data', ops: 'crud' },
   { value: 'search', group: 'data', ops: 'r' },
   { value: 'inference', group: 'data', ops: 'r' },
   { value: 'keys', group: 'management', ops: 'crd' },
@@ -177,12 +233,19 @@ export const RESOURCE_CATALOG: readonly ResourceSpec[] = [
   { value: 'entities', group: 'management', ops: 'crud' },
 ];
 
-/** CRUD operation columns, in canonical order. */
+/**
+ * The matrix's operation columns, in canonical order — the four CRUD letters
+ * plus `x` (Execute). The name is kept for forks that import it; the set is no
+ * longer CRUD-only, because the platform's op alphabet is not. A column is
+ * rendered per resource only where {@link ResourceSpec.ops} lists its letter,
+ * so `x` shows as a checkbox on `scripts` and as `—` everywhere else.
+ */
 export const CRUD_OPS = [
   { letter: 'c', labelId: 'scopeEditor.opCreate' },
   { letter: 'r', labelId: 'scopeEditor.opRead' },
   { letter: 'u', labelId: 'scopeEditor.opUpdate' },
   { letter: 'd', labelId: 'scopeEditor.opDelete' },
+  { letter: 'x', labelId: 'scopeEditor.opExecute' },
 ] as const;
 
 /**
@@ -222,7 +285,14 @@ export const KNOWN_CAPABILITIES = [
   { value: 'delegate-mint', labelId: 'scopeEditor.capability.delegateMint' },
 ] as const;
 
-const CRUD_ORDER = 'crud';
+/**
+ * Canonical letter order for a serialized ops segment. MUST contain every
+ * letter any {@link RESOURCE_CATALOG} entry lists: {@link mergeOps} builds its
+ * output by walking this string, so a letter missing here is silently DROPPED
+ * on save rather than rejected — the matrix would render a ticked checkbox and
+ * then write a grant without it.
+ */
+const CRUD_ORDER = 'crudx';
 const CATALOG_BY_VALUE = new Map(RESOURCE_CATALOG.map((r) => [r.value, r]));
 
 // ---------------------------------------------------------------------------
@@ -234,13 +304,14 @@ const CATALOG_BY_VALUE = new Map(RESOURCE_CATALOG.map((r) => [r.value, r]));
 export interface ClauseActionModel {
   /** `*` present → grants everything; the matrix + advanced are then moot. */
   readonly wildcard: boolean;
-  /** resource value → granted ops string (subset of `crud`, in crud order). */
+  /** resource value → granted ops string (subset of that resource's own
+   * applicable letters, in {@link CRUD_ORDER} order). */
   readonly grants: Record<string, string>;
   /** Raw entries the matrix can't represent (custom verbs, qualified/`s` forms). */
   readonly advanced: readonly string[];
 }
 
-/** Union two ops strings into one, deduped and in canonical crud order. */
+/** Union two ops strings into one, deduped and in canonical letter order. */
 function mergeOps(a: string, b: string): string {
   let out = '';
   for (const letter of CRUD_ORDER) {
@@ -252,10 +323,12 @@ function mergeOps(a: string, b: string): string {
 /**
  * Parse a clause's `allowed_actions` into the matrix display model. An entry
  * is represented structurally ONLY if it's exactly `resource:ops` for a known
- * resource with ops ⊆ that resource's applicable crud letters (no qualifier,
- * no `s`). Everything else — `*` (→ wildcard), bare verbs, qualified/`s` forms,
- * custom verbs, unknown resources — is preserved verbatim (wildcard flag or
- * `advanced`) so a round-trip never loses or silently rewrites a grant.
+ * resource with ops ⊆ that resource's own applicable letters (no qualifier, no
+ * `s`). So `scripts:x` parses into the matrix while `scripts:x:daily-report`
+ * and `records:x` do not. Everything else — `*` (→ wildcard), bare verbs,
+ * qualified/`s` forms, custom verbs, unknown resources — is preserved verbatim
+ * (wildcard flag or `advanced`) so a round-trip never loses or silently
+ * rewrites a grant.
  */
 export function parseClauseActions(actions: readonly string[]): ClauseActionModel {
   let wildcard = false;
@@ -314,7 +387,56 @@ export function serializeClauseActions(model: ClauseActionModel): string[] {
  * all rows within the tenant per the access-profile matching rule).
  */
 export function emptyClause(): ScopeClause {
+  // `assignable_roles` is deliberately ABSENT rather than `[]`: an empty list is
+  // rejected outright, and there is no picker to populate a real one.
+  //
+  // Note what absent COSTS here, rather than reading it as the safe default —
+  // see ScopeClause.assignable_roles. A caller whose own covering clause is
+  // restricted cannot author a clause that omits the field, so for that admin
+  // every clause this function produces is refused at save. Fixing that means
+  // authoring UI, not a different default: no value this function could invent
+  // is correct, since the right list is the caller's own and this component is
+  // not told what that is.
   return { allowed_actions: [], data_scope: {}, granted_capabilities: [] };
+}
+
+/**
+ * Project a clause list — editor state, or one read back from the API — into
+ * the mutable wire shape the SDK's request types take.
+ *
+ * ONE place, deliberately. Every editor and dialog that SAVES clauses goes
+ * through here, so a field the platform adds to a clause is carried by all of
+ * them the moment it is added here. The failure mode this exists to prevent is
+ * the one that produced it: `assignable_roles` shipped in 0.43.0 and six
+ * hand-written clause mappings across three files each silently dropped it, so
+ * opening a restricted role in this editor and pressing Save removed the
+ * restriction — a silent WIDENING, invisible in the diff of any one file.
+ */
+export function toWireScopeClauses(
+  clauses:
+    | readonly {
+        readonly allowed_actions?: readonly string[];
+        readonly data_scope?: unknown;
+        readonly granted_capabilities?: readonly string[] | undefined;
+        readonly assignable_roles?: readonly string[] | undefined;
+      }[]
+    | null
+    | undefined,
+): {
+  allowed_actions: string[];
+  data_scope: Record<string, Record<string, unknown>>;
+  granted_capabilities: string[];
+  assignable_roles?: string[];
+}[] {
+  return (clauses ?? []).map((c) => ({
+    allowed_actions: [...(c.allowed_actions ?? [])],
+    data_scope: (c.data_scope ?? {}) as Record<string, Record<string, unknown>>,
+    granted_capabilities: [...(c.granted_capabilities ?? [])],
+    // Absent stays absent — see ScopeClause.assignable_roles. Emitting `[]`
+    // here would turn every unrestricted clause into a 400 at save, and `[]` is
+    // TRUTHY, so this tests `.length` rather than the value.
+    ...(c.assignable_roles?.length ? { assignable_roles: [...c.assignable_roles] } : {}),
+  }));
 }
 
 /**
@@ -331,6 +453,7 @@ export function normalizeScopes(
         readonly allowed_actions?: readonly string[];
         readonly data_scope?: unknown;
         readonly granted_capabilities?: readonly string[] | undefined;
+        readonly assignable_roles?: readonly string[] | undefined;
       }[]
     | null
     | undefined,
@@ -345,6 +468,14 @@ export function normalizeScopes(
     // clause with none loaded gets [], matching emptyClause()'s default so
     // load/save comparisons (dirty-state) aren't fooled by undefined-vs-[].
     granted_capabilities: [...(s.granted_capabilities ?? [])],
+    // Carried through untouched — see ScopeClause.assignable_roles. Note the
+    // ASYMMETRY with the line above: an absent restriction must stay absent,
+    // because on this field the platform reads [] as invalid, not as "none".
+    // Defaulting it to [] the way capabilities are defaulted would turn every
+    // unrestricted clause into a 400 at save. `.length`, not truthiness: an
+    // empty array is truthy, so a bare `?` check would forward the one value
+    // the platform rejects.
+    ...(s.assignable_roles?.length ? { assignable_roles: [...s.assignable_roles] } : {}),
   }));
 }
 

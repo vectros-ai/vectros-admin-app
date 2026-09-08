@@ -389,6 +389,51 @@ describe('RoleEditor — clone dialog', () => {
     expect(call.body.scopes).toHaveLength(1);
   });
 
+  it('carries assumable through a clone — it is NOT a clause field, so the clause-level sweep cannot see it', async () => {
+    // The /assume entitlement grant sits on the ROLE, one level above the
+    // clause list, which is why three passes over "carry every clause field"
+    // kept missing it. Create sets it unconditionally from the request, so a
+    // clone that omits it is silently a lesser role than the one it copied.
+    const user = userEvent.setup();
+    const ROLE_ASSUMABLE = {
+      ...ROLE_ENG_MEMBER,
+      assumable: { 'scope:org': ['org_eng'] },
+    };
+    const { client } = renderEditor({
+      client: makeMockClient({ getRole: vi.fn().mockResolvedValue(ROLE_ASSUMABLE) }),
+      initialUrl: '/access/contexts/engineering/roles/eng-member',
+    });
+    await screen.findByRole('heading', { level: 1, name: /edit role eng-member/i });
+    const cloneOpenBtn = screen.getByRole('button', { name: /^clone$/i });
+    await waitFor(() => expect(cloneOpenBtn).toBeEnabled());
+    await user.click(cloneOpenBtn);
+    const dialog = await screen.findByRole('dialog', { name: /clone role/i });
+    await user.click(within(dialog).getByRole('button', { name: /^clone$/i }));
+
+    await waitFor(() => expect(client.auth.createRole).toHaveBeenCalledTimes(1));
+    const call = client.auth.createRole.mock.calls[0]?.[0] as {
+      body: { assumable?: Record<string, unknown> };
+    };
+    expect(call.body.assumable).toEqual({ 'scope:org': ['org_eng'] });
+  });
+
+  it('omits assumable entirely when the source role has none — the safe default is absence, not an empty map', async () => {
+    const user = userEvent.setup();
+    const { client } = renderEditor({
+      initialUrl: '/access/contexts/engineering/roles/eng-member',
+    });
+    await screen.findByRole('heading', { level: 1, name: /edit role eng-member/i });
+    const cloneOpenBtn = screen.getByRole('button', { name: /^clone$/i });
+    await waitFor(() => expect(cloneOpenBtn).toBeEnabled());
+    await user.click(cloneOpenBtn);
+    const dialog = await screen.findByRole('dialog', { name: /clone role/i });
+    await user.click(within(dialog).getByRole('button', { name: /^clone$/i }));
+
+    await waitFor(() => expect(client.auth.createRole).toHaveBeenCalledTimes(1));
+    const call = client.auth.createRole.mock.calls[0]?.[0] as { body: Record<string, unknown> };
+    expect(call.body).not.toHaveProperty('assumable');
+  });
+
   it('preserves a row-scoped clause\'s data_scope on clone (no silent broadening)', async () => {
     const user = userEvent.setup();
     const ROLE_SCOPED = {
@@ -703,6 +748,73 @@ describe('RoleEditor — hardening states', () => {
       body: { scopes?: Array<{ granted_capabilities?: string[] }> };
     };
     expect(call.body.scopes?.[0]?.granted_capabilities).toEqual(['context-directory-read']);
+  });
+
+  it('a save carries assignable_roles through untouched — dropping it silently WIDENS the grant', async () => {
+    // The 0.43.0 twin of the test above, and the regression it guards is the
+    // more dangerous direction: `granted_capabilities` going missing narrows a
+    // grant, while `assignable_roles` going missing REMOVES a role-composition
+    // restriction, handing the delegate back the composing power it exists to
+    // close. This asserts against the SAVE BODY, not the extracted helper — the
+    // bug lived in this file's own hand-written clause mapping, so a test that
+    // stops at the helper would pass on the unfixed code.
+    const user = userEvent.setup();
+    const { client } = renderEditor({
+      client: makeMockClient({
+        getRole: vi.fn().mockResolvedValue({
+          contextId: 'engineering',
+          roleId: 'eng-member',
+          name: 'Engineering Team Member',
+          scopes: [
+            {
+              allowed_actions: ['profiles:c'],
+              data_scope: {},
+              assignable_roles: ['support', 'viewer'],
+            },
+          ],
+        }),
+      }),
+      initialUrl: '/access/contexts/engineering/roles/eng-member',
+    });
+    await screen.findByRole('heading', { level: 1, name: /edit role eng-member/i });
+    const nameInput = await screen.findByRole('textbox', { name: /^name$/i });
+    await user.type(nameInput, ' (updated)');
+    await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(client.auth.updateRole).toHaveBeenCalledTimes(1));
+    const call = client.auth.updateRole.mock.calls[0]?.[0] as {
+      body: { scopes?: Array<{ assignable_roles?: string[] }> };
+    };
+    expect(call.body.scopes?.[0]?.assignable_roles).toEqual(['support', 'viewer']);
+  });
+
+  it('a save of an UNRESTRICTED clause omits assignable_roles entirely — the platform rejects an empty list', async () => {
+    // The opposite failure: emitting `[]` for every ordinary clause would turn
+    // a routine save into a 400. `[]` is truthy in JS, so this is a real edge.
+    const user = userEvent.setup();
+    const { client } = renderEditor({
+      client: makeMockClient({
+        getRole: vi.fn().mockResolvedValue({
+          contextId: 'engineering',
+          roleId: 'eng-member',
+          name: 'Engineering Team Member',
+          scopes: [{ allowed_actions: ['records:r'], data_scope: {} }],
+        }),
+      }),
+      initialUrl: '/access/contexts/engineering/roles/eng-member',
+    });
+    await screen.findByRole('heading', { level: 1, name: /edit role eng-member/i });
+    const nameInput = await screen.findByRole('textbox', { name: /^name$/i });
+    await user.type(nameInput, ' (updated)');
+    await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(client.auth.updateRole).toHaveBeenCalledTimes(1));
+    const call = client.auth.updateRole.mock.calls[0]?.[0] as {
+      body: { scopes?: Array<Record<string, unknown>> };
+    };
+    expect(call.body.scopes?.[0]).not.toHaveProperty('assignable_roles');
   });
 
   it('announces a scope-validation failure via role="alert"', async () => {

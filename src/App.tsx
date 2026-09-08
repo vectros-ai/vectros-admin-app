@@ -58,10 +58,15 @@ import { NotFoundPage } from './pages/public/NotFoundPage';
 // These are the real `resource:ops` grammar (see `RESOURCE_CATALOG` in
 // components/ScopeEditor.tsx) — NOT the `admin:<resource>` spelling this
 // table previously used. `admin:users`/`admin:keys`/`admin:logs`/
-// `admin:profiles` are unauthorable: the platform's scope grammar rejects any
-// op letter outside `cruds`, and none of those legacy strings' post-colon
-// segments are — so no stored scope can ever carry them, and `RequireScope`/
-// `ScopeGate` passed ONLY for a wildcard `*` credential. A sub-user's grant,
+// `admin:profiles` are unauthorable, and stay so however the grammar grows:
+// the segment after the colon is read as a string of SINGLE-LETTER op verbs,
+// and each of `users`/`keys`/`logs`/`profiles` contains letters that are not
+// verbs at all (`e`, `k`, `y`, `l`, `o`, `g`, `p`, `f`, `i`). The platform does
+// extend its letter set — `s` for sensitive-field reveal and, in 0.43.0, `x`
+// for execute — so a claim resting on one specific set would go stale; a claim
+// resting on "these are words, not letters" does not. No stored scope can carry
+// them, so `RequireScope`/`ScopeGate` passed ONLY for a wildcard `*`
+// credential. A sub-user's grant,
 // however correctly scoped server-side, could never make the corresponding
 // nav link or route visible. `useScopeGate().can()` is now ops-aware (unions
 // across every unqualified `resource:ops` entry for the resource), so a

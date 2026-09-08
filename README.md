@@ -34,7 +34,7 @@ Fork it. Re-brand it in one file. Point it at your own Cognito pool. Ship.
 | Auth | [aws-amplify](https://docs.amplify.aws/) v6 | Cognito SDK with auto-refresh + MFA + reset-password flows. |
 | UI | [MUI v7](https://mui.com/) | Accessible component library; one design system (no Tailwind mixed in). |
 | State | React Context (auth) + TanStack Query (server state) | No Redux. Auth/session is Context; all API reads/writes go through TanStack Query for caching + invalidation. |
-| Routing | `react-router` v7 | |
+| Routing | `react-router` v8 | |
 | Tests | [Vitest](https://vitest.dev/) 4 + [Testing Library](https://testing-library.com/) + jsdom | Pairs natively with Vite. |
 | Lint | ESLint 9 flat config + `typescript-eslint` + `jsx-a11y` + `react-hooks` | A11y rules are enforced, not advisory. |
 
@@ -47,6 +47,12 @@ npm install
 cp .env.example .env.local           # fill in your Cognito pool + API origin
 npm run dev                          # dev server on port 3001
 ```
+
+> [!NOTE]
+> Some npm 10.x versions crash on `npm install` with `Cannot read properties of null (reading
+> 'edgesOut')` while resolving Vitest 4's optional peer dependencies — a known, still-open npm
+> bug ([npm/cli#9787](https://github.com/npm/cli/issues/9787)), not a real dependency conflict
+> here. Run `npm install --legacy-peer-deps` instead if you hit it.
 
 > [!NOTE]
 > Working inside the Vectros monorepo (not a fork)? This app consumes the

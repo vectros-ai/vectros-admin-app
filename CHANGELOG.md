@@ -3,6 +3,114 @@
 All notable changes to the Vectros Admin App are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.21.0 — 2026-09-07
+
+Adoption of the platform's 0.43.0 API surface.
+
+### Added
+
+- **The permission matrix now offers Execute, so you can grant "may run this stored script" without
+  granting "may push script versions".** The platform's scope grammar gained an execute verb, `x`
+  (`scripts:x`), separate from the create/read/delete verbs that govern script SOURCE. The matrix
+  carries it as its own column rather than folding it into the script grants, because a permission
+  to publish a script must never imply a permission to run one. The column shows a checkbox on
+  Scripts alone: the platform accepts the letter on every resource but gives it an effect on no
+  other, so offering it elsewhere would be a control that silently does nothing. The narrowed
+  per-script form (`scripts:x:<name>` — one script name, every version of it) is not a checkbox;
+  type it into Advanced, which round-trips it untouched.
+
+- **Activity Logs can now filter on `issuers`.** The server accepts it and this app administers
+  trusted issuers, so its absence from the dropdown was a gap rather than a policy.
+
+- **The credit breakdown itemises script execution time.** The platform
+  meters script execution and charges for the portion beyond what each execution's own billable
+  operations included. That charge was already inside the headline "Credits used" figure while no
+  category accounted for it. It now appears as its own "Script execution time" row. Note the
+  category rows and the headline are each rounded down to whole credits independently, so the rows
+  can still sum to slightly less than the headline; the API's `*Milli` fields carry the exact values
+  for reconciliation.
+
+### Fixed
+
+- **Saving a role, access profile or scoped key no longer silently removes a role-composition
+  restriction it did not author.** 0.43.0 added `assignable_roles` to a scope clause: an allow-list
+  naming which roles that clause may compose into a delegated access profile, which exists to stop a
+  delegate being handed unrestricted composing power one hop later. This app builds its save payload
+  field by field, and every one of those payloads predated the field — so opening a restricted role
+  or profile here and pressing Save wrote the clause back without it, quietly widening the grant.
+  The restriction is now carried through every save path unchanged (including Clone, which had the
+  same hole). An absent restriction stays absent, and is never written back as an empty list, which
+  the platform rejects.
+
+  ⚠️ **This app still cannot AUTHOR the list, and for one group of admins that is a hard block, not
+  a missing convenience.** "Absent" means opposite things on the two paths: when a grant is
+  ENFORCED it means "no restriction", but when a clause is AUTHORED it is the widest possible value
+  — so an admin may not write a clause that omits a restriction when the permission of theirs that
+  would authorise it carries one. (Holding a restriction somewhere is not enough to block you: the
+  platform accepts a clause as soon as ANY one of your own permissions covers it, so an admin with
+  both a restricted and an unrestricted route to the same authority is unaffected.)
+  Because a new clause here always starts without the field, that admin cannot create a role,
+  access profile, or scoped-key scope in this app at all; every save is refused. Editing an
+  existing restricted clause still works, which is what makes the failure look arbitrary rather
+  than like a rule. Admins whose own permissions carry no restriction — the ordinary case — are
+  unaffected. Note this is not an exotic configuration: a blueprint can set the field when it
+  provisions a role or an access profile, so an admin can land in it without anyone having reached
+  for the API directly. Use the CLI or API to author these clauses.
+
+- **Cloning an access profile no longer silently activates a suspended one.** A profile carries a
+  status, and the clone dialog did not copy it — while creating a profile applies whatever status it
+  is given and treats a missing one as active. So cloning a profile you had suspended handed you a
+  live one. The clone now keeps its source's status. Note the consequence, because this app cannot
+  undo it for you: a clone of a suspended profile arrives suspended, and nothing in this UI performs
+  a status change, so activating it needs the CLI or API. That is deliberate — silently restoring
+  access someone had deliberately withdrawn is the worse of the two outcomes.
+
+- **Cloning a role or access profile no longer silently drops its assume entitlements.** A role can
+  grant which identity values a holder may assume; that grant lives on the role itself rather than on
+  its permission clauses, so the clone dialogs — which copy clause fields one by one — never carried
+  it. The clone succeeded and was quietly a lesser role than the one it copied. It is now carried
+  through, including when materialising a role into an inline profile, where the grant has to come
+  down from the role because a role-referencing profile has none of its own. One consequence worth
+  knowing: because the platform checks an assume grant against your own, a clone you could not have
+  authored yourself is now refused outright instead of succeeding without the entitlement. A loud
+  refusal is the intended behaviour here — the previous silence produced a role that looked right
+  and was not.
+
+- **Activity Logs no longer offers two filters that could only ever fail.** `clients` and `orgs`
+  were retired onto `entities`; the server dropped them from the values it accepts rather than
+  deprecating them, so picking either returned an error before the log query ran, and no historical
+  log entry carries them to match in any case. Both are gone from the dropdown.
+
+- **The credit breakdown's execution row is no longer labelled as trigger-only.** It read "Trigger
+  script execution time", but the underlying figure covers trigger firings and synchronous script
+  execution calls together — so an account that runs no triggers at all could see a charge on a row
+  claiming otherwise. It now reads "Script execution time".
+
+### Changed
+
+- **Notes for anyone forking this app.** Three source-level surfaces moved, none of them
+  behavioural on their own: `ScopeEditor` exports a new `toWireScopeClauses`, the single projection
+  every save path now uses to turn clause state into a request body (add a field there, not at the
+  call sites); `CRUD_OPS` gained a fifth entry for Execute, so a fork rendering that array directly
+  gets a new column; and the exported `ScopeClause` type gained an optional `assignable_roles`.
+
+- **The Advanced actions hint now describes the qualifier rules per resource.** It previously
+  offered a single `resource:cruds[:type]` shape, which both omitted the execute letter and implied
+  a qualifier is accepted anywhere. It is not: `records`/`entities` take one on any letters,
+  `documents`/`users` on the reveal letter alone, `profiles` on create/update/delete alone, and
+  `scripts` on execute alone, naming a script. An entry whose qualifier would not apply to every
+  letter it grants is refused at save, so the old wording could lead an admin to author something
+  the platform rejects.
+
+- **`@vectros-ai/sdk` bumped to the 0.43.0 line** — for the
+  `credits.breakdown.scriptExecution` and `execution` fields on the usage report, and the
+  `assignable_roles` clause field above.
+
+- **`@vectros-ai/react` bumped to 0.12.0** — `useScopeGate` now reads
+  the mint response's server-resolved `identity`/`allowedActions` instead of decoding the token
+  client-side. No production behavior change here (this app never read `identity.partnerUserId`
+  directly); doc comments and test fixtures updated to the new `userId` identity-key spelling.
+
 ## 0.20.1 — 2026-08-30
 
 ### Fixed

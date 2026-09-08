@@ -220,7 +220,7 @@ describe('App nav scope-gating (real gate, shipping ADMIN_NAV_ITEMS)', () => {
   // F-1 regression lock. `admin:users`/`admin:keys`/`admin:logs`/`admin:profiles`
   // were this app's ORIGINAL gateAction literals — and the platform's scope
   // grammar rejects every one of them at mint time (the post-colon segment must
-  // be composed only of `cruds` letters; none of "users"/"keys"/"logs"/
+  // be composed only of single-letter op verbs; none of "users"/"keys"/"logs"/
   // "profiles" qualify). No real credential could ever carry them, which meant
   // every sub-user was silently bounced regardless of their actual grant, and
   // only a wildcard `*` credential ever passed. Assert the legacy shape stays

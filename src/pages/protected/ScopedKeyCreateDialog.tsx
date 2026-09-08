@@ -11,7 +11,8 @@
 //   4. review       — read-only summary.
 //   5. confirmation — call `auth.createScopedKey`; show rawKey ONCE on
 //                     201, or a "key already exists" notice on 200
-//                     (idempotent match). 5-min Rust-authorizer-cache
+//                     (idempotent match — see the contract note below, which
+//                     0.43.0 made conditional). 5-min Rust-authorizer-cache
 //                     warning surfaced here.
 //
 // This step lands:
@@ -25,7 +26,13 @@
 //
 // Backend contract: createScopedKey accepts
 // { keyName, tenantId, contextId, userId } and is idempotent on the
-// 4-tuple. The authorizer's policy cache means a freshly minted key can
+// 4-tuple — but NOT unconditionally, as of 0.43.0. Two refusals now run
+// BEFORE the idempotency lookup: the bound access profile being suspended,
+// and the bound user being suspended. Either returns 409 rather than the
+// existing key's metadata, so a repeat POST of a tuple whose key already
+// exists is refused too. Read the 200 branch as "idempotent match, given
+// both are active."
+// The authorizer's policy cache means a freshly minted key can
 // take up to a few minutes to start authorizing — surface that in the
 // confirmation step where it matters.
 // ---------------------------------------------------------------------------
@@ -90,6 +97,7 @@ import {
   ScopeEditor,
   emptyClause,
   formatScopeClauseValidationError,
+  toWireScopeClauses,
   validateClauses,
 } from '../../components/ScopeEditor';
 import type { ScopeClause } from '../../components/ScopeEditor';
@@ -348,11 +356,19 @@ export function ScopedKeyCreateDialog({
           <Box sx={{ mt: 2 }}>
             <ApiErrorAlert error={submitMutation.error}>
               <FormattedMessage id="keysWizard.review.submitError" />
-              {/* The server's message is the actionable part here — 0.40.0's 403
-                  when minting bound to a different principal without the
-                  delegate-mint capability, and the uniform 404 that no longer
-                  distinguishes "user doesn't exist" from "no profile in this
-                  context". Surface it rather than dropping it. */}
+              {/* The server's message is the actionable part here, and the set
+                  of things it can say keeps growing: 0.40.0's 403 when minting
+                  bound to a different principal without the delegate-mint
+                  capability; the uniform 404 that no longer distinguishes "user
+                  doesn't exist" from "no profile in this context"; and, since
+                  0.43.0, two 409s — the bound access profile is suspended, or
+                  the bound user is. Each names the offending profile or user,
+                  and the remedy differs per case (reactivate vs. pick someone
+                  else), which is exactly why this surfaces the server's own
+                  text rather than mapping status codes to fixed copy. Note the
+                  409s are deliberately NOT 403s: a 403 here means YOUR
+                  credential is insufficient, so the "re-issue a broader
+                  credential" remedy would be wrong for them. */}
               {extractErrorMessage(submitMutation.error) && (
                 <Typography variant="caption" component="p" sx={{ mt: 0.5, opacity: 0.85 }}>
                   {extractErrorMessage(submitMutation.error)}
@@ -1167,12 +1183,8 @@ function InlineProfileCreateDialog({
           // its consumers; the SDK type happens to be mutable. Empty
           // data_scope ({}) is shape-compatible with the SDK's nested
           // Record-of-Record type — v1 of ScopeEditor pins data_scope to
-          // {} (no UI yet); the type cast aligns with that constraint.
-          scopes: clauses.map((c) => ({
-            allowed_actions: [...c.allowed_actions],
-            data_scope: c.data_scope as Record<string, Record<string, unknown>>,
-            granted_capabilities: [...(c.granted_capabilities ?? [])],
-          })),
+          // {} (no UI yet); the cast inside the helper aligns with that.
+          scopes: toWireScopeClauses(clauses),
           status: 'active',
         },
       }),

@@ -29,13 +29,18 @@ vi.mock('../../api/vectrosApi', async (importOriginal) => {
   };
 });
 
-/** A representative usage report — real response shape (fields the page reads). */
+/** A representative usage report — real response shape (fields the page reads).
+ *
+ *  The breakdown categories SUM to `credits.used` on purpose: that is the property
+ *  `reconciles the category breakdown against the headline total` asserts, and the
+ *  one a category missing from BREAKDOWN_ROWS breaks. Keep it true when you add a
+ *  category here. */
 const SAMPLE_REPORT = {
   period: '2026-07',
   credits: {
-    used: 42,
+    used: 49,
     limit: 1000,
-    remaining: 958,
+    remaining: 951,
     breakdown: {
       searchQueries: 12,
       searchIngest: 9,
@@ -45,6 +50,7 @@ const SAMPLE_REPORT = {
       storageEstimate: 5,
       reads: 2,
       dataOut: 2,
+      scriptExecution: 7,
     },
   },
   reads: {
@@ -52,7 +58,7 @@ const SAMPLE_REPORT = {
     dataOut: { bytes: 52_400_000, freeBytes: 100_000_000, overageBytes: 0, overageCredits: 0 },
   },
   tenants: {
-    live: { id: 'tnt_live_001', credits: { used: 30 } },
+    live: { id: 'tnt_live_001', credits: { used: 37 } },
     test: { id: 'tnt_test_001', credits: { used: 12 } },
   },
   contexts: [
@@ -88,9 +94,9 @@ describe('UsagePage', () => {
 
     // Headline credit numbers + the billing period chip.
     expect(await screen.findByText('2026-07')).toBeInTheDocument();
-    expect(screen.getByText('42')).toBeInTheDocument();
+    expect(screen.getByText('49')).toBeInTheDocument();
     expect(screen.getByText('1,000')).toBeInTheDocument();
-    expect(screen.getByText('958')).toBeInTheDocument();
+    expect(screen.getByText('951')).toBeInTheDocument();
 
     // Category breakdown rows.
     const breakdown = screen.getByRole('table', { name: /credit breakdown/i });
@@ -107,13 +113,56 @@ describe('UsagePage', () => {
     // Live/test split.
     const envs = screen.getByRole('table', { name: /usage by environment/i });
     expect(within(envs).getByText('Live')).toBeInTheDocument();
-    expect(within(envs).getByText('30')).toBeInTheDocument();
+    expect(within(envs).getByText('37')).toBeInTheDocument();
     expect(within(envs).getByText('Test')).toBeInTheDocument();
 
     // Per-context attribution.
     const contexts = screen.getByRole('table', { name: /usage by app context/i });
     expect(within(contexts).getByText('default')).toBeInTheDocument();
     expect(within(contexts).getByText('staging-eval')).toBeInTheDocument();
+  });
+
+  // Proves the nine categories the API reports today all RENDER, and that they add
+  // up to the headline.
+  //
+  // ⚠️ It does NOT catch a category neither this fixture nor BREAKDOWN_ROWS has
+  // learned about — both are hand-maintained in the repo, so a new API category is
+  // absent from both and this stays green. An earlier comment here claimed
+  // otherwise. That gap is closed at COMPILE time instead, by
+  // `_breakdownRowsAreExhaustive` in UsagePage.tsx, which checks the row list
+  // against the SDK's own `CreditBreakdown` type.
+  it('reconciles the category breakdown against the headline total', async () => {
+    renderPage(vi.fn().mockResolvedValue(SAMPLE_REPORT));
+
+    const breakdown = await screen.findByRole('table', { name: /credit breakdown/i });
+    const rendered = within(breakdown)
+      .getAllByRole('row')
+      .map((row) => row.querySelectorAll('td')[1]?.textContent?.trim())
+      .filter((cell): cell is string => cell !== undefined && cell !== '')
+      // Cells render through `FormattedNumber`, so anything >= 1000 arrives
+      // group-separated — a bare `Number()` would read `1,234` as NaN and silently
+      // drop the row from the sum, which is precisely the reconciliation this
+      // asserts. Strip separators before parsing.
+      .map((cell) => Number(cell.replace(/[^0-9.-]/g, '')))
+      .filter((n) => !Number.isNaN(n));
+
+    const total = rendered.reduce((sum, n) => sum + n, 0);
+    expect(total).toBe(SAMPLE_REPORT.credits.used);
+    // Every category the API reported must be one of the rows we just summed.
+    expect(rendered).toHaveLength(Object.keys(SAMPLE_REPORT.credits.breakdown).length);
+  });
+
+  it('itemises the script execution charge WITHOUT calling it trigger-only', async () => {
+    renderPage(vi.fn().mockResolvedValue(SAMPLE_REPORT));
+
+    const breakdown = await screen.findByRole('table', { name: /credit breakdown/i });
+    expect(within(breakdown).getByText('Script execution time')).toBeInTheDocument();
+    expect(within(breakdown).getByText('7')).toBeInTheDocument();
+    // The figure covers trigger firings AND synchronous script-execution calls
+    // together, so an account that runs no triggers can still be charged on this
+    // row. Labelling it "Trigger script execution time" told that account its
+    // charge came from something it does not use.
+    expect(within(breakdown).queryByText(/trigger/i)).not.toBeInTheDocument();
   });
 
   it('renders a null plan limit as Unlimited', async () => {
@@ -124,7 +173,7 @@ describe('UsagePage', () => {
       }),
     );
 
-    expect(await screen.findByText('42')).toBeInTheDocument();
+    expect(await screen.findByText('49')).toBeInTheDocument();
     // Both the limit and remaining slots say Unlimited on an unlimited plan.
     expect(screen.getAllByText('Unlimited')).toHaveLength(2);
   });

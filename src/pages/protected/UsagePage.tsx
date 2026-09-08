@@ -47,7 +47,20 @@ import { vectrosApiClient } from '../../api/vectrosApi';
 import type { Vectros } from '../../api/vectrosApi';
 
 /** The credit-breakdown categories, in display order. Each maps a
- *  CreditBreakdown field to its i18n label id. */
+ *  CreditBreakdown field to its i18n label id.
+ *
+ *  This list must stay EXHAUSTIVE over every category that draws credits, not
+ *  merely representative. Every category contributes to `credits.used`, so a
+ *  metered category missing here leaves the headline visibly larger than the table
+ *  right below it — and it fails silently, for whichever charge is newest, which is
+ *  exactly the charge a customer is most likely to be querying. That has happened
+ *  before, when identity writes started drawing credits and this list did not learn
+ *  about them.
+ *
+ *  Exhaustiveness is checked at COMPILE TIME just below, against the API's own
+ *  type, rather than by a unit test: a test can only compare this list against a
+ *  fixture that the same author maintains in the same file, so a category NEITHER
+ *  knows about passes both. `tsc` reads the shape from the SDK. */
 const BREAKDOWN_ROWS = [
   { field: 'searchQueries', labelId: 'usage.categorySearchQueries' },
   { field: 'searchIngest', labelId: 'usage.categorySearchIngest' },
@@ -57,7 +70,29 @@ const BREAKDOWN_ROWS = [
   { field: 'storageEstimate', labelId: 'usage.categoryStorage' },
   { field: 'reads', labelId: 'usage.categoryReads' },
   { field: 'dataOut', labelId: 'usage.categoryDataOut' },
+  { field: 'scriptExecution', labelId: 'usage.categoryScriptExecution' },
 ] as const;
+
+/** Every credit-bearing `CreditBreakdown` key — i.e. all of them except the
+ *  `*Milli` exact-precision twins, which are the same categories at finer
+ *  resolution and are not separately displayable. */
+type CreditCategory = Exclude<keyof Vectros.CreditBreakdown, `${string}Milli`>;
+
+/** A category the API reports and this page does not display. Must be `never`. */
+type UndisplayedCategory = Exclude<CreditCategory, (typeof BREAKDOWN_ROWS)[number]['field']>;
+
+/** Compile-time exhaustiveness gate over BREAKDOWN_ROWS.
+ *
+ *  If the SDK grows a `CreditBreakdown` category and it is not added above, this
+ *  line stops compiling and `npm run typecheck` fails, naming the missing key in
+ *  the error. That is the whole point: the failure that motivated it — a live
+ *  customer-visible charge landing in `credits.used` with nothing itemising it —
+ *  is invisible to any test whose expectations are hand-maintained alongside the
+ *  list being tested.
+ *
+ *  To fix a failure here, add the row and its i18n label; do not widen this type. */
+const _breakdownRowsAreExhaustive: UndisplayedCategory extends never ? true : never = true;
+void _breakdownRowsAreExhaustive;
 
 /** Human-readable byte count (SI, one decimal). Local to this page — the
  *  usage report is its only byte-denominated admin surface. */

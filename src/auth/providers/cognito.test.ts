@@ -701,7 +701,13 @@ describe('CognitoAuthProvider.mintPartnerApiToken', () => {
     vi.stubGlobal('fetch', fetchSpy);
 
     const result = await new CognitoAuthProvider(TEST_PROVIDER_CONFIG).mintPartnerApiToken('t1');
-    expect(result).toEqual({ token: 'st_minted', expiresAtMs: 1700 * 1000 });
+    // resolvedScope is always present on the return value; the mocked
+    // response here omits it, so it degrades to an empty scope (never throws).
+    expect(result).toEqual({
+      token: 'st_minted',
+      expiresAtMs: 1700 * 1000,
+      resolvedScope: { allowedActions: [], identity: {} },
+    });
 
     const scopedTokenCall = fetchSpy.mock.calls.find((c) =>
       String(c[0]).includes('scoped-token'),
@@ -710,6 +716,34 @@ describe('CognitoAuthProvider.mintPartnerApiToken', () => {
     expect(String(scopedTokenCall[0])).toContain('ttl=900');
     // No contextId supplied → no context param (the server applies its default).
     expect(String(scopedTokenCall[0])).not.toContain('context=');
+  });
+
+  it('parses a real resolvedScope field off the scoped-token response', async () => {
+    stubSession('id.jwt.token');
+    const fetchSpy = vi.fn(async (url: string | URL) => {
+      const u = String(url);
+      if (u.includes('/developer/memberships')) {
+        return jsonResponse([
+          {
+            tenantId: 't1',
+            tenantName: 'Acme (Test)',
+            tenantKind: 'test',
+            role: 'OWNER',
+            status: 'ACTIVE',
+            partnerId: 'p1',
+          },
+        ]);
+      }
+      return jsonResponse({
+        token: 'st_minted',
+        expiresAt: 1700,
+        resolvedScope: { allowedActions: ['records:r:case'], identity: { userId: 'usr_1' } },
+      });
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const result = await new CognitoAuthProvider(TEST_PROVIDER_CONFIG).mintPartnerApiToken('t1');
+    expect(result.resolvedScope).toEqual({ allowedActions: ['records:r:case'], identity: { userId: 'usr_1' } });
   });
 
   it('appends &context=<id> when a context is supplied (admin-app control-plane mint)', async () => {
