@@ -76,13 +76,20 @@ function clientKey(tenantId: TenantId, contextId?: string): string {
  *     const roles = await vectrosApiClient(tenant, ctxId).auth.listRoles({ contextId: ctxId });
  *
  * The SDK exposes sub-clients on the returned `VectrosClient`:
- *   - `.identity` — listUsers / createUser / getUser / updateUser / deleteUser
+ *   - `.identity` — listUsers / createUser / getUser / updateUser / deleteUser,
+ *     plus the scope-namespace registry (listNamespaces / getNamespace /
+ *     registerNamespace / updateNamespace / deleteNamespace) and the generic
+ *     identity-entity CRUD (listEntities / getEntity / createEntity /
+ *     updateEntity / deleteEntity / lookupEntities / getEntityVersions) — all
+ *     tagged "Identity" on the OpenAPI spec, which is what puts them on this
+ *     sub-client rather than a dedicated `.namespaces`/`.entities` one.
  *   - `.auth` — createInvite / resendInvite / scoped-keys (4 methods) /
  *     getAdminLogs / appContexts (5) / accessProfiles (6) / profileRoles
  *     (5) / mintToken / getJwks / getUsage / ping / listProfilesForPrincipal
  *   - `.documents`, `.folders`, `.inference`, `.records`, `.schemas`,
- *     `.search` — domain-data surfaces (out of scope for admin-app's
- *     Members/Keys/Logs pages but available for forks).
+ *     `.search` — domain-data surfaces (`.schemas` backs the entity browser's
+ *     schema-driven rendering; the rest are out of scope for admin-app's own
+ *     pages today but available for forks).
  *
  * Request / response types are reachable via `import type { Vectros } from
  * '../api/vectrosApi'` — then `Vectros.UserResponse`, `Vectros.CreateInviteRequest`,
@@ -162,8 +169,32 @@ import type { VectrosClient as _VectrosClient } from '@vectros-ai/sdk';
 
 type _Identity = _VectrosClient['identity'];
 type _Auth = _VectrosClient['auth'];
+type _Schemas = _VectrosClient['schemas'];
 
 export type UserResponse = Awaited<ReturnType<_Identity['getUser']>>;
+
+// Namespace registry (`GET/POST/PUT/DELETE /v1/namespaces`) + the generic
+// identity-entity CRUD (`/v1/entities/{namespace}`) — both on `.identity`,
+// see this file's header doc comment. Used by the per-context entity browser
+// (ContextDetailPage's Entities tab) and by the namespace-suggestion registry
+// client every namespace-authoring surface (ScopeEditor, ProfileEditor's
+// identity overrides) shares with it.
+export type NamespacePage = Awaited<ReturnType<_Identity['listNamespaces']>>;
+export type NamespaceResponse = NonNullable<NamespacePage['data']>[number];
+export type ListNamespacesRequest = NonNullable<Parameters<_Identity['listNamespaces']>[0]>;
+
+export type EntityPage = Awaited<ReturnType<_Identity['listEntities']>>;
+export type EntityResponse = NonNullable<EntityPage['data']>[number];
+export type ListEntitiesRequest = Parameters<_Identity['listEntities']>[0];
+export type GetEntityRequest = Parameters<_Identity['getEntity']>[0];
+
+// Record schemas (`GET /v1/schemas`) — resolves the `entity`-surface schema
+// governing an entity's payload, for the entity browser's schema-driven
+// rendering (`@vectros-ai/react`'s `schema-ui` module).
+export type SchemaListPage = Awaited<ReturnType<_Schemas['listSchemas']>>;
+export type SchemaResponse = NonNullable<SchemaListPage['data']>[number];
+export type ListSchemasRequest = Parameters<_Schemas['listSchemas']>[0];
+
 export type CreateInviteResponse = Awaited<ReturnType<_Auth['createInvite']>>;
 export type ScopedKeyResponse = Awaited<ReturnType<_Auth['getScopedKey']>>;
 export type AdminLogsResponse = Awaited<ReturnType<_Auth['getAdminLogs']>>;

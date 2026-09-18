@@ -9,7 +9,7 @@
 // `navigate(...)` with a confirm prompt) requires react-router's
 // `useBlocker` hook, which is ONLY available when the app uses the
 // data-router API (`createBrowserRouter` / `RouterProvider`).
-// `ui/admin-app/src/main.tsx` uses the legacy `<BrowserRouter>` component;
+// `src/main.tsx` uses the legacy `<BrowserRouter>` component;
 // calling `useBlocker` under that throws and ErrorBoundary catches it,
 // showing "Something went wrong." This was caught in smoke
 // verification — the editor pages crashed on mount in the real app even

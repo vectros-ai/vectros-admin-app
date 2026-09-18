@@ -4,11 +4,11 @@
 // `data_scope` narrows the rows a clause applies to, keyed per ownership
 // dimension: the `userId` (authoring principal) plus namespaced scopes
 // `scope:<namespace>` (`scope:org`, `scope:client`, custom `scope:<ns>`). Keys
-// are canonical `scope:<ns>` only — `org` and `client` are built-in namespace
-// values, not a dedicated wire vocabulary. Each dimension's value is an
-// allow-list; including `null` in that list ALSO grants rows that carry NO value
-// in that dimension. An empty map applies to all rows; multiple dimensions AND
-// together.
+// are canonical `scope:<ns>` only — `org` and `client` are ordinary namespace
+// values here, ordinary registrations rather than built-ins, with no dedicated wire
+// vocabulary. Each dimension's value is an allow-list; including `null` in
+// that list ALSO grants rows that carry NO value in that dimension. An empty
+// map applies to all rows; multiple dimensions AND together.
 //
 // The editor renders the namespaced scope dimensions; `userId` and anything the
 // model can't represent (a non-array value, an unexpected key) ride through
@@ -172,8 +172,8 @@ export type DataScopeValidationError =
  * Validate the authored data-scope model. A fully-blank dimension is ignored; a
  * started dimension needs a valid namespace and at least one value (or the null
  * opt-in); namespaces must be unique; at most {@link MAX_SCOPE_NAMESPACES}
- * dimensions may be declared. Built-in namespaces (org / client) are valid here
- * — unlike identity overrides there are no dedicated fields to defer to.
+ * dimensions may be declared. `org` and `client` validate like any other
+ * namespace — no name special-casing anywhere in this module.
  * {@link DIMENSION_WILDCARD} (`*`) is also valid here and skips the normal
  * `scope:<ns>` grammar — it's a dimension KEY, not a namespace.
  */

@@ -2,7 +2,9 @@
 // identityOverrides — parse / serialize / dirty-compare / validate.
 //
 // A `scope:org`-keyed override must be visible in the form and survive a save,
-// and a custom `scope:<ns>` override must round-trip with zero loss.
+// and a custom `scope:<ns>` override must round-trip with zero loss. org and
+// client are NOT built-ins — they are ordinary `extras` rows,
+// with no dedicated field and no name special-casing anywhere in this module.
 // ---------------------------------------------------------------------------
 
 import { describe, expect, it } from 'vitest';
@@ -21,32 +23,35 @@ import {
 } from './identityOverrides';
 
 describe('parseIdentityOverrides', () => {
-  it('reads org/client from the canonical scope:<ns> keys', () => {
+  it('reads org/client from the canonical scope:<ns> keys, as ordinary extras', () => {
     const model = parseIdentityOverrides({
       'scope:org': 'org_123',
       'scope:client': 'cli_456',
     });
-    expect(model.org).toBe('org_123');
-    expect(model.client).toBe('cli_456');
-    expect(model.extras).toEqual([]);
+    expect(model.extras).toEqual([
+      { namespace: 'org', value: 'org_123' },
+      { namespace: 'client', value: 'cli_456' },
+    ]);
     expect(model.passthrough).toEqual({});
   });
 
-  it('does not treat a bare `orgId` key as an org override (canonical scope:<ns> only)', () => {
+  it('does not treat a bare `orgId` key as an override (canonical scope:<ns> only)', () => {
     // `orgId`/`clientId` are not part of the wire vocabulary; `scope:org`
-    // populates the org field while a bare `orgId` rides through passthrough.
+    // becomes an extras row while a bare `orgId` rides through passthrough.
     const model = parseIdentityOverrides({ 'scope:org': 'canon', orgId: 'legacy' });
-    expect(model.org).toBe('canon');
+    expect(model.extras).toEqual([{ namespace: 'org', value: 'canon' }]);
     expect(model.passthrough).toEqual({ orgId: 'legacy' });
   });
 
-  it('places custom namespaces in extras (in encounter order)', () => {
+  it('places every namespace in extras, in encounter order — org/client included', () => {
     const model = parseIdentityOverrides({
       'scope:group': 'eng',
+      'scope:org': 'org_1',
       'scope:region': 'us',
     });
     expect(model.extras).toEqual([
       { namespace: 'group', value: 'eng' },
+      { namespace: 'org', value: 'org_1' },
       { namespace: 'region', value: 'us' },
     ]);
   });
@@ -54,7 +59,7 @@ describe('parseIdentityOverrides', () => {
   it('preserves an unmodellable key verbatim in passthrough', () => {
     const model = parseIdentityOverrides({ weird: { nested: true } });
     expect(model.passthrough).toEqual({ weird: { nested: true } });
-    expect(model.org).toBe('');
+    expect(model.extras).toEqual([]);
   });
 
   it('treats a null/undefined/empty map as no overrides', () => {
@@ -65,11 +70,12 @@ describe('parseIdentityOverrides', () => {
 });
 
 describe('serializeIdentityOverrides', () => {
-  it('emits the canonical scope:<ns> form and omits blanks', () => {
+  it('emits the canonical scope:<ns> form for every extra, org/client included', () => {
     const wire = serializeIdentityOverrides({
-      org: 'org_1',
-      client: '',
-      extras: [{ namespace: 'group', value: 'eng' }],
+      extras: [
+        { namespace: 'org', value: 'org_1' },
+        { namespace: 'group', value: 'eng' },
+      ],
       passthrough: {},
     });
     expect(wire).toEqual({ 'scope:org': 'org_1', 'scope:group': 'eng' });
@@ -77,8 +83,6 @@ describe('serializeIdentityOverrides', () => {
 
   it('drops half-filled extra rows (namespace or value blank)', () => {
     const wire = serializeIdentityOverrides({
-      org: '',
-      client: '',
       extras: [
         { namespace: 'group', value: '' },
         { namespace: '', value: 'x' },
@@ -90,8 +94,6 @@ describe('serializeIdentityOverrides', () => {
 
   it('re-emits passthrough keys unchanged', () => {
     const wire = serializeIdentityOverrides({
-      org: '',
-      client: '',
       extras: [],
       passthrough: { weird: 'keep' },
     });
@@ -102,6 +104,12 @@ describe('serializeIdentityOverrides', () => {
 describe('round-trip (the zero-loss golden)', () => {
   it('a scope:org + custom scope:group override survives parse→serialize with zero loss', () => {
     const raw = { 'scope:org': 'org_x', 'scope:group': 'eng-team' };
+    const back = serializeIdentityOverrides(parseIdentityOverrides(raw));
+    expect(back).toEqual(raw);
+  });
+
+  it('a scope:client override survives parse→serialize as an ordinary row, identically', () => {
+    const raw = { 'scope:client': 'cli_y' };
     const back = serializeIdentityOverrides(parseIdentityOverrides(raw));
     expect(back).toEqual(raw);
   });
@@ -250,12 +258,11 @@ describe('identityOverridesRequestValue', () => {
 });
 
 describe('countOverrideNamespaces', () => {
-  it('counts non-blank org, client, and completed extras', () => {
+  it('counts completed extras only — org/client included, no special-casing', () => {
     expect(
       countOverrideNamespaces({
-        org: 'o',
-        client: '',
         extras: [
+          { namespace: 'org', value: 'o' },
           { namespace: 'group', value: 'g' },
           { namespace: 'region', value: '' },
         ],
@@ -290,12 +297,13 @@ describe('validateIdentityOverrides', () => {
     });
   });
 
-  it('directs a built-in namespace to its dedicated field', () => {
-    const err = validateIdentityOverrides({
-      ...base,
-      extras: [{ namespace: 'org', value: 'x' }],
-    });
-    expect(err).toEqual({ code: 'extraBuiltin', index: 0, namespace: 'org' });
+  it('accepts org and client as ORDINARY extras rows — no dedicated field, no refusal', () => {
+    expect(
+      validateIdentityOverrides({ ...base, extras: [{ namespace: 'org', value: 'org_123' }] }),
+    ).toBeNull();
+    expect(
+      validateIdentityOverrides({ ...base, extras: [{ namespace: 'client', value: 'cli-456' }] }),
+    ).toBeNull();
   });
 
   it('rejects a namespace that breaks the grammar', () => {
@@ -327,24 +335,30 @@ describe('validateIdentityOverrides', () => {
 
   it('rejects more than two total scope namespaces', () => {
     const err = validateIdentityOverrides({
-      org: 'o',
-      client: 'c',
-      extras: [{ namespace: 'group', value: 'g' }],
+      extras: [
+        { namespace: 'org', value: 'o' },
+        { namespace: 'client', value: 'c' },
+        { namespace: 'group', value: 'g' },
+      ],
       passthrough: {},
     });
     expect(err).toEqual({ code: 'tooManyNamespaces', max: 2 });
   });
 
-  // org/client/extra values now run the platform's scope-value grammar, not
-  // just a blank check.
-  it('rejects an org value that breaks the scope-value grammar', () => {
-    const err = validateIdentityOverrides({ ...base, org: 'a:b' });
-    expect(err).toEqual({ code: 'orgInvalidValue' });
+  it('rejects an org value that breaks the scope-value grammar (same rule as any other extra)', () => {
+    const err = validateIdentityOverrides({
+      ...base,
+      extras: [{ namespace: 'org', value: 'a:b' }],
+    });
+    expect(err).toEqual({ code: 'extraInvalidValue', index: 0 });
   });
 
-  it('rejects a client value that breaks the scope-value grammar', () => {
-    const err = validateIdentityOverrides({ ...base, client: 'a b' });
-    expect(err).toEqual({ code: 'clientInvalidValue' });
+  it('rejects a client value that breaks the scope-value grammar (same rule as any other extra)', () => {
+    const err = validateIdentityOverrides({
+      ...base,
+      extras: [{ namespace: 'client', value: 'a b' }],
+    });
+    expect(err).toEqual({ code: 'extraInvalidValue', index: 0 });
   });
 
   it('rejects an extra value that breaks the scope-value grammar', () => {
@@ -366,9 +380,10 @@ describe('validateIdentityOverrides', () => {
   it('accepts a well-formed org/client value (positive control)', () => {
     expect(
       validateIdentityOverrides({
-        org: 'org_123',
-        client: 'cli-456',
-        extras: [],
+        extras: [
+          { namespace: 'org', value: 'org_123' },
+          { namespace: 'client', value: 'cli-456' },
+        ],
         passthrough: {},
       }),
     ).toBeNull();

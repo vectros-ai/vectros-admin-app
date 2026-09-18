@@ -30,9 +30,18 @@ import { I18N_DEFAULT_LOCALE, IntlProvider } from '../i18n/IntlProvider';
 
 interface TestIntlProviderProps {
   readonly children: ReactNode;
+  /**
+   * Query stale time. Defaults to `Infinity` so assertion timing is
+   * deterministic; pass `0` to exercise the automatic refetches production's
+   * finite stale time allows (returning to a cached key, a reconnect).
+   */
+  readonly staleTime?: number | undefined;
 }
 
-export function TestIntlProvider({ children }: TestIntlProviderProps): React.JSX.Element {
+export function TestIntlProvider({
+  children,
+  staleTime = Infinity,
+}: TestIntlProviderProps): React.JSX.Element {
   // Fresh QueryClient per render — `useState`'s lazy initializer guarantees
   // exactly-once construction within a render's lifetime, and each test's
   // `render()` call mounts a new TestIntlProvider → new client.
@@ -40,7 +49,7 @@ export function TestIntlProvider({ children }: TestIntlProviderProps): React.JSX
     () =>
       new QueryClient({
         defaultOptions: {
-          queries: { retry: false, gcTime: Infinity, staleTime: Infinity },
+          queries: { retry: false, gcTime: Infinity, staleTime },
           mutations: { retry: false },
         },
       }),

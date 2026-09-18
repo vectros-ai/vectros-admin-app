@@ -105,6 +105,7 @@ interface MockOverrides {
   updateAccessProfile?: ReturnType<typeof vi.fn>;
   deleteAccessProfile?: ReturnType<typeof vi.fn>;
   listRoles?: ReturnType<typeof vi.fn>;
+  listNamespaces?: ReturnType<typeof vi.fn>;
 }
 
 function makeMockClient(o: MockOverrides = {}) {
@@ -121,6 +122,13 @@ function makeMockClient(o: MockOverrides = {}) {
       updateAccessProfile: o.updateAccessProfile ?? vi.fn().mockResolvedValue(PROFILE_ALICE_ROLED),
       deleteAccessProfile: o.deleteAccessProfile ?? vi.fn().mockResolvedValue(undefined),
       listRoles: o.listRoles ?? vi.fn().mockResolvedValue(pageOf([ROLE_ENG_MEMBER, ROLE_ANALYST])),
+    },
+    // The namespace registry (lib/namespaceRegistry.ts) — no test in this
+    // file exercises namespace SUGGESTIONS specifically (see ScopeEditor's
+    // and EntitiesTab's own tests for that); an empty registry here just
+    // means the identity-overrides namespace field suggests nothing.
+    identity: {
+      listNamespaces: o.listNamespaces ?? vi.fn().mockResolvedValue(pageOf([])),
     },
   };
 }
@@ -353,8 +361,6 @@ describe('ProfileEditor — create mode', () => {
 
     await user.click(screen.getByRole('button', { name: /show advanced/i }));
 
-    expect(screen.getByRole('textbox', { name: /org id/i })).toBeDisabled();
-    expect(screen.getByRole('textbox', { name: /client id/i })).toBeDisabled();
     expect(screen.getByRole('button', { name: /add scope/i })).toBeDisabled();
     expect(
       screen.getByText(/identity overrides can't be set from this sign-in/i),
@@ -372,7 +378,9 @@ describe('ProfileEditor — create mode', () => {
 
   // The positive direction of the SAME gate — proves it's a live, per-session
   // check, not a fixed app fact: a session whose own credential holds an
-  // identity can author one, and the value it enters IS sent.
+  // identity can author one, and the value it enters IS sent. org is an
+  // ORDINARY namespace here — authored through the same
+  // "additional scopes" row as any other namespace, no dedicated field.
   it('Identity overrides become editable, and ARE sent, when the session holds an identity', async () => {
     registerScope(['*'], { 'scope:org': 'org_new' });
     const user = userEvent.setup();
@@ -385,13 +393,15 @@ describe('ProfileEditor — create mode', () => {
     await user.click(await screen.findByRole('option', { name: /analyst/i }));
 
     await user.click(screen.getByRole('button', { name: /show advanced/i }));
-    const orgInput = screen.getByRole('textbox', { name: /org id/i });
-    await waitFor(() => expect(orgInput).toBeEnabled());
+    const addScopeButton = screen.getByRole('button', { name: /add scope/i });
+    await waitFor(() => expect(addScopeButton).toBeEnabled());
     expect(
       screen.queryByText(/identity overrides can't be set from this sign-in/i),
     ).not.toBeInTheDocument();
 
-    await user.type(orgInput, 'org_new');
+    await user.click(addScopeButton);
+    await user.type(screen.getByRole('combobox', { name: /namespace/i }), 'org');
+    await user.type(screen.getByRole('textbox', { name: /^value$/i }), 'org_new');
     await user.click(screen.getByRole('button', { name: /^save$/i }));
     await waitFor(() => {
       expect(client.auth.createAccessProfile).toHaveBeenCalledTimes(1);
@@ -452,13 +462,18 @@ describe('ProfileEditor — edit mode', () => {
     renderEditor({
       initialUrl: '/access/contexts/engineering/profiles/usr_alice',
     });
-    // Alice has a scope:org override → overrides section is auto-expanded.
-    const orgInput = (await screen.findByRole('textbox', {
-      name: /org id/i,
+    // Alice has a scope:org override → overrides section is auto-expanded,
+    // and org shows up as an ORDINARY "additional scopes" row (no dedicated
+    // field — org is not a built-in).
+    const namespaceInput = (await screen.findByRole('combobox', {
+      name: /namespace/i,
     })) as HTMLInputElement;
-    expect(orgInput.value).toBe('org_eng');
+    expect(namespaceInput.value).toBe('org');
+    const valueInput = screen.getByRole('textbox', { name: /^value$/i }) as HTMLInputElement;
+    expect(valueInput.value).toBe('org_eng');
     // Legible but not editable — this app's credential can't author it.
-    expect(orgInput).toBeDisabled();
+    expect(namespaceInput).toBeDisabled();
+    expect(valueInput).toBeDisabled();
   });
 });
 
@@ -683,8 +698,8 @@ describe('ProfileEditor — dirty-state regression', () => {
     expect(roleRadio.checked).toBe(true);
     // The loaded scope:org override is seeded; the form must still read clean.
     expect(
-      ((await screen.findByRole('textbox', { name: /org id/i })) as HTMLInputElement).value,
-    ).toBe('org_eng');
+      ((await screen.findByRole('combobox', { name: /namespace/i })) as HTMLInputElement).value,
+    ).toBe('org');
     expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
   });
 
@@ -767,6 +782,33 @@ describe('ProfileEditor — dirty-state regression', () => {
   });
 });
 
+describe('ProfileEditor — assignable_roles picker suggestions', () => {
+  it('offers this context\'s own roles as suggestions, not just freeSolo', async () => {
+    // The default mock client's listRoles (makeMockClient's own default)
+    // returns ROLE_ENG_MEMBER + ROLE_ANALYST — the same query ScopeEditor's
+    // `roleOptions` prop is wired to (`assignableRoleOptions`). Regression
+    // target: dropping the `roleOptions={assignableRoleOptions}` prop from
+    // ScopeEditor's JSX would silently fall back to a suggestion-less
+    // freeSolo field with no other test noticing.
+    const user = userEvent.setup();
+    renderEditor({
+      client: makeMockClient({
+        getAccessProfile: vi.fn().mockResolvedValue(PROFILE_KEYBOT_INLINE),
+      }),
+      initialUrl: '/access/contexts/engineering/profiles/key_bot',
+    });
+    await screen.findByRole('radio', { name: /inline scope clauses/i });
+    await user.click(await screen.findByRole('button', { name: /composable roles/i }));
+    await user.click(
+      screen.getByRole('combobox', { name: /roles this clause may compose/i }),
+    );
+    expect(
+      await screen.findByRole('option', { name: 'Engineering Team Member (eng-member)' }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Analyst (analyst)' })).toBeInTheDocument();
+  });
+});
+
 // Canonical overrides: org via `scope:org`, plus a custom `scope:group`. Both
 // must render in the editor and survive a save (the namespaced read/write path).
 const PROFILE_CANONICAL_OVERRIDES = {
@@ -779,28 +821,87 @@ const PROFILE_CANONICAL_OVERRIDES = {
   } as Record<string, unknown>,
 };
 
+describe('ProfileEditor — registered-namespace suggestions on the identity-overrides field', () => {
+  it('marks a typed namespace as unregistered, and clears the mark once it matches a registered one', async () => {
+    registerScope(['*'], { 'scope:group': 'g' });
+    const user = userEvent.setup();
+    renderEditor({
+      client: makeMockClient({
+        listNamespaces: vi.fn().mockResolvedValue(pageOf([{ namespace: 'team', entityBacked: true }])),
+      }),
+      initialUrl: '/access/contexts/engineering/profiles/new',
+    });
+    await user.click(screen.getByRole('button', { name: /show advanced/i }));
+    await user.click(screen.getByRole('button', { name: /add scope/i }));
+
+    const namespaceInput = screen.getByRole('combobox', { name: /namespace/i });
+    await user.type(namespaceInput, 'ghost-ns');
+    expect(await screen.findByText(/not registered for this context/i)).toBeInTheDocument();
+
+    await user.clear(namespaceInput);
+    await user.type(namespaceInput, 'team');
+    expect(screen.queryByText(/not registered for this context/i)).not.toBeInTheDocument();
+  });
+
+  it('never flags an existing, correctly-registered row as unregistered WHILE the registry is still loading', async () => {
+    // PROFILE_ALICE_ROLED already carries scope:org — a real, previously-
+    // registered namespace. A never-resolving listNamespaces must not make
+    // this row read as unanchored just because the registry hasn't answered
+    // yet.
+    renderEditor({
+      client: makeMockClient({
+        listNamespaces: vi.fn(() => new Promise(() => undefined)),
+      }),
+      initialUrl: '/access/contexts/engineering/profiles/usr_alice',
+    });
+    await screen.findByRole('combobox', { name: /namespace/i });
+    expect(screen.queryByText(/not registered for this context/i)).not.toBeInTheDocument();
+  });
+
+  it('never flags an existing, correctly-registered row as unregistered when the registry FAILS to load', async () => {
+    const listNamespaces = vi
+      .fn()
+      .mockRejectedValue(new VectrosError({ message: 'down', statusCode: 503 }));
+    renderEditor({
+      client: makeMockClient({ listNamespaces }),
+      initialUrl: '/access/contexts/engineering/profiles/usr_alice',
+    });
+    await screen.findByRole('combobox', { name: /namespace/i });
+    // Both queries (tenant-wide + this context's own) must have SETTLED
+    // (not merely been CALLED) before the "not registered" guard is
+    // meaningfully exercised — a call count can go true before the
+    // rejection has actually propagated through react-query into a
+    // re-render. Await the mock's own returned promises directly (there is
+    // no visible error UI for this query to wait on instead), then let a
+    // final `waitFor` give React a chance to commit the settled state.
+    await waitFor(() => expect(listNamespaces).toHaveBeenCalledTimes(2));
+    await Promise.allSettled(listNamespaces.mock.results.map((r) => r.value));
+    await waitFor(() =>
+      expect(screen.queryByText(/not registered for this context/i)).not.toBeInTheDocument(),
+    );
+  });
+});
+
 describe('ProfileEditor — identity-override round-trip', () => {
-  it('renders org + custom-namespace overrides from the canonical read-back', async () => {
+  it('renders org + custom-namespace overrides as ordinary namespace/value rows from the canonical read-back', async () => {
     renderEditor({
       client: makeMockClient({
         getAccessProfile: vi.fn().mockResolvedValue(PROFILE_CANONICAL_OVERRIDES),
       }),
       initialUrl: '/access/contexts/engineering/profiles/usr_alice',
     });
-    // Org field reads the `scope:org` value (previously undefined → blank).
-    const orgInput = (await screen.findByRole('textbox', {
-      name: /org id/i,
-    })) as HTMLInputElement;
-    expect(orgInput.value).toBe('org_canon');
-    expect(orgInput).toBeDisabled();
-    // The custom `scope:group` override renders as a namespace/value row —
-    // legible but disabled, same as org/client above.
-    const namespaceInput = screen.getByRole('textbox', { name: /namespace/i });
-    const valueInput = screen.getByRole('textbox', { name: /^value$/i });
-    expect((namespaceInput as HTMLInputElement).value).toBe('group');
-    expect((valueInput as HTMLInputElement).value).toBe('eng-team');
-    expect(namespaceInput).toBeDisabled();
-    expect(valueInput).toBeDisabled();
+    // Both `scope:org` and `scope:group` render as ordinary "additional
+    // scopes" rows, in encounter order — no dedicated org field, no name
+    // special-casing.
+    const namespaceInputs = (await screen.findAllByRole('combobox', {
+      name: /namespace/i,
+    })) as HTMLInputElement[];
+    const valueInputs = screen.getAllByRole('textbox', {
+      name: /^value$/i,
+    }) as HTMLInputElement[];
+    expect(namespaceInputs.map((el) => el.value)).toEqual(['org', 'group']);
+    expect(valueInputs.map((el) => el.value)).toEqual(['org_canon', 'eng-team']);
+    for (const el of [...namespaceInputs, ...valueInputs]) expect(el).toBeDisabled();
   });
 
   it('stays clean on load (no spurious dirty) with canonical overrides', async () => {
@@ -810,7 +911,7 @@ describe('ProfileEditor — identity-override round-trip', () => {
       }),
       initialUrl: '/access/contexts/engineering/profiles/usr_alice',
     });
-    await screen.findByRole('textbox', { name: /namespace/i });
+    await screen.findAllByRole('combobox', { name: /namespace/i });
     expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
   });
 
@@ -855,7 +956,9 @@ describe('ProfileEditor — identity-override round-trip', () => {
       initialUrl: '/access/contexts/engineering/profiles/usr_alice',
     });
     await screen.findByRole('combobox', { name: /^role/i });
-    await waitFor(() => expect(screen.getByRole('textbox', { name: /org id/i })).toBeEnabled());
+    await waitFor(() =>
+      expect(screen.getByRole('combobox', { name: /namespace/i })).toBeEnabled(),
+    );
     await removeLastRoleChip(user);
     await selectRoleOption(user, /analyst/i);
 
@@ -868,6 +971,41 @@ describe('ProfileEditor — identity-override round-trip', () => {
     };
     expect(call.body.roleId).toBe('analyst');
     expect(call.body.identityOverrides).toBeUndefined();
+  });
+
+  it('editing one of two enabled extras rows does not corrupt or reorder the untouched sibling row', async () => {
+    // Session holds BOTH dimensions exactly as stored — both rows enabled.
+    registerScope(['*'], { 'scope:org': 'org_canon', 'scope:group': 'eng-team' });
+    const user = userEvent.setup();
+    const { client } = renderEditor({
+      client: makeMockClient({
+        getAccessProfile: vi.fn().mockResolvedValue(PROFILE_CANONICAL_OVERRIDES),
+        updateAccessProfile: vi.fn().mockResolvedValue(PROFILE_CANONICAL_OVERRIDES),
+      }),
+      initialUrl: '/access/contexts/engineering/profiles/usr_alice',
+    });
+
+    const valueInputs = (await screen.findAllByRole('textbox', {
+      name: /^value$/i,
+    })) as HTMLInputElement[];
+    await waitFor(() => expect(valueInputs[1]).toBeEnabled());
+    // Edit ONLY the second row's value (group: eng-team -> sales-team).
+    await user.clear(valueInputs[1]!);
+    await user.type(valueInputs[1]!, 'sales-team');
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /^save$/i })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(client.auth.updateAccessProfile).toHaveBeenCalledTimes(1));
+    const call = client.auth.updateAccessProfile.mock.calls[0]?.[0] as {
+      body: { identityOverrides?: Record<string, unknown> };
+    };
+    // org's untouched value survives exactly, and group's edit lands —
+    // neither corrupted nor swapped between rows.
+    expect(call.body.identityOverrides).toEqual({
+      'scope:org': 'org_canon',
+      'scope:group': 'sales-team',
+    });
   });
 });
 
@@ -916,7 +1054,9 @@ describe('ProfileEditor — a stale invalid stored override never permanently bl
       initialUrl: '/access/contexts/engineering/profiles/usr_alice',
     });
     expect(await screen.findByText(/1.{0,3}128 characters/i)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole('textbox', { name: /org id/i })).toBeEnabled());
+    await waitFor(() =>
+      expect(screen.getByRole('combobox', { name: /namespace/i })).toBeEnabled(),
+    );
 
     screen.getByRole('combobox', { name: /^role/i });
     await selectRoleOption(user, /analyst/i);

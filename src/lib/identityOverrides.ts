@@ -4,20 +4,21 @@
 //
 // The platform expresses ownership dimensions as canonical `scope:<namespace>`
 // keys — `scope:org`, `scope:client`, and open custom namespaces like
-// `scope:group`. `org` and `client` are built-in namespace values, authored and
-// read back through the same `scope:<ns>` path as any other namespace — there is
-// no dedicated `orgId` / `clientId` wire vocabulary.
+// `scope:group`. `org` and `client` are NOT built-ins: they
+// are ordinary registrations, authored and read back through the exact same
+// `scope:<ns>` path as any other namespace, with no dedicated `orgId` /
+// `clientId` wire vocabulary and no dedicated form field.
 //
 // This module is the single source of truth for turning the wire map into the
 // editor's form model and back, WITHOUT ever losing a dimension the UI doesn't
-// render specially (custom namespaces round-trip through `extras`; anything the
-// model can't place at all rides through `passthrough` verbatim). Pure, so the
-// mutation builder, the dirty-check, and tests share one implementation.
+// render specially (every `scope:<ns>` dimension — org/client included — round-
+// trips through `extras`; anything the model can't place at all rides through
+// `passthrough` verbatim). Pure, so the mutation builder, the dirty-check, and
+// tests share one implementation.
 // ---------------------------------------------------------------------------
 
 import {
   MAX_SCOPE_NAMESPACES,
-  SCOPE_BUILTIN_NAMESPACES,
   namespaceFromScopeKey,
   scopeKey,
   validateScopeNamespace,
@@ -92,21 +93,19 @@ export interface IdentityOverrideExtra {
 }
 
 /**
- * The editor's form model for `identityOverrides`. `org` / `client` get
- * dedicated fields (the common case); every other `scope:<namespace>` dimension
- * is an `extras` row; any wire key the model can't represent at all is kept in
+ * The editor's form model for `identityOverrides`. Every `scope:<namespace>`
+ * dimension — org/client included, no name special-casing — is an `extras`
+ * row; any wire key the model can't represent at all is kept in
  * `passthrough` and re-emitted unchanged so a round-trip never drops data.
  */
 export interface IdentityOverridesModel {
-  readonly org: string;
-  readonly client: string;
   readonly extras: readonly IdentityOverrideExtra[];
   readonly passthrough: Readonly<Record<string, unknown>>;
 }
 
 /** An empty (no-overrides) model. */
 export function emptyIdentityOverrides(): IdentityOverridesModel {
-  return { org: '', client: '', extras: [], passthrough: {} };
+  return { extras: [], passthrough: {} };
 }
 
 /** Coerce a wire value (string per the backend) to the editor's string form. */
@@ -116,55 +115,41 @@ function stringifyOverrideValue(v: unknown): string {
 }
 
 /**
- * Parse a raw `identityOverrides` map into the editor form model. Keys are the
- * canonical `scope:<ns>` form; `scope:org` / `scope:client` populate the
- * dedicated org / client fields and every other `scope:<ns>` dimension lands in
- * `extras` in encounter order. Anything else is preserved verbatim in
- * `passthrough`.
+ * Parse a raw `identityOverrides` map into the editor form model. Every key
+ * that resolves to a canonical `scope:<ns>` dimension — `scope:org` and
+ * `scope:client` included — lands in `extras`, in encounter order. Anything
+ * else is preserved verbatim in `passthrough`.
  */
 export function parseIdentityOverrides(
   raw: Record<string, unknown> | null | undefined,
 ): IdentityOverridesModel {
   const src = raw ?? {};
-  let org = '';
-  let client = '';
   const extras: IdentityOverrideExtra[] = [];
   const passthrough: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(src)) {
-    const str = stringifyOverrideValue(value);
-    if (key === 'scope:org') {
-      org = str;
-      continue;
-    }
-    if (key === 'scope:client') {
-      client = str;
-      continue;
-    }
     const ns = namespaceFromScopeKey(key);
     if (ns !== null) {
-      extras.push({ namespace: ns, value: str });
+      extras.push({ namespace: ns, value: stringifyOverrideValue(value) });
       continue;
     }
     // Unmodellable key — preserve verbatim so save never drops it.
     passthrough[key] = value;
   }
 
-  return { org, client, extras, passthrough };
+  return { extras, passthrough };
 }
 
 /**
- * Serialize the editor form model back to a wire `identityOverrides` map in the
- * CANONICAL `scope:<ns>` form. Blank org/client/extra values are omitted; the
- * `passthrough` map is spread through unchanged. `org` / `client` emit
- * `scope:org` / `scope:client`; each non-blank extra emits `scope:<namespace>`.
+ * Serialize the editor form model back to a wire `identityOverrides` map in
+ * the CANONICAL `scope:<ns>` form. A blank/half-filled extra is omitted; the
+ * `passthrough` map is spread through unchanged. Each complete extra —
+ * org/client included — emits `scope:<namespace>`.
  */
 export function serializeIdentityOverrides(
   model: IdentityOverridesModel,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = { ...model.passthrough };
-  if (model.org.trim()) out[scopeKey('org')] = model.org.trim();
-  if (model.client.trim()) out[scopeKey('client')] = model.client.trim();
   for (const extra of model.extras) {
     const ns = extra.namespace.trim();
     const v = extra.value.trim();
@@ -239,32 +224,24 @@ function stableStringify(obj: Record<string, unknown>): string {
 /** Count of scope namespaces the model declares (for the ≤2 limit). */
 export function countOverrideNamespaces(model: IdentityOverridesModel): number {
   let n = 0;
-  if (model.org.trim()) n += 1;
-  if (model.client.trim()) n += 1;
   for (const extra of model.extras) {
     if (extra.namespace.trim() && extra.value.trim()) n += 1;
   }
   return n;
 }
 
-/** True when `namespace` is a built-in (has its own dedicated field). */
-export function isBuiltinNamespace(namespace: string): boolean {
-  return (SCOPE_BUILTIN_NAMESPACES as readonly string[]).includes(namespace.trim());
-}
-
 /**
- * Flatten a raw overrides map into `{ namespace, value }` display pairs — the
- * built-in org/client first, then custom namespaces, then any unmodellable
- * passthrough key (shown by its raw key). For read-only display (e.g. the
- * profiles table), so it surfaces the canonical namespaced VALUES, not a count.
+ * Flatten a raw overrides map into `{ namespace, value }` display pairs, in
+ * encounter order (org/client included — no name-based reordering), then any
+ * unmodellable passthrough key (shown by its raw key). For read-only display
+ * (e.g. the profiles table), so it surfaces the canonical namespaced VALUES,
+ * not a count.
  */
 export function describeIdentityOverrides(
   raw: Record<string, unknown> | null | undefined,
 ): Array<{ namespace: string; value: string }> {
   const model = parseIdentityOverrides(raw);
   const out: Array<{ namespace: string; value: string }> = [];
-  if (model.org.trim()) out.push({ namespace: 'org', value: model.org });
-  if (model.client.trim()) out.push({ namespace: 'client', value: model.client });
   for (const extra of model.extras) {
     if (extra.namespace.trim()) {
       out.push({ namespace: extra.namespace, value: extra.value });
@@ -284,9 +261,8 @@ function isActiveExtra(extra: IdentityOverrideExtra): boolean {
 /**
  * Structured validation error for the overrides authoring UI. `extra*` errors
  * carry the offending `extras` row index; `tooManyNamespaces` is the whole-form
- * ≤2 cap. `orgInvalidValue` / `clientInvalidValue` / `extraInvalidValue` are the
- * scope-VALUE grammar the platform enforces — distinct from `extraMissingValue`,
- * which only catches blank.
+ * ≤2 cap. `extraInvalidValue` is the scope-VALUE grammar the platform
+ * enforces — distinct from `extraMissingValue`, which only catches blank.
  */
 export type IdentityOverridesValidationError =
   | { readonly code: 'tooManyNamespaces'; readonly max: number }
@@ -295,40 +271,22 @@ export type IdentityOverridesValidationError =
       readonly index: number;
       readonly error: ScopeNamespaceError;
     }
-  | { readonly code: 'extraBuiltin'; readonly index: number; readonly namespace: string }
   | { readonly code: 'extraDuplicate'; readonly index: number; readonly namespace: string }
   | { readonly code: 'extraMissingValue'; readonly index: number }
-  | { readonly code: 'extraInvalidValue'; readonly index: number }
-  | { readonly code: 'orgInvalidValue' }
-  | { readonly code: 'clientInvalidValue' };
+  | { readonly code: 'extraInvalidValue'; readonly index: number };
 
 /**
  * Validate the authored overrides model. Returns null when savable. A row that
  * is entirely blank is ignored (it serializes away); a row with only one half
- * filled, a bad/reserved/built-in/duplicate namespace, a value that fails the
+ * filled, a bad/reserved/duplicate namespace, a value that fails the
  * platform's scope-value grammar, or more than {@link MAX_SCOPE_NAMESPACES}
- * total dimensions is an error. Built-in namespaces (org / client) must use
- * their dedicated fields, so typing them in an extra row is rejected as
- * `extraBuiltin`.
- *
- * The value-grammar check runs on `org` / `client` / each `extras` value —
- * previously only blank was checked (`extraMissingValue`), and `org`/`client`
- * had no value check at all, so a value like `a:b` round-tripped to the server
- * and came back as a bare, uncaught 400.
+ * total dimensions is an error. `org` and `client` are ordinary namespace
+ * names here — no name special-casing, and no dedicated field to defer to.
  */
 export function validateIdentityOverrides(
   model: IdentityOverridesModel,
 ): IdentityOverridesValidationError | null {
   const seen = new Set<string>();
-  if (model.org.trim()) seen.add('org');
-  if (model.client.trim()) seen.add('client');
-
-  if (model.org.trim() && validateScopeValue(model.org.trim())) {
-    return { code: 'orgInvalidValue' };
-  }
-  if (model.client.trim() && validateScopeValue(model.client.trim())) {
-    return { code: 'clientInvalidValue' };
-  }
 
   for (let i = 0; i < model.extras.length; i++) {
     const extra = model.extras[i];
@@ -336,9 +294,6 @@ export function validateIdentityOverrides(
     const ns = extra.namespace.trim();
     const nsError = validateScopeNamespace(ns);
     if (nsError) return { code: 'extraNamespace', index: i, error: nsError };
-    if (isBuiltinNamespace(ns)) {
-      return { code: 'extraBuiltin', index: i, namespace: ns };
-    }
     if (extra.value.trim() === '') {
       return { code: 'extraMissingValue', index: i };
     }

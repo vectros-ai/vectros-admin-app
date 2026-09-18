@@ -23,7 +23,8 @@
 //  12. A discrete filter change after the first fetch re-queries immediately.
 // ---------------------------------------------------------------------------
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { onlineManager } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -57,8 +58,7 @@ const SAMPLE_ROWS = [
   {
     id: 'ral_1',
     contextId: 'ctx_intake',
-    subjectType: 'user',
-    subjectId: 'user_abc',
+    subjects: [{ type: 'user', id: 'user_abc' }],
     callerKeyId: 'key_root',
     action: 'read',
     resourceType: 'intake_form',
@@ -69,8 +69,7 @@ const SAMPLE_ROWS = [
   {
     id: 'ral_2',
     contextId: 'ctx_intake',
-    subjectType: 'user',
-    subjectId: 'user_abc',
+    subjects: [{ type: 'user', id: 'user_abc' }],
     callerKeyId: 'key_scoped',
     action: 'search',
     resourceType: 'search',
@@ -86,8 +85,7 @@ const SAMPLE_ROWS = [
 const SPARSE_ROW = {
   id: 'ral_sparse',
   contextId: 'ctx_intake',
-  subjectType: 'user',
-  subjectId: 'user_abc',
+  subjects: [{ type: 'user', id: 'user_abc' }],
   action: 'list',
 } satisfies ReadAccessLogRow;
 
@@ -119,13 +117,14 @@ function makeMockDevApi() {
 function renderPage(opts: {
   client?: ReturnType<typeof makeMockClient>;
   devApi?: ReturnType<typeof makeMockDevApi>;
+  staleTime?: number;
 } = {}) {
   const client = opts.client ?? makeMockClient();
   const devApi = opts.devApi ?? makeMockDevApi();
   vi.mocked(vectrosApiClient).mockReturnValue(client as never);
   vi.mocked(useDeveloperApi).mockReturnValue(devApi as never);
   const utils = render(
-    <TestIntlProvider>
+    <TestIntlProvider staleTime={opts.staleTime}>
       <MemoryRouter>
         <TestTenantProvider>
           <AccessLogPage />
@@ -468,6 +467,253 @@ describe('AccessLogPage', () => {
     expect(payload.revealedSensitive).toBe(true);
     // The results header still describes the applied subject, not the edit.
     expect(screen.getByText(/user:user_abc/i)).toBeInTheDocument();
+  });
+
+  describe('re-running the applied query', () => {
+    // The query is keyed on the applied filters, so Fetch with unchanged filters
+    // changes no key: without an explicit re-run the cached pages are served and
+    // no request goes out. The log is append-only, so "show me the latest" has
+    // to be expressible.
+
+    it('keeps Refresh disabled until a query has been applied', async () => {
+      const user = userEvent.setup();
+      renderPage();
+      await fillRequired(user);
+      expect(screen.getByRole('button', { name: /^refresh$/i })).toBeDisabled();
+    });
+
+    it('Fetch with UNCHANGED filters issues a new request instead of serving the cache', async () => {
+      const user = userEvent.setup();
+      const getAccessLog = vi
+        .fn()
+        .mockResolvedValueOnce({ data: [], nextCursor: null })
+        .mockResolvedValue(SAMPLE_PAGE);
+      const { client } = renderPage({ client: makeMockClient({ getAccessLog }) });
+      await fillRequired(user);
+      await user.click(screen.getByRole('button', { name: /fetch disclosures/i }));
+      expect(await screen.findByText(/no recorded disclosures for/i)).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /fetch disclosures/i }));
+      await waitFor(() => expect(getAccessLogMock(client)).toHaveBeenCalledTimes(2));
+      expect(await screen.findByText('intake_form:rec_1')).toBeInTheDocument();
+    });
+
+    it('Fetch after an un-fetched subject-id edit applies the edit rather than re-running', async () => {
+      // Guards the equality check from the other side: an over-broad "unchanged"
+      // test would re-run the OLD subject and silently ignore the new one.
+      const user = userEvent.setup();
+      const { client } = renderPage();
+      await fillRequired(user);
+      await user.click(screen.getByRole('button', { name: /fetch disclosures/i }));
+      await waitFor(() => expect(getAccessLogMock(client)).toHaveBeenCalledTimes(1));
+
+      const subjectInput = screen.getByLabelText(/subject id/i);
+      await user.clear(subjectInput);
+      await user.type(subjectInput, 'user_xyz');
+      await user.click(screen.getByRole('button', { name: /fetch disclosures/i }));
+
+      await waitFor(() => expect(getAccessLogMock(client)).toHaveBeenCalledTimes(2));
+      const payload = getAccessLogMock(client).mock.calls[1]?.[0] as Record<string, unknown>;
+      expect(payload.subjectId).toBe('user_xyz');
+    });
+
+    it('Refresh re-runs the APPLIED query, not an un-fetched edit in the form', async () => {
+      const user = userEvent.setup();
+      const { client } = renderPage();
+      await fillRequired(user); // subject = user_abc
+      await user.click(screen.getByRole('button', { name: /fetch disclosures/i }));
+      await waitFor(() => expect(getAccessLogMock(client)).toHaveBeenCalledTimes(1));
+
+      const subjectInput = screen.getByLabelText(/subject id/i);
+      await user.clear(subjectInput);
+      await user.type(subjectInput, 'user_SHOULD_NOT_APPLY');
+      await user.click(screen.getByRole('button', { name: /^refresh$/i }));
+
+      await waitFor(() => expect(getAccessLogMock(client)).toHaveBeenCalledTimes(2));
+      const payload = getAccessLogMock(client).mock.calls[1]?.[0] as Record<string, unknown>;
+      expect(payload.subjectId).toBe('user_abc');
+    });
+
+    it('Refresh re-runs from the EMPTY state', async () => {
+      const user = userEvent.setup();
+      const getAccessLog = vi
+        .fn()
+        .mockResolvedValueOnce({ data: [], nextCursor: null })
+        .mockResolvedValue(SAMPLE_PAGE);
+      renderPage({ client: makeMockClient({ getAccessLog }) });
+      await fillRequired(user);
+      await user.click(screen.getByRole('button', { name: /fetch disclosures/i }));
+      expect(await screen.findByText(/no recorded disclosures for/i)).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /^refresh$/i }));
+      expect(await screen.findByText('intake_form:rec_1')).toBeInTheDocument();
+    });
+
+    it('Refresh re-runs from the ERROR state', async () => {
+      const user = userEvent.setup();
+      const getAccessLog = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('upstream failed'))
+        .mockResolvedValue(SAMPLE_PAGE);
+      renderPage({ client: makeMockClient({ getAccessLog }) });
+      await fillRequired(user);
+      await user.click(screen.getByRole('button', { name: /fetch disclosures/i }));
+      expect(await screen.findByText(/could not query the read-access log/i)).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /^refresh$/i }));
+      expect(await screen.findByText('intake_form:rec_1')).toBeInTheDocument();
+      expect(screen.queryByText(/could not query the read-access log/i)).not.toBeInTheDocument();
+    });
+
+    it('Refresh after Load more re-runs ONLY the first page, never re-walking every loaded page', async () => {
+      // A plain refetch() on an infinite query re-issues every loaded page in
+      // sequence: here that would be a second, cursor-carrying read the operator
+      // never asked for. Rows are newest-first, so the first page is the refresh.
+      const user = userEvent.setup();
+      const getAccessLog = vi
+        .fn()
+        .mockResolvedValueOnce({ data: [SAMPLE_ROWS[0]], nextCursor: 'cursor-2' })
+        .mockResolvedValueOnce({ data: [SAMPLE_ROWS[1]], nextCursor: null })
+        .mockResolvedValue({ data: [SAMPLE_ROWS[0]], nextCursor: 'cursor-2' });
+      const { client } = renderPage({ client: makeMockClient({ getAccessLog }) });
+      await fillRequired(user);
+      await user.click(screen.getByRole('button', { name: /fetch disclosures/i }));
+      await user.click(await screen.findByRole('button', { name: /load more/i }));
+      expect(await screen.findByText('search:rec_2')).toBeInTheDocument();
+      expect(getAccessLogMock(client)).toHaveBeenCalledTimes(2);
+
+      await user.click(screen.getByRole('button', { name: /^refresh$/i }));
+      await waitFor(() => expect(getAccessLogMock(client)).toHaveBeenCalledTimes(3));
+      const refreshCall = getAccessLogMock(client).mock.calls[2]?.[0] as Record<string, unknown>;
+      expect(refreshCall.startFrom).toBeUndefined();
+      // The second page's row is gone (only page one was re-fetched), and no
+      // further page request follows.
+      await waitFor(() => expect(screen.queryByText('search:rec_2')).not.toBeInTheDocument());
+      expect(await screen.findByText('intake_form:rec_1')).toBeInTheDocument();
+      await new Promise((r) => setTimeout(r, 50));
+      expect(getAccessLogMock(client)).toHaveBeenCalledTimes(3);
+    });
+
+    it('Fetch with unchanged filters after Load more also re-runs only the first page', async () => {
+      const user = userEvent.setup();
+      const getAccessLog = vi
+        .fn()
+        .mockResolvedValueOnce({ data: [SAMPLE_ROWS[0]], nextCursor: 'cursor-2' })
+        .mockResolvedValueOnce({ data: [SAMPLE_ROWS[1]], nextCursor: null })
+        .mockResolvedValue({ data: [SAMPLE_ROWS[0]], nextCursor: 'cursor-2' });
+      const { client } = renderPage({ client: makeMockClient({ getAccessLog }) });
+      await fillRequired(user);
+      await user.click(screen.getByRole('button', { name: /fetch disclosures/i }));
+      await user.click(await screen.findByRole('button', { name: /load more/i }));
+      expect(await screen.findByText('search:rec_2')).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /fetch disclosures/i }));
+      await waitFor(() => expect(getAccessLogMock(client)).toHaveBeenCalledTimes(3));
+      const call = getAccessLogMock(client).mock.calls[2]?.[0] as Record<string, unknown>;
+      expect(call.startFrom).toBeUndefined();
+      await new Promise((r) => setTimeout(r, 50));
+      expect(getAccessLogMock(client)).toHaveBeenCalledTimes(3);
+    });
+
+    it('toggling a filter off and back on after Load more reads the first page once, never re-walking', async () => {
+      // Production data goes stale after a finite time, and react-query's
+      // automatic refetches re-fetch every loaded page. `staleTime: 0` reproduces
+      // that staleness; returning to a cached filter set must not re-walk it.
+      const user = userEvent.setup();
+      const getAccessLog = vi.fn().mockImplementation((req: Record<string, unknown>) =>
+        Promise.resolve(
+          req.startFrom
+            ? { data: [SAMPLE_ROWS[1]], nextCursor: null }
+            : { data: [SAMPLE_ROWS[0]], nextCursor: 'cursor-2' },
+        ),
+      );
+      const { client } = renderPage({ client: makeMockClient({ getAccessLog }), staleTime: 0 });
+      await fillRequired(user);
+      await user.click(screen.getByRole('button', { name: /fetch disclosures/i }));
+      await user.click(await screen.findByRole('button', { name: /load more/i }));
+      expect(await screen.findByText('search:rec_2')).toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /^revealed$/i }));
+      await waitFor(() => expect(getAccessLogMock(client)).toHaveBeenCalledTimes(3));
+      await user.click(screen.getByRole('button', { name: /^any$/i }));
+      await waitFor(() => expect(getAccessLogMock(client)).toHaveBeenCalledTimes(4));
+      await new Promise((r) => setTimeout(r, 50));
+
+      const calls = getAccessLogMock(client).mock.calls.map(
+        ([req]) => `${(req as Record<string, unknown>).revealedSensitive ?? 'any'}@${(req as Record<string, unknown>).startFrom ?? 'first'}`,
+      );
+      // first page, next page, revealed first page, then the original set's first page once.
+      expect(calls).toEqual(['any@first', 'any@cursor-2', 'true@first', 'any@first']);
+    });
+
+    it('a network reconnect does not refetch a result set with several pages loaded', async () => {
+      const user = userEvent.setup();
+      const getAccessLog = vi.fn().mockImplementation((req: Record<string, unknown>) =>
+        Promise.resolve(
+          req.startFrom
+            ? { data: [SAMPLE_ROWS[1]], nextCursor: null }
+            : { data: [SAMPLE_ROWS[0]], nextCursor: 'cursor-2' },
+        ),
+      );
+      const { client } = renderPage({ client: makeMockClient({ getAccessLog }), staleTime: 0 });
+      await fillRequired(user);
+      await user.click(screen.getByRole('button', { name: /fetch disclosures/i }));
+      await user.click(await screen.findByRole('button', { name: /load more/i }));
+      expect(await screen.findByText('search:rec_2')).toBeInTheDocument();
+      expect(getAccessLogMock(client)).toHaveBeenCalledTimes(2);
+
+      try {
+        act(() => onlineManager.setOnline(false));
+        act(() => onlineManager.setOnline(true));
+        await new Promise((r) => setTimeout(r, 50));
+        expect(getAccessLogMock(client)).toHaveBeenCalledTimes(2);
+      } finally {
+        onlineManager.setOnline(true);
+      }
+    });
+
+    it('keeps Refresh disabled while a fetch is running', async () => {
+      const user = userEvent.setup();
+      let resolveFirst: (value: unknown) => void = () => {};
+      const getAccessLog = vi
+        .fn()
+        .mockImplementationOnce(() => new Promise((r) => { resolveFirst = r; }))
+        .mockResolvedValue(SAMPLE_PAGE);
+      renderPage({ client: makeMockClient({ getAccessLog }) });
+      await fillRequired(user);
+      await user.click(screen.getByRole('button', { name: /fetch disclosures/i }));
+      await waitFor(() => expect(getAccessLog).toHaveBeenCalledTimes(1));
+      expect(screen.getByRole('button', { name: /^refresh$/i })).toBeDisabled();
+
+      resolveFirst(SAMPLE_PAGE);
+      expect(await screen.findByText('intake_form:rec_1')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /^refresh$/i })).toBeEnabled();
+    });
+
+    it('Fetch with unchanged filters while Load more is in flight sends nothing and cancels nothing', async () => {
+      // Fetch stays enabled during a next-page read. Resetting then would cancel
+      // a read that was already sent and re-issue page one on top of it.
+      const user = userEvent.setup();
+      let resolvePageTwo: (value: unknown) => void = () => {};
+      const getAccessLog = vi
+        .fn()
+        .mockResolvedValueOnce({ data: [SAMPLE_ROWS[0]], nextCursor: 'cursor-2' })
+        .mockImplementationOnce(() => new Promise((r) => { resolvePageTwo = r; }))
+        .mockResolvedValue({ data: [SAMPLE_ROWS[0]], nextCursor: 'cursor-2' });
+      const { client } = renderPage({ client: makeMockClient({ getAccessLog }) });
+      await fillRequired(user);
+      await user.click(screen.getByRole('button', { name: /fetch disclosures/i }));
+      await user.click(await screen.findByRole('button', { name: /load more/i }));
+      await waitFor(() => expect(getAccessLogMock(client)).toHaveBeenCalledTimes(2));
+
+      await user.click(screen.getByRole('button', { name: /fetch disclosures/i }));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(getAccessLogMock(client)).toHaveBeenCalledTimes(2);
+
+      resolvePageTwo({ data: [SAMPLE_ROWS[1]], nextCursor: null });
+      expect(await screen.findByText('search:rec_2')).toBeInTheDocument();
+      expect(getAccessLogMock(client)).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('renders em-dash + "No" fallbacks for a sparse row', async () => {

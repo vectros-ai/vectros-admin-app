@@ -18,6 +18,7 @@
   "accessLog.toLabel": "To",
   "accessLog.fetchCta": "Fetch disclosures",
   "accessLog.fetchInFlight": "Querying…",
+  "accessLog.refresh": "Refresh",
   "accessLog.timeRangeInvalid": "Start time must be before end time.",
   "accessLog.resultSummary": "{count, plural, =0 {No recorded reads} one {# recorded read} other {# recorded reads}} loaded for {subject}.",
   "accessLog.loadError": "Could not query the read-access log. {message}",

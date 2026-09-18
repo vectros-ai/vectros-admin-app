@@ -12,7 +12,7 @@ import {
 } from './scopeNamespace';
 
 describe('validateScopeNamespace', () => {
-  it('accepts the built-ins and well-formed custom namespaces', () => {
+  it('accepts org/client (ordinary namespaces, not built-ins) and well-formed custom namespaces', () => {
     for (const ns of ['org', 'client', 'group', 'eng-team', 'a1', 'region_1']) {
       expect(validateScopeNamespace(ns)).toBeNull();
     }

@@ -165,7 +165,7 @@ describe('validateDataScope', () => {
     ).toBeNull();
   });
 
-  it('allows the built-in namespaces (no dedicated fields to defer to)', () => {
+  it('allows org/client — ordinary namespaces here, not built-ins', () => {
     expect(
       validateDataScope({
         dimensions: [{ namespace: 'org', values: ['o'], includeNull: false }],

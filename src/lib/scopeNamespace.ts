@@ -4,8 +4,12 @@
 // An owned item carries its owning user plus up to two namespaced scope values.
 // A namespace is the key half of a `scope:<namespace>` dimension: 2–32 chars,
 // a lowercase letter first, then lowercase letters, digits, `_` or `-`.
-// `org` and `client` are the two built-in namespaces (`scope:org` / `scope:client`);
+// `org` and `client` are NOT built-ins — they are ordinary
+// registrations, validated by the exact same grammar as any other namespace;
 // `user`, `self`, `tenant`, `context`, and `scope` are reserved and rejected.
+// A namespace someone has actually registered is suggested (not enforced) via
+// the registry client in `namespaceRegistry.ts` — this module knows nothing
+// about the registry, only the grammar.
 //
 // Pure (no React) so mutation builders, the scope editors, and tests all
 // validate the exact same shape the platform enforces.
@@ -13,9 +17,6 @@
 
 /** A namespace is a lowercase letter followed by 1–31 of `[a-z0-9_-]` (2–32 total). */
 export const SCOPE_NAMESPACE_PATTERN = /^[a-z][a-z0-9_-]{1,31}$/;
-
-/** The two built-in namespaces. Selectable everywhere a namespace is authored. */
-export const SCOPE_BUILTIN_NAMESPACES = ['org', 'client'] as const;
 
 /** Reserved namespaces the platform rejects. */
 export const SCOPE_RESERVED_NAMESPACES = [
@@ -40,10 +41,9 @@ export type ScopeNamespaceError =
 
 /**
  * Validate a single namespace against the platform grammar + reserved list.
- * Returns null when valid. `org` / `client` are valid (built-ins); the reserved
- * names are rejected. Callers that forbid the built-ins in a given surface
- * (e.g. an "additional scopes" list that already has dedicated org/client
- * fields) layer that check on top of this one.
+ * Returns null when valid. `org` and `client` validate like any other
+ * namespace name — they are ordinary registrations, not built-ins — so only
+ * the reserved names are rejected here.
  */
 export function validateScopeNamespace(
   namespace: string,

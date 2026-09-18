@@ -74,7 +74,7 @@ import {
 import RefreshIcon from '@mui/icons-material/Refresh';
 import SearchIcon from '@mui/icons-material/Search';
 import { FormattedMessage, useIntl } from 'react-intl';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { hashKey, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiErrorAlert, LoadingBlock, SubmitButton } from '@vectros-ai/react';
 
 import { useActiveTenantId } from '../../auth';
@@ -108,10 +108,8 @@ import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
  * allow-list to the customer-facing, filterable subset, so control-plane
  * resources appear ON rows without being accepted AS filters. Adding one here
  * would move the 400, not remove it — check the server's list before extending
- * this one. `scripts` and `triggers` are the live example: both are on neither
- * twin list, so 0.43.0's automation traffic is not filterable from here yet.
- * (There is no `trigger-failures` value to add — that route reports itself as
- * `triggers`.)
+ * this one. (There is no `trigger-failures` value to add — that route reports
+ * itself as `triggers`, added below.)
  */
 const RESOURCES = [
   'documents',
@@ -132,6 +130,11 @@ const RESOURCES = [
   'ask',
   'erasure-requests',
   'export',
+  // Both twin server allow-lists gained these two; 0.43.0's automation
+  // traffic (script pushes/executes, trigger rule CRUD) is now filterable
+  // from here, not just visible ON other rows.
+  'scripts',
+  'triggers',
 ] as const;
 type Resource = (typeof RESOURCES)[number];
 
@@ -409,7 +412,9 @@ export function LogsPage(): React.JSX.Element {
 
   // Keyed on the selected context too: changing the context filter re-queries on
   // its own once a fetch has run.
-  const queryKey = ['adminLogs', tenant, selectedContext, appliedFilters] as const;
+  const queryKeyFor = (filters: LogFilters | null) =>
+    ['adminLogs', tenant, selectedContext, filters] as const;
+  const queryKey = queryKeyFor(appliedFilters);
   const logsQuery = useQuery<AdminLogsResponse>({
     queryKey,
     queryFn: () => {
@@ -491,6 +496,14 @@ export function LogsPage(): React.JSX.Element {
 
   const handleApply = (): void => {
     if (applyDisabled) return;
+    // Fetch with unchanged filters leaves the query key unchanged, so the cached
+    // result would be served and no request issued. Re-run it the same way
+    // Refresh does: one Logs Insights query (this view is not paginated), with a
+    // relative preset's window recomputed at execution time.
+    if (appliedFilters !== null && hashKey(queryKeyFor(pendingFilters)) === hashKey(queryKey)) {
+      handleRefresh();
+      return;
+    }
     setAppliedFilters(pendingFilters);
   };
 

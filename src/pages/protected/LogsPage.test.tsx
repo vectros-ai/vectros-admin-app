@@ -258,6 +258,58 @@ describe('LogsPage', () => {
     expect(payload.errorsOnly).toBeUndefined();
   });
 
+  it('Fetch with UNCHANGED filters issues a new query instead of serving the cache', async () => {
+    // The query is keyed on the applied filters, so an unchanged Fetch changes
+    // no key: without an explicit re-run the cached result would be served.
+    const user = userEvent.setup();
+    const { devApi } = renderPage();
+    await user.click(screen.getByRole('button', { name: /fetch logs/i }));
+    await waitFor(() => expect(devApi.getAdminLogs).toHaveBeenCalledTimes(1));
+
+    await user.click(screen.getByRole('button', { name: /fetch logs/i }));
+    await waitFor(() => expect(devApi.getAdminLogs).toHaveBeenCalledTimes(2));
+  });
+
+  it('Fetch with UNCHANGED filters under a relative preset recomputes the window at re-run time', async () => {
+    // The default "last 1h" preset is relative: re-running it must query the
+    // hour ending NOW, not replay the window from the first Fetch.
+    let fakeNow = Date.parse('2026-05-30T15:00:00Z');
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => fakeNow);
+    try {
+      const user = userEvent.setup();
+      const { devApi } = renderPage();
+      await user.click(screen.getByRole('button', { name: /fetch logs/i }));
+      await waitFor(() => expect(devApi.getAdminLogs).toHaveBeenCalledTimes(1));
+
+      fakeNow += 10 * 60 * 1000; // ten minutes later
+      await user.click(screen.getByRole('button', { name: /fetch logs/i }));
+      await waitFor(() => expect(devApi.getAdminLogs).toHaveBeenCalledTimes(2));
+
+      const [first, second] = devApi.getAdminLogs.mock.calls.map(
+        ([q]) => q as { startTime: string; endTime?: string },
+      );
+      expect(Date.parse(second!.startTime) - Date.parse(first!.startTime)).toBe(10 * 60 * 1000);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('Fetch after a key-id edit applies the edit rather than re-running the old query', async () => {
+    // Guards the equality check from the other side: an over-broad "unchanged"
+    // test would re-run the old filters and silently drop the edit.
+    const user = userEvent.setup();
+    const { devApi } = renderPage();
+    await user.click(screen.getByRole('button', { name: /fetch logs/i }));
+    await waitFor(() => expect(devApi.getAdminLogs).toHaveBeenCalledTimes(1));
+
+    await user.type(screen.getByLabelText(/^key id$/i), 'key_abc123');
+    await user.click(screen.getByRole('button', { name: /fetch logs/i }));
+    await waitFor(() => expect(devApi.getAdminLogs).toHaveBeenCalledTimes(2));
+    const payload = (devApi.getAdminLogs as ReturnType<typeof vi.fn>).mock
+      .calls[1]?.[0] as Record<string, unknown>;
+    expect(payload.keyId).toBe('key_abc123');
+  });
+
   it('renders the entries table with rows from the SDK response', async () => {
     const user = userEvent.setup();
     renderPage();
@@ -607,6 +659,8 @@ describe('LogsPage', () => {
     'ask',
     'erasure-requests',
     'export',
+    'scripts',
+    'triggers',
   ];
 
   it('offers exactly the server-accepted resource filters, and nothing else', async () => {
@@ -633,26 +687,27 @@ describe('LogsPage', () => {
     expect(screen.queryByRole('option', { name: /^orgs$/ })).not.toBeInTheDocument();
   });
 
-  it('does NOT offer `scripts` or `triggers` — 0.43.0 surfaces the server does not accept as log filters', async () => {
+  it('offers `scripts` and `triggers` but NOT `trigger-failures`', async () => {
     // Two values, not three: the trigger-failures route reports itself as
     // `triggers`, so `trigger-failures` is not a resource any log row can
-    // carry and would be a filter for a value that does not exist. Adding
-    // either real one here would move the 400 rather than remove it — the
-    // server's allow-list is the gate, and neither is on it.
+    // carry and would be a filter for a value that does not exist — the
+    // server's allow-list gate agrees.
     const user = userEvent.setup();
     renderPage();
     await user.click(screen.getByLabelText(/^resource$/i));
-    expect(await screen.findByRole('option', { name: /^entities$/ })).toBeInTheDocument();
     for (const r of ['scripts', 'triggers']) {
-      expect(screen.queryByRole('option', { name: new RegExp(`^${r}$`) })).not.toBeInTheDocument();
+      expect(await screen.findByRole('option', { name: new RegExp(`^${r}$`) })).toBeInTheDocument();
     }
+    expect(
+      screen.queryByRole('option', { name: /^trigger-failures$/ }),
+    ).not.toBeInTheDocument();
   });
 
   it('offers the identity + generalized resource filters (matches the backend allow-list)', async () => {
     const user = userEvent.setup();
     const { devApi } = renderPage();
     await user.click(screen.getByLabelText(/^resource$/i));
-    // The generic IdentityEntityDB surface + the previously-drifted resource types.
+    // The generic entities surface + the previously-drifted resource types.
     for (const r of ['entities', 'namespaces', 'erasure-requests', 'export', 'issuers']) {
       expect(await screen.findByRole('option', { name: new RegExp(`^${r}$`) })).toBeInTheDocument();
     }

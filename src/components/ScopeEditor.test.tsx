@@ -23,6 +23,7 @@ import { I18N_DEFAULT_LOCALE } from '../i18n/IntlProvider';
 import enMessages from '../i18n/messages.en.json';
 import {
   CRUD_OPS,
+  MAX_ASSIGNABLE_ROLES,
   RESOURCE_CATALOG,
   ScopeEditor,
   emptyClause,
@@ -229,6 +230,54 @@ describe('validateClauses()', () => {
       ]),
     ).toBeNull();
   });
+
+  // assignable_roles: format + count, mirroring the platform's own
+  // ScopeClause.validateAssignableRoles.
+  describe('assignable_roles', () => {
+    it('accepts a well-formed list', () => {
+      expect(
+        validateClauses([
+          { allowed_actions: ['records:r'], data_scope: {}, assignable_roles: ['support', 'hr-admin'] },
+        ]),
+      ).toBeNull();
+    });
+
+    it('accepts absent assignable_roles (unrestricted)', () => {
+      expect(
+        validateClauses([{ allowed_actions: ['records:r'], data_scope: {} }]),
+      ).toBeNull();
+    });
+
+    it('rejects a malformed roleId, citing the clause and the bad value', () => {
+      expect(
+        validateClauses([
+          { allowed_actions: ['records:r'], data_scope: {}, assignable_roles: ['Not-Valid'] },
+        ]),
+      ).toEqual({ code: 'assignableRolesInvalid', clauseIndex: 0, roleId: 'Not-Valid' });
+    });
+
+    it('rejects a roleId shorter than the platform minimum (3 chars)', () => {
+      expect(
+        validateClauses([
+          { allowed_actions: ['records:r'], data_scope: {}, assignable_roles: ['ab'] },
+        ]),
+      ).toEqual({ code: 'assignableRolesInvalid', clauseIndex: 0, roleId: 'ab' });
+    });
+
+    it('rejects more than MAX_ASSIGNABLE_ROLES entries, citing the max', () => {
+      const tooMany = Array.from({ length: MAX_ASSIGNABLE_ROLES + 1 }, (_, i) => `role-${i}`);
+      expect(
+        validateClauses([{ allowed_actions: ['records:r'], data_scope: {}, assignable_roles: tooMany }]),
+      ).toEqual({ code: 'assignableRolesTooMany', clauseIndex: 0, max: MAX_ASSIGNABLE_ROLES });
+    });
+
+    it('accepts exactly MAX_ASSIGNABLE_ROLES entries (boundary, not off-by-one)', () => {
+      const atMax = Array.from({ length: MAX_ASSIGNABLE_ROLES }, (_, i) => `role-${i}`);
+      expect(
+        validateClauses([{ allowed_actions: ['records:r'], data_scope: {}, assignable_roles: atMax }]),
+      ).toBeNull();
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -275,6 +324,26 @@ describe('formatScopeClauseValidationError()', () => {
       ),
     ).toBe('Clause 1, action 2: must be a non-blank string');
   });
+
+  it('formats assignableRolesInvalid, naming the clause and the bad roleId', () => {
+    expect(
+      formatScopeClauseValidationError(
+        { code: 'assignableRolesInvalid', clauseIndex: 0, roleId: 'Not-Valid' },
+        intl,
+      ),
+    ).toBe(
+      'Clause 1: "Not-Valid" isn\'t a valid roleId — lowercase letters, digits and - only, 3–31 characters, starting with a letter.',
+    );
+  });
+
+  it('formats assignableRolesTooMany with 1-based clause index + the max', () => {
+    expect(
+      formatScopeClauseValidationError(
+        { code: 'assignableRolesTooMany', clauseIndex: 1, max: 20 },
+        intl,
+      ),
+    ).toBe('Clause 2: at most 20 composable roles can be listed on one clause.');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -284,7 +353,7 @@ describe('formatScopeClauseValidationError()', () => {
 describe('RESOURCE_CATALOG (grantable scope resources)', () => {
   it('offers `entities` and NOT the retired org/client — nor the inert `namespaces`', () => {
     const values = RESOURCE_CATALOG.map((r) => r.value);
-    // The generic IdentityEntityDB surface replaced the retired org/client routes.
+    // The generic entities surface replaced the retired org/client routes.
     expect(values).toContain('entities');
     // `orgs`/`clients` are dead authority (routes 404) — no longer grantable.
     expect(values).not.toContain('orgs');
@@ -884,6 +953,133 @@ describe('parseClauseActions() / serializeClauseActions()', () => {
 });
 
 // ---------------------------------------------------------------------------
+// <ScopeEditor> — assignable_roles authoring (0.43.0)
+// ---------------------------------------------------------------------------
+
+describe('<ScopeEditor> assignable_roles authoring', () => {
+  it('collapses the section for a clause with none, with a placeholder shown once opened', async () => {
+    const user = userEvent.setup();
+    render(
+      <TestIntlProvider>
+        <ScopeEditor value={[{ allowed_actions: ['records:r'], data_scope: {} }]} onChange={() => {}} />
+      </TestIntlProvider>,
+    );
+    expect(screen.queryByRole('combobox', { name: /roles this clause may compose/i })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /composable roles/i }));
+    expect(
+      screen.getByRole('combobox', { name: /roles this clause may compose/i }),
+    ).toHaveAttribute('placeholder', expect.stringMatching(/pick a role or type a roleid/i));
+  });
+
+  it('expands automatically and shows the existing chips for a clause that already carries a restriction', () => {
+    render(
+      <TestIntlProvider>
+        <ScopeEditor
+          value={[
+            {
+              allowed_actions: ['records:r'],
+              data_scope: {},
+              assignable_roles: ['support', 'hr-admin'],
+            },
+          ]}
+          onChange={() => {}}
+        />
+      </TestIntlProvider>,
+    );
+    expect(screen.getByText('support')).toBeInTheDocument();
+    expect(screen.getByText('hr-admin')).toBeInTheDocument();
+  });
+
+  it('typing a roleId and pressing Enter adds it, preserving the rest of the clause', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <TestIntlProvider>
+        <ScopeEditor
+          value={[{ allowed_actions: ['records:r'], data_scope: {}, granted_capabilities: ['delegate-mint'] }]}
+          onChange={onChange}
+        />
+      </TestIntlProvider>,
+    );
+    await user.click(screen.getByRole('button', { name: /composable roles/i }));
+    await user.type(
+      screen.getByRole('combobox', { name: /roles this clause may compose/i }),
+      'support{enter}',
+    );
+    expect(onChange).toHaveBeenCalledWith([
+      expect.objectContaining({
+        allowed_actions: ['records:r'],
+        granted_capabilities: ['delegate-mint'],
+        assignable_roles: ['support'],
+      }),
+    ]);
+  });
+
+  it('offers roleOptions as suggestions, labelled "name (roleId)", and picking one adds the roleId', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <TestIntlProvider>
+        <ScopeEditor
+          value={[{ allowed_actions: ['records:r'], data_scope: {} }]}
+          onChange={onChange}
+          roleOptions={[
+            { roleId: 'support', name: 'Support' },
+            { roleId: 'hr-admin', name: 'HR Admin' },
+          ]}
+        />
+      </TestIntlProvider>,
+    );
+    await user.click(screen.getByRole('button', { name: /composable roles/i }));
+    await user.click(screen.getByRole('combobox', { name: /roles this clause may compose/i }));
+    expect(screen.getByRole('option', { name: 'Support (support)' })).toBeInTheDocument();
+    await user.click(screen.getByRole('option', { name: 'Support (support)' }));
+    expect(onChange).toHaveBeenCalledWith([
+      expect.objectContaining({ assignable_roles: ['support'] }),
+    ]);
+  });
+
+  it('an already-picked role is not re-offered as a suggestion', async () => {
+    const user = userEvent.setup();
+    render(
+      <TestIntlProvider>
+        <ScopeEditor
+          value={[{ allowed_actions: ['records:r'], data_scope: {}, assignable_roles: ['support'] }]}
+          onChange={() => {}}
+          roleOptions={[
+            { roleId: 'support', name: 'Support' },
+            { roleId: 'hr-admin', name: 'HR Admin' },
+          ]}
+        />
+      </TestIntlProvider>,
+    );
+    await user.click(screen.getByRole('combobox', { name: /roles this clause may compose/i }));
+    expect(screen.queryByRole('option', { name: /support/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'HR Admin (hr-admin)' })).toBeInTheDocument();
+  });
+
+  it('removing the only role OMITS assignable_roles rather than emitting [] — absent and empty are different states to the platform', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <TestIntlProvider>
+        <ScopeEditor
+          value={[{ allowed_actions: ['records:r'], data_scope: {}, assignable_roles: ['support'] }]}
+          onChange={onChange}
+        />
+      </TestIntlProvider>,
+    );
+    // The chip's own delete icon — MUI's Autocomplete chip-delete affordance,
+    // not a named button (unlike the data-scope filter row's explicit
+    // "Remove filter" IconButton elsewhere in this file).
+    await user.click(screen.getByTestId('CancelIcon'));
+    const emitted = onChange.mock.calls.at(-1)?.[0] as ScopeClause[];
+    expect(emitted[0]).not.toHaveProperty('assignable_roles');
+  });
+
+});
+
+// ---------------------------------------------------------------------------
 // <ScopeEditor> — resource × CRUD matrix interaction
 // ---------------------------------------------------------------------------
 
@@ -996,11 +1192,14 @@ describe('<ScopeEditor> permission matrix', () => {
   // --- clause fields the editor does not author must survive editing -------
 
   it('preserves assignable_roles across an unrelated matrix edit', () => {
-    // The editor cannot author this field, so the ONLY thing standing between a
-    // tenant's role-composition restriction and silent removal is that every
-    // clause updater spreads the existing clause. A refactor to explicit field
-    // construction — the exact mistake this branch fixes at the save sites —
-    // would break it here instead, and nothing else would notice.
+    // Authoring assignable_roles happens through its own
+    // AssignableRolesSection — a matrix toggle must not touch it. Every OTHER
+    // clause updater (setClauseActions here) still needs to carry the field
+    // through untouched, so the ONLY thing standing between a tenant's
+    // role-composition restriction and silent removal on an unrelated edit is
+    // that those updaters spread the existing clause. A refactor to explicit
+    // field construction — the exact mistake this branch fixes at the save
+    // sites — would break it here instead, and nothing else would notice.
     const onChange = vi.fn();
     render(
       <TestIntlProvider>
@@ -1152,7 +1351,8 @@ describe('<ScopeEditor> data-scope filters', () => {
 
     const namespaceInput = screen.getByRole('combobox', { name: /scope/i });
     await user.click(namespaceInput);
-    // "*" is offered alongside the built-ins, not just typeable blind.
+    // "*" is offered as a suggestion, not just typeable blind — even with no
+    // registered-namespace suggestions passed in.
     expect(await screen.findByRole('option', { name: '*' })).toBeInTheDocument();
     await user.type(namespaceInput, '*');
 
@@ -1175,6 +1375,7 @@ describe('<ScopeEditor> data-scope filters', () => {
         <ScopeEditor
           value={[{ allowed_actions: ['records:r'], data_scope: { 'scope:org': [] } }]}
           onChange={() => {}}
+          namespaceOptions={['org', 'client']}
         />
       </TestIntlProvider>,
     );
@@ -1188,11 +1389,133 @@ describe('<ScopeEditor> data-scope filters', () => {
     expect(
       screen.getByRole('option', { name: '${{ under.self.scope.org }}' }),
     ).toBeInTheDocument();
-    // Built-in namespaces are always offered as cross-reference candidates,
-    // even with only one dimension row authored.
+    // Every registered namespace the caller suggests (via `namespaceOptions`)
+    // is offered as a cross-reference candidate, even with only one dimension
+    // row authored — org/client are ordinary entries in that list, not a
+    // built-in fallback baked into the component itself.
     expect(
       screen.getByRole('option', { name: '${{ under.self.scope.client }}' }),
     ).toBeInTheDocument();
+  });
+
+  it('suggests nothing beyond the row\'s own namespace when the caller passes no namespaceOptions', async () => {
+    const user = userEvent.setup();
+    render(
+      <TestIntlProvider>
+        <ScopeEditor
+          value={[{ allowed_actions: ['records:r'], data_scope: { 'scope:org': [] } }]}
+          onChange={() => {}}
+        />
+      </TestIntlProvider>,
+    );
+    const valuesInput = screen.getByRole('combobox', { name: /allowed values/i });
+    await user.click(valuesInput);
+    expect(await screen.findByRole('option', { name: '${{ under.self.scope.org }}' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('option', { name: '${{ under.self.scope.client }}' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('still accepts a namespace typed that is NOT in namespaceOptions — a suggestion list, never a gate', async () => {
+    const user = userEvent.setup();
+    const seen: { value: ScopeClause[] } = {
+      value: [{ allowed_actions: ['records:r'], data_scope: {} }],
+    };
+    function Harness(): React.JSX.Element {
+      const [value, setValue] = useState<ScopeClause[]>(seen.value);
+      return (
+        <ScopeEditor
+          value={value}
+          onChange={(v) => {
+            seen.value = v;
+            setValue(v);
+          }}
+          namespaceOptions={['org', 'client']}
+        />
+      );
+    }
+    render(
+      <TestIntlProvider>
+        <Harness />
+      </TestIntlProvider>,
+    );
+    await user.click(screen.getByRole('button', { name: /row-level data filters/i }));
+    await user.click(screen.getByRole('button', { name: /add filter/i }));
+
+    // "unregistered-ns" is in neither the suggestion list nor any built-in —
+    // it must still be typeable and land in the saved data_scope.
+    await user.type(screen.getByRole('combobox', { name: /scope/i }), 'unregistered-ns');
+    await user.type(
+      screen.getByRole('combobox', { name: /allowed values/i }),
+      'some-value{enter}',
+    );
+
+    expect(seen.value[0]?.data_scope).toEqual({ 'scope:unregistered-ns': ['some-value'] });
+  });
+
+  it('flags a data-scope namespace not in namespaceOptions when the caller says it is safe to, and clears once it matches one', async () => {
+    const user = userEvent.setup();
+    render(
+      <TestIntlProvider>
+        <ScopeEditor
+          value={[{ allowed_actions: ['records:r'], data_scope: {} }]}
+          onChange={() => {}}
+          namespaceOptions={['team']}
+          canFlagUnregisteredNamespace
+        />
+      </TestIntlProvider>,
+    );
+    await user.click(screen.getByRole('button', { name: /row-level data filters/i }));
+    await user.click(screen.getByRole('button', { name: /add filter/i }));
+
+    const namespaceInput = screen.getByRole('combobox', { name: /scope/i });
+    await user.type(namespaceInput, 'ghost-ns');
+    expect(await screen.findByText(/not registered for this context/i)).toBeInTheDocument();
+
+    await user.clear(namespaceInput);
+    await user.type(namespaceInput, 'team');
+    expect(screen.queryByText(/not registered for this context/i)).not.toBeInTheDocument();
+  });
+
+  it('never flags the "*" wildcard as unregistered — it is a dimension key, not a namespace', async () => {
+    const user = userEvent.setup();
+    render(
+      <TestIntlProvider>
+        <ScopeEditor
+          value={[{ allowed_actions: ['records:r'], data_scope: {} }]}
+          onChange={() => {}}
+          namespaceOptions={['team']}
+          canFlagUnregisteredNamespace
+        />
+      </TestIntlProvider>,
+    );
+    await user.click(screen.getByRole('button', { name: /row-level data filters/i }));
+    await user.click(screen.getByRole('button', { name: /add filter/i }));
+
+    await user.type(screen.getByRole('combobox', { name: /scope/i }), '*');
+    expect(screen.queryByText(/not registered for this context/i)).not.toBeInTheDocument();
+  });
+
+  it('never flags a namespace as unregistered while the caller has NOT said it is safe to (the default) — the S2 regression this guards', async () => {
+    // No `canFlagUnregisteredNamespace` passed — defaults to false. A caller
+    // whose own registry query is still loading, or has failed, MUST omit
+    // (or explicitly withhold) this prop rather than pass an empty
+    // `namespaceOptions`, which reads identically to "nothing registered."
+    const user = userEvent.setup();
+    render(
+      <TestIntlProvider>
+        <ScopeEditor
+          value={[{ allowed_actions: ['records:r'], data_scope: {} }]}
+          onChange={() => {}}
+          namespaceOptions={[]}
+        />
+      </TestIntlProvider>,
+    );
+    await user.click(screen.getByRole('button', { name: /row-level data filters/i }));
+    await user.click(screen.getByRole('button', { name: /add filter/i }));
+
+    await user.type(screen.getByRole('combobox', { name: /scope/i }), 'org');
+    expect(screen.queryByText(/not registered for this context/i)).not.toBeInTheDocument();
   });
 
   // The feature's own canonical use case (0.38.0's release note): a credential
@@ -1208,9 +1531,10 @@ describe('<ScopeEditor> data-scope filters', () => {
             {
               allowed_actions: ['records:r'],
               // Two dimensions on one clause: org (row 0) and a custom
-              // namespace "group" (row 1) — group is NOT a built-in, so it can
-              // only appear as a suggestion via the other-authored-dimensions
-              // path, never via the built-ins fallback.
+              // namespace "group" (row 1). No `namespaceOptions` passed here,
+              // so "group" can only appear as a suggestion via the
+              // other-authored-dimensions path, not via any caller-supplied
+              // registry list.
               data_scope: { 'scope:org': [], 'scope:group': [] },
             },
           ]}

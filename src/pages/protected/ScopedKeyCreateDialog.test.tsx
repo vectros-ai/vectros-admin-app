@@ -121,6 +121,7 @@ function makeMockClient(overrides: {
   getAccessProfile?: ReturnType<typeof vi.fn>;
   createAccessProfile?: ReturnType<typeof vi.fn>;
   createScopedKey?: ReturnType<typeof vi.fn>;
+  listNamespaces?: ReturnType<typeof vi.fn>;
 } = {}) {
   return {
     identity: {
@@ -133,6 +134,11 @@ function makeMockClient(overrides: {
           type: 'SERVICE',
           status: 'ACTIVE',
         }),
+      // The namespace registry (lib/namespaceRegistry.ts) — no test here
+      // exercises namespace SUGGESTIONS specifically (see ScopeEditor's own
+      // tests for that); an empty registry just means the ScopeEditor's
+      // data-scope namespace field suggests nothing.
+      listNamespaces: overrides.listNamespaces ?? vi.fn().mockResolvedValue(pageOf([])),
     },
     auth: {
       // Default: profile exists. Tests that want the "missing" / "error"
@@ -386,6 +392,68 @@ describe('<ScopedKeyCreateDialog>', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /^next$/i })).toBeEnabled(),
     );
+  });
+
+  // The wizard used to gate "Next" on existence alone, so picking a
+  // suspended user was indistinguishable from picking anyone else until the
+  // final step's generic error. These pin the fix: the row is
+  // labeled, Next stays disabled, and a named warning explains why.
+  it('BindStep — a SUSPENDED user is labeled in the list and blocks Next when picked', async () => {
+    const user = userEvent.setup();
+    renderDialog({
+      client: makeMockClient({
+        listUsers: vi.fn().mockResolvedValue(
+          pageOf([
+            { id: 'u_alice', email: 'alice@example.com', type: 'HUMAN', status: 'SUSPENDED' },
+            { id: 'u_bob', email: 'bob@example.com', type: 'HUMAN', status: 'ACTIVE' },
+          ]),
+        ),
+      }),
+    });
+    await user.type(screen.getByLabelText(/^key name$/i), 'good-name');
+    await user.click(screen.getByRole('button', { name: /^next$/i }));
+    await screen.findByText('alice@example.com');
+
+    // Labeled at the picker, before selection.
+    const aliceRow = screen.getByText('alice@example.com').closest('[role="option"]');
+    expect(aliceRow).not.toBeNull();
+    expect(within(aliceRow as HTMLElement).getByText(/suspended/i)).toBeInTheDocument();
+
+    await user.click(screen.getByText('alice@example.com'));
+
+    // Named warning explaining the block + the reactivation remedy.
+    expect(await screen.findByText(/this user is suspended/i)).toBeInTheDocument();
+    expect(screen.getByText(/PUT \/v1\/users\/u_alice/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^next$/i })).toBeDisabled();
+
+    // Picking someone ACTIVE instead clears the warning and enables Next.
+    await user.click(screen.getByText('bob@example.com'));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /^next$/i })).toBeEnabled(),
+    );
+    expect(screen.queryByText(/this user is suspended/i)).not.toBeInTheDocument();
+  });
+
+  it('BindStep — a PENDING user is still selectable (allow-listed, not refused)', async () => {
+    const user = userEvent.setup();
+    renderDialog({
+      client: makeMockClient({
+        listUsers: vi.fn().mockResolvedValue(
+          pageOf([
+            { id: 'u_alice', email: 'alice@example.com', type: 'HUMAN', status: 'PENDING' },
+          ]),
+        ),
+      }),
+    });
+    await user.type(screen.getByLabelText(/^key name$/i), 'good-name');
+    await user.click(screen.getByRole('button', { name: /^next$/i }));
+    await screen.findByText('alice@example.com');
+
+    await user.click(screen.getByText('alice@example.com'));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /^next$/i })).toBeEnabled(),
+    );
+    expect(screen.queryByText(/this user is suspended/i)).not.toBeInTheDocument();
   });
 
   it('BindStep — Enter key on a user row selects them (a11y)', async () => {
@@ -689,6 +757,33 @@ describe('<ScopedKeyCreateDialog>', () => {
     expect(screen.getByText(/tmpl-owner/i)).toBeInTheDocument();
   });
 
+  // A profile that EXISTS but is SUSPENDED used to render the identical
+  // green success alert (a real CheckCircleIcon, "status: suspended" beside
+  // it) and left Next enabled. Pins the fix: a warning
+  // alert instead, naming reactivation, Next stays disabled.
+  it('ContextStep — a suspended profile shows a warning (not success) and blocks Next', async () => {
+    const user = userEvent.setup();
+    renderDialog({
+      client: makeMockClient({
+        getAccessProfile: vi.fn().mockResolvedValue({
+          principalId: 'usr_u_alice',
+          status: 'suspended',
+          roleId: 'tmpl-owner',
+        }),
+      }),
+    });
+    await advancePastBind(user);
+    await user.click(screen.getByRole('combobox', { name: /^app context$/i }));
+    const listbox = await screen.findByRole('listbox');
+    await user.click(within(listbox).getByText(/^partner-api/));
+
+    expect(await screen.findByText(/this accessprofile is suspended/i)).toBeInTheDocument();
+    expect(screen.getByText(/PUT \/v1\/app-contexts\/partner-api\/profiles\/usr_u_alice/i))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/AccessProfile exists for this/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^next$/i })).toBeDisabled();
+  });
+
   it('ContextStep — a multi-role (roleIds) profile shows a role-composition detail, not a silently-omitted one', async () => {
     // roleId is absent for a 2+-role composition (0.41.0), and scopes is
     // also absent on that shape — without the fix, neither detail chip
@@ -766,6 +861,32 @@ describe('<ScopedKeyCreateDialog>', () => {
     expect(
       await screen.findByRole('dialog', { name: /create accessprofile/i }),
     ).toBeInTheDocument();
+  });
+
+  it('InlineProfileCreateDialog — never flags a typed data-scope namespace as unregistered while the registry is still loading', async () => {
+    // The S2 regression this guards: ScopeEditor's data-scope namespace
+    // field must not read "not registered" just because the tenant-scoped
+    // registry query (this dialog's own explicit-tenant caller) hasn't
+    // answered yet.
+    const user = userEvent.setup();
+    const notFound = new VectrosError({ message: 'not found', statusCode: 404 });
+    const client = makeMockClient({
+      getAccessProfile: vi.fn().mockRejectedValue(notFound),
+      listNamespaces: vi.fn(() => new Promise(() => undefined)),
+    });
+    renderDialog({ client });
+    await advancePastBind(user);
+    await user.click(screen.getByRole('combobox', { name: /^app context$/i }));
+    const listbox = await screen.findByRole('listbox');
+    await user.click(within(listbox).getByText(/^partner-api/));
+    await user.click(await screen.findByRole('button', { name: /create profile/i }));
+
+    const subDialog = await screen.findByRole('dialog', { name: /create accessprofile/i });
+    await user.click(within(subDialog).getByRole('button', { name: /row-level data filters/i }));
+    await user.click(within(subDialog).getByRole('button', { name: /add filter/i }));
+    await user.type(within(subDialog).getByRole('combobox', { name: /scope/i }), 'org');
+
+    expect(screen.queryByText(/not registered for this context/i)).not.toBeInTheDocument();
   });
 
   it('InlineProfileCreateDialog — submits createAccessProfile with the right body shape', async () => {

@@ -92,6 +92,7 @@ import type {
 import { useDeveloperApi } from '../../api/developerApi';
 import type { AppContextSummary } from '../../api/developerApi';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
+import { useNamespaceRegistry } from '../../lib/namespaceRegistry';
 import { RESERVED_VECTROS_ADMIN_CONTEXT_ID } from '../../lib/reservedContexts';
 import {
   ScopeEditor,
@@ -150,6 +151,30 @@ export function formatKeyNameError(code: KeyNameErrorCode, intl: IntlShape): str
 }
 
 // ---------------------------------------------------------------------------
+// The wizard used to gate "Next" on mere EXISTENCE of a bound user or access
+// profile, so a suspended one looked identical to an active one all the way
+// to the final step, where the create call's own refusal showed up as a
+// generic error. These two predicates let each earlier step react
+// immediately instead. This is a UX signal only — the server's own refusal
+// remains authoritative if either check here is ever wrong or stale.
+// ---------------------------------------------------------------------------
+
+/** Case-insensitive to match how the create endpoint itself reads this
+ *  field: undefined/null (a legacy row, or a shape the wire type doesn't
+ *  guarantee), ACTIVE, and PENDING (an outstanding invitation) are all fine
+ *  to bind; only SUSPENDED blocks. */
+export function isUserStatusMintable(status: string | null | undefined): boolean {
+  return status == null || status.toUpperCase() === 'ACTIVE' || status.toUpperCase() === 'PENDING';
+}
+
+/** The access-profile allow-list is narrower and case-sensitive: only the
+ *  literal lowercase `active` resolves — null or any other value, including
+ *  a differently-cased spelling, is treated as not usable. */
+export function isProfileStatusMintable(status: string | null | undefined): boolean {
+  return status === 'active';
+}
+
+// ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
 
@@ -189,6 +214,11 @@ export function ScopedKeyCreateDialog({
   // false on context change so a stale "true" from a previous selection
   // can't allow advance prematurely.
   const [profileExists, setProfileExists] = useState(false);
+  // SEPARATE from profileExists: a profile can exist and still not be usable
+  // (suspended). Existence alone used to be the whole gate, which was the
+  // bug — a suspended profile rendered a green "exists" check
+  // and Next stayed enabled. See ContextStep's onProfileResolved call site.
+  const [profileMintable, setProfileMintable] = useState(false);
   // Result of the createScopedKey call. ConfirmationStep distinguishes
   // by `result.rawKey != null` — fresh creates carry the raw secret
   // (shown ONCE), idempotent matches don't.
@@ -242,6 +272,7 @@ export function ScopedKeyCreateDialog({
       setBoundUser(null);
       setContextId('');
       setProfileExists(false);
+      setProfileMintable(false);
       setResult(null);
       submitMutation.reset();
     }
@@ -266,9 +297,9 @@ export function ScopedKeyCreateDialog({
       case 'basics':
         return nameErrorCode === null && env != null;
       case 'bind':
-        return boundUser !== null;
+        return boundUser !== null && isUserStatusMintable(boundUser.status);
       case 'context':
-        return contextId !== '' && profileExists;
+        return contextId !== '' && profileExists && profileMintable;
       case 'review':
         return !submitMutation.isPending;
       case 'confirmation':
@@ -340,6 +371,7 @@ export function ScopedKeyCreateDialog({
             env={env}
             tenantId={targetTenantId}
             onProfileResolved={setProfileExists}
+            onProfileMintableResolved={setProfileMintable}
           />
         )}
         {step === 'review' && (
@@ -529,7 +561,7 @@ function BindStep({ boundUser, onPickUser }: BindStepProps): React.JSX.Element {
   // starts returning it (were that ever to happen — today it structurally
   // never will, since the confined list this query backs never returns a
   // profile-less principal; see the module comment on `listConfinedUsers`
-  // in PartnerUserHandler for why), rather than assuming it never will.
+  // on the backend for why), rather than assuming it never will.
   const users = useMemo(() => {
     const serverUsers = usersQuery.data ?? [];
     const serverIds = new Set(serverUsers.map((u) => u.id).filter(Boolean));
@@ -558,6 +590,23 @@ function BindStep({ boundUser, onPickUser }: BindStepProps): React.JSX.Element {
       <Alert severity="info" sx={{ mb: 2 }}>
         <FormattedMessage id="keysWizard.bind.delegateMintNotice" />
       </Alert>
+      {/* The picker used to render nothing at all for a suspended user
+          (id/email/externalId only), so picking one and hitting Next five steps
+          later was the first the caller learned about it. Named here, at the
+          point of selection, with the reactivation remedy. */}
+      {boundUser !== null && !isUserStatusMintable(boundUser.status) && (
+        <Alert severity="warning" sx={{ mb: 2 }} role="status">
+          <Typography variant="body2" sx={{ fontWeight: 600, mb: 0.5 }}>
+            <FormattedMessage id="keysWizard.bind.userSuspended" />
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            <FormattedMessage
+              id="keysWizard.bind.userSuspendedDetail"
+              values={{ userId: boundUser.id ?? '' }}
+            />
+          </Typography>
+        </Alert>
+      )}
       <Tabs
         value={activeTab}
         onChange={(_evt, v: UserTypeFilter) => setActiveTab(v)}
@@ -673,12 +722,23 @@ function BindStep({ boundUser, onPickUser }: BindStepProps): React.JSX.Element {
                   },
                 }}
               >
-                <Typography
-                  variant="body2"
-                  sx={{ fontFamily: 'monospace', fontSize: 12, color: 'text.secondary' }}
-                >
-                  {u.id}
-                </Typography>
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <Typography
+                    variant="body2"
+                    sx={{ fontFamily: 'monospace', fontSize: 12, color: 'text.secondary' }}
+                  >
+                    {u.id}
+                  </Typography>
+                  {/* Surfaced at the picker, not just after selection. */}
+                  {!isUserStatusMintable(u.status) && (
+                    <Chip
+                      size="small"
+                      color="warning"
+                      label={<FormattedMessage id="keysWizard.bind.rowSuspendedChip" />}
+                      sx={{ fontSize: 10, height: 18, fontWeight: 600 }}
+                    />
+                  )}
+                </Stack>
                 <Stack direction="row" spacing={2} sx={{ mt: 0.5 }}>
                   {u.email && (
                     <Typography variant="caption" color="text.secondary">
@@ -894,6 +954,9 @@ interface ContextStepProps {
   readonly tenantId: string;
   /** Bubbles profile-existence up to the parent wizard's canAdvance gate. */
   readonly onProfileResolved: (exists: boolean) => void;
+  /** Bubbles profile USABILITY (exists AND active) separately from mere
+   *  existence — see this file's isProfileStatusMintable. */
+  readonly onProfileMintableResolved: (mintable: boolean) => void;
 }
 
 function ContextStep({
@@ -903,6 +966,7 @@ function ContextStep({
   env,
   tenantId,
   onProfileResolved,
+  onProfileMintableResolved,
 }: ContextStepProps): React.JSX.Element {
   const intl = useIntl();
   // The whole step operates in the env-selected tenant, so the enumerated
@@ -954,10 +1018,16 @@ function ContextStep({
   // Bubble profile state up. `data != null` means the profile resolved
   // to a real row (not the 404 → null path); pending + error states
   // keep the parent at profileExists=false so Next stays disabled.
+  //
+  // Mintable is a SEPARATE signal from existence: a suspended profile
+  // exists (so the "Create profile" prompt correctly stays hidden) but must
+  // not let Next advance. Splitting these is what closes the bug — before
+  // this fix "exists" was the whole gate.
   useEffect(() => {
     const exists = profileQuery.isSuccess && profileQuery.data != null;
     onProfileResolved(exists);
-  }, [profileQuery.isSuccess, profileQuery.data, onProfileResolved]);
+    onProfileMintableResolved(exists && isProfileStatusMintable(profileQuery.data?.status));
+  }, [profileQuery.isSuccess, profileQuery.data, onProfileResolved, onProfileMintableResolved]);
 
   return (
     <Stack spacing={3}>
@@ -1036,14 +1106,35 @@ function ContextStep({
           )}
 
           {profileQuery.isSuccess && profileQuery.data != null && (
-            <Alert severity="success" role="status">
+            // A profile that EXISTS but is not ACTIVE must not render as
+            // the same green "all good" card: before this fix a suspended profile
+            // rendered success + a real CheckCircleIcon, with "status: suspended"
+            // sitting right beside it, and Next stayed enabled regardless.
+            <Alert
+              severity={isProfileStatusMintable(profileQuery.data.status) ? 'success' : 'warning'}
+              role="status"
+            >
               <Typography
                 variant="body2"
                 sx={{ fontWeight: 600, mb: 0.5, display: 'flex', alignItems: 'center', gap: 0.5 }}
               >
-                <CheckCircleIcon fontSize="small" color="success" aria-hidden />
-                <FormattedMessage id="keysWizard.context.profileExists" />
+                {isProfileStatusMintable(profileQuery.data.status) ? (
+                  <>
+                    <CheckCircleIcon fontSize="small" color="success" aria-hidden />
+                    <FormattedMessage id="keysWizard.context.profileExists" />
+                  </>
+                ) : (
+                  <FormattedMessage id="keysWizard.context.profileSuspended" />
+                )}
               </Typography>
+              {!isProfileStatusMintable(profileQuery.data.status) && (
+                <Typography variant="caption" color="text.secondary" component="p" sx={{ mb: 1 }}>
+                  <FormattedMessage
+                    id="keysWizard.context.profileSuspendedDetail"
+                    values={{ contextId, principalId }}
+                  />
+                </Typography>
+              )}
               <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
                 {profileQuery.data.status && (
                   <Typography variant="caption" color="text.secondary">
@@ -1165,6 +1256,26 @@ function InlineProfileCreateDialog({
   const intl = useIntl();
   const [clauses, setClauses] = useState<ScopeClause[]>(() => [emptyClause()]);
 
+  // Registered namespaces this context can see — suggests namespace names
+  // in the ScopeEditor's data-scope field, same registry client the other
+  // ScopeEditor consumers (RoleEditor, ProfileEditor) use. `tenantId` here is
+  // the ENV-SELECTED tenant this dialog operates in (a prop, not necessarily
+  // the app's globally active one) — pass it explicitly, or the registry
+  // would fetch namespaces for the wrong tenant whenever they diverge.
+  const {
+    namespaces: registeredNamespaces,
+    isLoading: namespacesLoading,
+    isError: namespacesFailedToLoad,
+  } = useNamespaceRegistry(contextId, tenantId);
+  const namespaceSuggestions = useMemo(
+    () => registeredNamespaces.map((ns) => ns.namespace),
+    [registeredNamespaces],
+  );
+  // Only safe to flag a typed namespace "not registered" once the registry
+  // has actually resolved — see RoleEditor.tsx/ProfileEditor.tsx's own copy
+  // of this same gate.
+  const canFlagUnregisteredNamespace = !namespacesLoading && !namespacesFailedToLoad;
+
   const validationError = validateClauses(clauses);
   const validationMessage = validationError
     ? formatScopeClauseValidationError(validationError, intl)
@@ -1234,7 +1345,13 @@ function InlineProfileCreateDialog({
             }}
           />
         </Typography>
-        <ScopeEditor value={clauses} onChange={setClauses} disabled={createMutation.isPending} />
+        <ScopeEditor
+          value={clauses}
+          onChange={setClauses}
+          disabled={createMutation.isPending}
+          namespaceOptions={namespaceSuggestions}
+          canFlagUnregisteredNamespace={canFlagUnregisteredNamespace}
+        />
         {createMutation.isError && (
           <Box sx={{ mt: 2 }}>
             <ApiErrorAlert error={createMutation.error}>

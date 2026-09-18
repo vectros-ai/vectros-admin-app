@@ -17,6 +17,9 @@
 //   - Cursor pagination: the result is a `{ data, nextCursor }` page. "Load
 //     more" follows the cursor. We never silently drain or silently truncate —
 //     the operator sees exactly what has loaded and can ask for more.
+//   - Re-running: Refresh, or Fetch with unchanged filters, re-queries from the
+//     FIRST page (see `rerunFromFirstPage`). The log is append-only and the
+//     page is newest-first, so "show me the latest" is the first page.
 //
 // Coverage caveat (critical — see the standing info banner):
 //   Read-access logging is OPT-IN and off by default (per schema, with a
@@ -63,10 +66,11 @@ import {
   Tooltip,
   Typography,
 } from '@mui/material';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import SearchIcon from '@mui/icons-material/Search';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import { FormattedMessage, useIntl } from 'react-intl';
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { hashKey, useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiErrorAlert, LoadingBlock, SubmitButton } from '@vectros-ai/react';
 
 import { useActiveTenantId } from '../../auth';
@@ -236,6 +240,7 @@ function ActionChip({ action }: { action: string | undefined }): React.JSX.Eleme
 export function AccessLogPage(): React.JSX.Element {
   const intl = useIntl();
   const tenant = useActiveTenantId();
+  const queryClient = useQueryClient();
 
   const [pendingFilters, setPendingFilters] = useState<AccessLogFilters>(
     defaultPendingFilters,
@@ -277,8 +282,10 @@ export function AccessLogPage(): React.JSX.Element {
   // Cursor-paginated query. Keyed on the applied filters; each page follows the
   // previous page's `nextCursor` via `startFrom`. The bearer is minted for the
   // applied context so the query passes the server's context-binding check.
+  const logQueryKeyFor = (filters: AccessLogFilters | null) => ['accessLog', tenant, filters] as const;
+  const logQueryKey = logQueryKeyFor(appliedFilters);
   const logQuery = useInfiniteQuery<ReadAccessLogPage>({
-    queryKey: ['accessLog', tenant, appliedFilters] as const,
+    queryKey: logQueryKey,
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) => {
       if (appliedFilters === null) {
@@ -293,6 +300,16 @@ export function AccessLogPage(): React.JSX.Element {
     },
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     enabled: appliedFilters !== null,
+    // react-query's AUTOMATIC refetches re-fetch every loaded page, exactly like
+    // `refetch()`, and two of them would re-walk every read the operator paged
+    // through without asking: returning to a stale cached filter set (a
+    // one-control toggle off and on), and a network reconnect. So a result set
+    // nobody is showing is dropped at once (returning to it reads page one,
+    // once), and nothing refetches on reconnect or focus. An explicit re-run goes
+    // through `rerunFromFirstPage`.
+    gcTime: 0,
+    refetchOnReconnect: false,
+    refetchOnWindowFocus: false,
   });
 
   // Flatten the loaded pages. `data` is undefined until the first page resolves.
@@ -335,8 +352,28 @@ export function AccessLogPage(): React.JSX.Element {
     );
   };
 
+  /**
+   * Re-run the applied query from its FIRST page. Not `refetch()`: on an
+   * infinite query that re-fetches every page already loaded, so an operator
+   * who had clicked "Load more" a few times would silently re-issue each of
+   * those billed reads — the silent drain this page otherwise refuses. Rows
+   * are newest-first, so the first page is where any newer disclosure lands.
+   */
+  const rerunFromFirstPage = (): void => {
+    void queryClient.resetQueries({ queryKey: logQueryKey, exact: true });
+  };
+
   const handleApply = (): void => {
     if (applyDisabled) return;
+    // Fetch with unchanged filters leaves the query key unchanged, so the
+    // cached pages would be served and no request issued. Re-run instead.
+    // Compared as the key itself, so a filter field added later can never be
+    // missed by the comparison. Dropped while any fetch is in flight, "Load
+    // more" included: resetting would cancel a read that was already sent.
+    if (appliedFilters !== null && hashKey(logQueryKeyFor(pendingFilters)) === hashKey(logQueryKey)) {
+      if (!logQuery.isFetching) rerunFromFirstPage();
+      return;
+    }
     setAppliedFilters(pendingFilters);
   };
 
@@ -534,6 +571,19 @@ export function AccessLogPage(): React.JSX.Element {
                 <FormattedMessage id="accessLog.fetchCta" />
               )}
             </SubmitButton>
+
+            {/* Lives in the always-rendered filter row, so it is reachable from
+                the results, empty, and error states alike. Re-runs exactly the
+                applied query, never an un-fetched edit in the form. */}
+            <Button
+              variant="outlined"
+              onClick={rerunFromFirstPage}
+              disabled={appliedFilters === null || logQuery.isFetching}
+              startIcon={<RefreshIcon />}
+              sx={{ height: 40 }}
+            >
+              <FormattedMessage id="accessLog.refresh" />
+            </Button>
           </Stack>
 
           {/* Validation + result summary, on their own line so they never

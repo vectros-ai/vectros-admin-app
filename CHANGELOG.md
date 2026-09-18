@@ -3,6 +3,96 @@
 All notable changes to the Vectros Admin App are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.21.1 — 2026-09-17
+
+### Added
+
+- **New Trigger Failures page.** Shows failed automations across your whole account — every app
+  context, not one at a time — with filters for context, rule, category, retryable, and a time
+  window. Results are newest-first within a context; contexts are walked in a fixed order rather
+  than merged into one account-wide timeline, and any context this page couldn't read is named
+  explicitly in a warning banner rather than silently missing from the results.
+- **New Entities tab on an app context's detail page.** A read-only, per-context browser over the
+  identity-entity surface: it lists the namespaces this context can see — tenant-wide namespaces
+  plus this context's own, with the context's own registration taking precedence over a
+  same-named tenant-wide one — and lets you open any entity to see its schema-rendered payload.
+  Namespaces aren't built-ins and nothing is pre-registered, so a fresh app context shows an empty
+  state explaining what a namespace is and how one gets registered, rather than an empty table
+  that reads as broken. Creating or editing entities and namespaces isn't available from this
+  console yet.
+- **Activity Logs can now filter on `scripts` and `triggers`.** The server's log-filter allow-list
+  gained both resources; this app's dropdown previously stopped one release short of it, so
+  0.43.0's script-push/execute and trigger-rule traffic was logged but unfilterable from here.
+
+### Fixed
+
+- **Removed the org/client "built-in" treatment from scope authoring.** org and client are
+  ordinary namespace registrations, not built-ins: a fresh tenant has neither. The role and
+  profile scope editors always offered org/client as the only namespace suggestions and never a
+  tenant's actually-registered ones; identity overrides had dedicated Org ID / Client ID fields
+  that refused org/client as an ordinary "additional scope" row, which — combined with the
+  backend accepting any namespace as a legal free string — meant an override for a namespace
+  nobody registered saved silently, with no anchoring and no warning. Namespace fields now suggest
+  this context's actually-registered namespaces (tenant-wide plus this context's own) and mark an
+  unregistered but still-savable name; org and client are ordinary rows in the identity-overrides
+  "additional scopes" list, with no dedicated fields. Existing `scope:org` / `scope:client` data
+  loads and saves exactly as before.
+- **The scoped-key wizard no longer lets you bind to a suspended user or a suspended access
+  profile without warning.** The bind and app-context steps used to enable "Next" the moment a
+  user was picked or a profile existed at all, so a suspended user or profile looked identical to
+  an active one right up until the final step's generic error. Both steps now name the problem
+  where you can act on it: a suspended user is labeled in the picker and blocks advancing with a
+  reactivation pointer; a suspended access profile shows a warning instead of the green
+  "AccessProfile exists" card, with the same guidance.
+
+- **An admin whose own role/profile authority is restricted to specific composable roles
+  (`assignable_roles`) can once again author a new scope clause.** Every clause editor — Roles,
+  Profiles, and the scoped-key wizard — omitted the field entirely, and absent means the OPPOSITE
+  thing at authoring that it means at enforcement: unrestricted, not "no restriction requested."
+  For an admin whose own covering clause carries a restriction, that made every new clause a
+  guaranteed refusal — not a missing convenience, a lockout. Each editor now offers a picker for
+  which named roles a clause may compose into a delegated access profile, sourced from the
+  context's own role list where one is already loaded. A clause that already carried
+  `assignable_roles` from a prior save was never affected — the field always round-tripped
+  through edits untouched; this closes the gap for authoring one in the first place, whether on
+  a brand-new clause or one that had never carried a restriction before.
+
+- **Fetching again with unchanged filters now re-runs the query.** Disclosures served the
+  previous result from cache and sent no request, so newer activity could not be pulled in by
+  fetching again. It now re-runs, starting from the newest page rather than
+  re-issuing every page already loaded, and gains a Refresh button on its results, empty, and error
+  states. Switching a Disclosures filter off and back on, or the network reconnecting, no longer
+  re-reads every page already loaded either. On Activity Logs, Refresh already re-ran the query;
+  Fetch with unchanged filters now does too.
+
+- **Four source comments carried repo-relative internal paths** (the README's project-layout
+  diagram, and `src/lib/accessQueryKeys.ts` / `src/lib/useBeforeNavigate.ts` / `vite.config.ts`)
+  that resolve to nothing in this app's own public mirror — the mirrored tree root IS the app, so
+  a path prefixed with the monorepo location is a broken link there even before considering it as
+  an internal reference. Reworded all four to state the same guidance without the monorepo-relative
+  prefix; no behavioral change.
+
+- **Three more source comments named internal backend classes by name** (in `ScopeEditor.test.tsx`,
+  `LogsPage.test.tsx`, `ScopedKeyCreateDialog.tsx`), found on a later sweep with a wider scan.
+  Reworded to describe the surface/mechanism without the backend class name. No behavioral change.
+
+- **One more internal path, found on the same sweep**: `vite.config.ts`'s dev-server comment named
+  a sibling internal tool by monorepo-relative path — that tool isn't source-mirrored at all, so
+  the path is a broken/leaking reference either way. Reworded to name it
+  descriptively. No behavioral change.
+- **A test fixture in the access-log page's own test suite used the retired per-row
+  `subjectType`/`subjectId` shape.** The page itself never read those fields, so nothing
+  user-visible was affected; this only restores a clean build. No behavioral change.
+
+- **README correction: the platform now recognizes six named capabilities, not five.** 0.44.0
+  added `trigger-control-plane-grant`, alongside 0.42.0's `delegate-principal-stamp`; the
+  README's capability-support row still said "five" and didn't name the new one among those
+  these editors don't offer yet. No behavior changed — description-only.
+
+### Changed
+
+- **Repinned to `@vectros-ai/sdk` 0.44.0.** No behavior change from the pin bump alone.
+
 ## 0.21.0 — 2026-09-07
 
 Adoption of the platform's 0.43.0 API surface.

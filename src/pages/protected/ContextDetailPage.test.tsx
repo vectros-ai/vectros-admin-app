@@ -105,6 +105,8 @@ interface MockOverrides {
   getAppContext?: ReturnType<typeof vi.fn>;
   listRoles?: ReturnType<typeof vi.fn>;
   listAccessProfiles?: ReturnType<typeof vi.fn>;
+  /** Only exercised by the Entities-tab tests below (default 'roles' tab never mounts it). */
+  identity?: { listNamespaces?: ReturnType<typeof vi.fn>; listEntities?: ReturnType<typeof vi.fn> };
 }
 
 function makeMockClient(o: MockOverrides = {}) {
@@ -117,6 +119,10 @@ function makeMockClient(o: MockOverrides = {}) {
       listAccessProfiles:
         o.listAccessProfiles ??
         vi.fn().mockResolvedValue(pageOf([PROFILE_ALICE_ROLED, PROFILE_BOT_INLINE])),
+    },
+    identity: {
+      listNamespaces: o.identity?.listNamespaces ?? vi.fn().mockResolvedValue(pageOf([])),
+      listEntities: o.identity?.listEntities ?? vi.fn().mockResolvedValue(pageOf([])),
     },
   };
 }
@@ -229,6 +235,23 @@ describe('ContextDetailPage', () => {
     const table = await screen.findByRole('table', { name: /access profiles/i });
     expect(table).toBeInTheDocument();
     expect(screen.queryByRole('table', { name: /^roles$/i })).not.toBeInTheDocument();
+  });
+
+  it('renders the Entities tab when ?tab=entities is set in the URL', async () => {
+    renderPage({ initialUrl: '/access/contexts/engineering?tab=entities' });
+    expect(await screen.findByText(/no entity namespaces registered here yet/i)).toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: /^roles$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: /access profiles/i })).not.toBeInTheDocument();
+  });
+
+  it('switching to the Entities tab updates ?tab= in the URL and mounts it', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByRole('table', { name: /roles/i });
+
+    await user.click(screen.getByRole('tab', { name: /^entities$/i }));
+    expect(screen.getByTestId('probe-search')).toHaveTextContent('tab=entities');
+    expect(await screen.findByText(/no entity namespaces registered here yet/i)).toBeInTheDocument();
   });
 
   it('switching tabs updates ?tab= in the URL', async () => {

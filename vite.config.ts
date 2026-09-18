@@ -54,7 +54,7 @@ function versionManifest(): Plugin {
 // ---------------------------------------------------------------------------
 // Vite + Vitest configuration for the Vectros Admin App.
 //
-// Dev server pinned to port 3001 so it coexists with ui/developer-portal on
+// Dev server pinned to port 3001 so it coexists with the developer portal on
 // 3000 during local dev. `strictPort: true` makes a port collision a hard
 // failure (instead of silently incrementing) so developers notice + fix it
 // rather than launching against an unexpected URL the Cognito allow-list
@@ -85,7 +85,7 @@ function versionManifest(): Plugin {
 //
 // Maintenance: when a new icon import is added, list it here. The icon
 // names below are derived from `grep -rh "from '@mui/icons-material/'"
-// ui/admin-app/src`. A future ergonomic fix (Vite ≥ 7? or a custom
+// src`. A future ergonomic fix (Vite ≥ 7? or a custom
 // plugin) could glob-include `@mui/icons-material/*` automatically;
 // not worth the abstraction for v1.
 // ---------------------------------------------------------------------------

@@ -67,7 +67,7 @@ import {
   countDataScopeNamespaces,
 } from '../lib/dataScope';
 import type { DataScopeDimension } from '../lib/dataScope';
-import { MAX_SCOPE_NAMESPACES, SCOPE_BUILTIN_NAMESPACES } from '../lib/scopeNamespace';
+import { MAX_SCOPE_NAMESPACES } from '../lib/scopeNamespace';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -104,35 +104,67 @@ export interface ScopeClause {
    * roleIds this clause may compose into a delegated access profile (0.43.0) —
    * a designated-role allow-list, orthogonal to `data_scope`/`allowed_actions`:
    * it narrows WHICH named roles this clause's authority may hand out, not how
-   * much data it reaches.
+   * much data it reaches. Authored via {@link AssignableRolesSection} below.
    *
    * **Absent means two opposite things, and conflating them is the trap.** At
    * ENFORCEMENT, absent is "no restriction" — the permissive default. At
    * AUTHORING it is the MAXIMAL value: a caller whose own covering clause
    * carries a restriction may not write a clause that omits one, because
    * claiming "unrestricted" is strictly wider than any list they could offer.
-   * An EMPTY list is rejected outright on both paths.
+   * An EMPTY list is rejected outright on both paths, so the picker never emits
+   * `[]` — an empty selection maps to `undefined` (omit the field), same as
+   * {@link emptyClause}'s starting point.
    *
-   * So this field is carried through only when the clause actually has one, and
-   * is never defaulted to `[]` the way {@link granted_capabilities} is.
+   * ⚠️ **The UI cannot tell whether the SIGNED-IN admin's own covering clause
+   * is itself restricted** — that fact isn't part of the resolved-scope shape
+   * `useScopeGate` exposes today, only the actions/identity it grants. So this
+   * editor can't pre-fill the "right" list for a restricted admin, or warn
+   * proactively that an empty selection will be refused for them specifically
+   * — it can only make the inversion legible in copy (see
+   * `scopeEditor.assignableRolesHelp`) and let the platform's own 403 surface
+   * for the admin it actually affects. An unrestricted admin — the ordinary
+   * shape — is never affected by any of this.
    *
-   * ⚠️ **This editor cannot AUTHOR the list, and that is a live limitation, not
-   * just a missing convenience.** Because {@link emptyClause} emits no
-   * restriction, an admin whose OWN covering clause carries one cannot create a
-   * new clause here at all — every save is refused by the authoring rule above.
-   * Editing an existing restricted clause still works, since the field rides
-   * through untouched, which is what makes the failure look arbitrary. An
-   * admin whose covering clause is unrestricted — the ordinary shape — is
-   * unaffected.
-   *
-   * What this editor DOES guarantee is that the list survives load → save:
-   * dropping it would silently REMOVE a restriction a tenant deliberately opted
-   * into, handing the delegate back the unrestricted role-composing power the
-   * field exists to close. That is the same round-trip contract
-   * `granted_capabilities` carries, in the more dangerous direction — a silent
-   * WIDENING rather than a silent narrowing.
+   * The list is carried through untouched on every load → save that doesn't
+   * touch it: dropping it would silently REMOVE a restriction a tenant
+   * deliberately opted into, handing the delegate back the unrestricted
+   * role-composing power the field exists to close. That is the same
+   * round-trip contract `granted_capabilities` carries, in the more dangerous
+   * direction — a silent WIDENING rather than a silent narrowing.
    */
   readonly assignable_roles?: readonly string[];
+}
+
+/**
+ * roleId format the platform validates against: a lowercase letter first,
+ * then lowercase letters/digits/hyphens, 3–31 characters total — the same
+ * pattern a role's own id uses elsewhere in this app (see `RoleEditor.tsx`'s
+ * own copy of this constant). Mirrored here rather than imported (the
+ * platform's own copy of this regex is Java) so a freeSolo-typed entry can be
+ * rejected client-side before a save round-trip does it server-side. Not
+ * mechanically pinned to the platform's copy — a drift would surface as a
+ * client-side rejection or acceptance disagreeing with the server's own,
+ * which is a UX bug, not a security one (the server re-validates regardless).
+ */
+export const ROLE_ID_PATTERN = /^[a-z][a-z0-9-]{2,30}$/;
+
+/**
+ * Structural cap on {@link ScopeClause.assignable_roles}'s size — mirrors the
+ * platform's own limit on the same field. Validated client-side so a picker
+ * that's grown past the limit is caught before save rather than at it.
+ */
+export const MAX_ASSIGNABLE_ROLES = 20;
+
+/**
+ * A role this editor can offer as an `assignable_roles` suggestion — the same
+ * (roleId, name) pair {@link ScopeEditorProps.roleOptions} callers already have
+ * on hand from their own roles-list query (e.g. `RoleResponse`). Deliberately
+ * NOT the SDK's own response type: this keeps the picker decoupled from the SDK
+ * shape, and a `RoleResponse[]` is structurally assignable here regardless.
+ */
+export interface AssignableRoleOption {
+  readonly roleId: string;
+  readonly name?: string;
 }
 
 /**
@@ -167,6 +199,16 @@ export type ScopeClauseValidationError =
       readonly code: 'dataScopeTooMany';
       readonly clauseIndex: number;
       readonly max: number;
+    }
+  | {
+      readonly code: 'assignableRolesInvalid';
+      readonly clauseIndex: number;
+      readonly roleId: string;
+    }
+  | {
+      readonly code: 'assignableRolesTooMany';
+      readonly clauseIndex: number;
+      readonly max: number;
     };
 
 interface ScopeEditorProps {
@@ -176,6 +218,39 @@ interface ScopeEditorProps {
   readonly onChange: (next: ScopeClause[]) => void;
   /** Disables every editable control (no readonly props on existing rows). */
   readonly disabled?: boolean;
+  /**
+   * Roles to suggest in the `assignable_roles` picker — typically a context's
+   * roles list a caller already has loaded for its own purposes (e.g.
+   * `ProfileEditor`'s role-composition Autocomplete). Optional: the picker is a
+   * freeSolo field regardless, so a caller with no roles list handy (e.g. the
+   * scoped-key creation wizard, which has no context-roles query of its own)
+   * still gets a fully working — just suggestion-free — picker.
+   */
+  readonly roleOptions?: readonly AssignableRoleOption[];
+  /**
+   * Namespace names to suggest in the data-scope namespace field — typically
+   * the caller's own registry query (`lib/namespaceRegistry.ts`'s
+   * tenant-wide ∪ context-own merge, ALL registered namespaces, not only
+   * entity-backed ones). Optional and freeSolo regardless: a caller with no
+   * registry query handy (or one still loading) still gets a working,
+   * just suggestion-free, field — the platform accepts an unregistered
+   * namespace as a legal free string, so this is never a gate,
+   * only a suggestion list. `org`/`client` are ordinary entries in whatever
+   * list the caller passes, never assumed here.
+   */
+  readonly namespaceOptions?: readonly string[];
+  /**
+   * Whether it's SAFE to mark a typed namespace "not registered" against
+   * `namespaceOptions` — defaults to `false`. `namespaceOptions` reads
+   * identically empty while the caller's registry query is still loading,
+   * has failed, or has genuinely resolved to nothing registered; this
+   * component has no visibility into which of those is true, so a caller
+   * must say so explicitly once its OWN loading/error state has cleared
+   * (mirrors `ProfileEditor`'s `canFlagUnregisteredNamespace`). Passing
+   * `namespaceOptions` without this stays a pure, ungated suggestion list —
+   * exactly as before this flag existed.
+   */
+  readonly canFlagUnregisteredNamespace?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -388,15 +463,18 @@ export function serializeClauseActions(model: ClauseActionModel): string[] {
  */
 export function emptyClause(): ScopeClause {
   // `assignable_roles` is deliberately ABSENT rather than `[]`: an empty list is
-  // rejected outright, and there is no picker to populate a real one.
+  // rejected outright by the platform (see ScopeClause.assignable_roles), and
+  // the picker below never emits `[]` either — an empty selection maps back to
+  // "field omitted", the same state this function starts from.
   //
-  // Note what absent COSTS here, rather than reading it as the safe default —
-  // see ScopeClause.assignable_roles. A caller whose own covering clause is
-  // restricted cannot author a clause that omits the field, so for that admin
-  // every clause this function produces is refused at save. Fixing that means
-  // authoring UI, not a different default: no value this function could invent
-  // is correct, since the right list is the caller's own and this component is
-  // not told what that is.
+  // Note what absent COSTS here, rather than reading it as the safe default. A
+  // caller whose own covering clause is restricted cannot save a clause that
+  // omits the field, so an unedited new clause from a restricted admin is still
+  // refused at save until they explicitly pick at least one role in
+  // AssignableRolesSection — no default this function could invent would be
+  // correct, since the right list is the caller's own and this function isn't
+  // told what that is (see the field's own javadoc for why the UI can't fill it
+  // in automatically either).
   return { allowed_actions: [], data_scope: {}, granted_capabilities: [] };
 }
 
@@ -529,6 +607,25 @@ export function validateClauses(
           return { code: 'dataScopeNamespace', clauseIndex: i };
       }
     }
+    // assignable_roles: format + count, mirroring the platform's own
+    // validation order for this field (it runs last there too).
+    // No duplicate check here, unlike allowed_actions/data_scope above:
+    // AssignableRolesSection de-dupes on every change (see its own comment),
+    // so nothing this editor can produce ever reaches this validator already
+    // holding one — a duplicate can only arrive via a hand-built ScopeClause
+    // (a test, a non-UI caller), which is exactly what
+    // `assignableRolesInvalid`'s malformed-shape tests below exist to catch
+    // via the format check instead of a separate duplicate one.
+    if (c.assignable_roles && c.assignable_roles.length > 0) {
+      if (c.assignable_roles.length > MAX_ASSIGNABLE_ROLES) {
+        return { code: 'assignableRolesTooMany', clauseIndex: i, max: MAX_ASSIGNABLE_ROLES };
+      }
+      for (const rid of c.assignable_roles) {
+        if (!rid || !ROLE_ID_PATTERN.test(rid)) {
+          return { code: 'assignableRolesInvalid', clauseIndex: i, roleId: rid ?? '' };
+        }
+      }
+    }
   }
   return null;
 }
@@ -580,6 +677,16 @@ export function formatScopeClauseValidationError(
         { id: 'scopeEditor.validationDataScopeTooMany' },
         { clauseN: error.clauseIndex + 1, max: error.max },
       );
+    case 'assignableRolesInvalid':
+      return intl.formatMessage(
+        { id: 'scopeEditor.validationAssignableRolesInvalid' },
+        { clauseN: error.clauseIndex + 1, roleId: error.roleId },
+      );
+    case 'assignableRolesTooMany':
+      return intl.formatMessage(
+        { id: 'scopeEditor.validationAssignableRolesTooMany' },
+        { clauseN: error.clauseIndex + 1, max: error.max },
+      );
   }
 }
 
@@ -595,6 +702,9 @@ export const ScopeEditor = memo(function ScopeEditor({
   value,
   onChange,
   disabled = false,
+  roleOptions,
+  namespaceOptions,
+  canFlagUnregisteredNamespace = false,
 }: ScopeEditorProps): React.JSX.Element {
   const intl = useIntl();
   const clauses = value ?? [];
@@ -613,6 +723,34 @@ export const ScopeEditor = memo(function ScopeEditor({
   const setClauseCapabilities = (idx: number, capabilities: readonly string[]): void => {
     onChange(
       clauses.map((c, i) => (i === idx ? { ...c, granted_capabilities: capabilities } : c)),
+    );
+  };
+
+  // `undefined` (not `[]`) removes the restriction. Rebuilding the
+  // clause explicitly, rather than `{ ...c, assignable_roles: roles }`, is what
+  // keeps that possible: a spread can only ADD/overwrite a key, never omit one,
+  // so an `undefined` value would otherwise be stored as the literal `undefined`
+  // — which is not the same as the key being absent for a JSON-serializing save
+  // call, and which `toWireScopeClauses`'s own `.length ?` truthiness check
+  // exists specifically to not have to special-case.
+  const setClauseAssignableRoles = (idx: number, roles: readonly string[] | undefined): void => {
+    onChange(
+      clauses.map((c, i) => {
+        if (i !== idx) return c;
+        const { allowed_actions, data_scope, granted_capabilities } = c;
+        return {
+          allowed_actions,
+          data_scope,
+          // `granted_capabilities` defaults to `[]` here the same way
+          // CapabilitiesSection's own prop does — every clause this editor
+          // produces already carries a real array (emptyClause/
+          // normalizeScopes both default it), so this is just satisfying
+          // `exactOptionalPropertyTypes` for the rebuilt object below, not a
+          // behavior change.
+          granted_capabilities: granted_capabilities ?? [],
+          ...(roles !== undefined ? { assignable_roles: roles } : {}),
+        };
+      }),
     );
   };
 
@@ -650,9 +788,13 @@ export const ScopeEditor = memo(function ScopeEditor({
           clause={clause}
           disabled={disabled}
           showRemove={clauses.length > 1}
+          roleOptions={roleOptions}
+          namespaceOptions={namespaceOptions}
+          canFlagUnregisteredNamespace={canFlagUnregisteredNamespace}
           onChangeActions={(actions) => setClauseActions(idx, actions)}
           onChangeDataScope={(ds) => setClauseDataScope(idx, ds)}
           onChangeCapabilities={(caps) => setClauseCapabilities(idx, caps)}
+          onChangeAssignableRoles={(roles) => setClauseAssignableRoles(idx, roles)}
           onRemove={() => removeClause(idx)}
         />
       ))}
@@ -698,18 +840,26 @@ function ClauseCard({
   clause,
   disabled,
   showRemove,
+  roleOptions,
+  namespaceOptions,
+  canFlagUnregisteredNamespace,
   onChangeActions,
   onChangeDataScope,
   onChangeCapabilities,
+  onChangeAssignableRoles,
   onRemove,
 }: {
   index: number;
   clause: ScopeClause;
   disabled: boolean;
   showRemove: boolean;
+  roleOptions: readonly AssignableRoleOption[] | undefined;
+  namespaceOptions: readonly string[] | undefined;
+  canFlagUnregisteredNamespace: boolean;
   onChangeActions: (actions: string[]) => void;
   onChangeDataScope: (dataScope: Record<string, unknown>) => void;
   onChangeCapabilities: (capabilities: readonly string[]) => void;
+  onChangeAssignableRoles: (roles: readonly string[] | undefined) => void;
   onRemove: () => void;
 }): React.JSX.Element {
   const intl = useIntl();
@@ -854,6 +1004,8 @@ function ClauseCard({
       <DataScopeSection
         dataScope={clause.data_scope as Record<string, unknown> | undefined}
         disabled={disabled}
+        namespaceOptions={namespaceOptions ?? []}
+        canFlagUnregisteredNamespace={canFlagUnregisteredNamespace}
         onChange={onChangeDataScope}
       />
 
@@ -861,6 +1013,13 @@ function ClauseCard({
         capabilities={clause.granted_capabilities ?? []}
         disabled={disabled}
         onChange={onChangeCapabilities}
+      />
+
+      <AssignableRolesSection
+        assignableRoles={clause.assignable_roles}
+        roleOptions={roleOptions}
+        disabled={disabled}
+        onChange={onChangeAssignableRoles}
       />
     </Paper>
   );
@@ -954,6 +1113,102 @@ function CapabilitiesSection({
 }
 
 // ---------------------------------------------------------------------------
+// AssignableRolesSection — per-clause `assignable_roles` authoring (0.43.0).
+// A freeSolo multi-value picker, same shape as the "Advanced" actions
+// field above: `roleOptions` (when the caller has a roles list handy) makes
+// existing roleIds discoverable, but typing an arbitrary roleId always works,
+// since a clause can legitimately name a role this session can't itself list
+// (e.g. one in a context the picker's own roles query isn't scoped to).
+// ---------------------------------------------------------------------------
+
+function AssignableRolesSection({
+  assignableRoles,
+  roleOptions,
+  disabled,
+  onChange,
+}: {
+  assignableRoles: readonly string[] | undefined;
+  roleOptions: readonly AssignableRoleOption[] | undefined;
+  disabled: boolean;
+  onChange: (roles: readonly string[] | undefined) => void;
+}): React.JSX.Element {
+  const intl = useIntl();
+  const current = assignableRoles ?? [];
+
+  const roleNameById = new Map((roleOptions ?? []).map((r) => [r.roleId, r.name]));
+  // Options exclude roleIds already picked — same "don't re-offer what's
+  // already there" convention the Advanced actions field's freeSolo behavior
+  // gives for free; here it's explicit because we're supplying a real options
+  // list rather than leaving it empty.
+  const suggestions = (roleOptions ?? [])
+    .map((r) => r.roleId)
+    .filter((id) => !current.includes(id));
+
+  const setRoles = (next: readonly string[]): void => {
+    // De-dupe defensively (freeSolo text entry can retype an id already
+    // picked) while preserving first-seen order, so `validateClauses` never
+    // has to reject an authored duplicate — the picker just never produces
+    // one. An all-removed selection maps to `undefined` (field omitted), not
+    // `[]` — see ScopeClause.assignable_roles: the platform rejects an
+    // authored empty list outright.
+    const deduped: string[] = [];
+    for (const raw of next) {
+      const rid = raw.trim();
+      if (rid !== '' && !deduped.includes(rid)) deduped.push(rid);
+    }
+    onChange(deduped.length > 0 ? deduped : undefined);
+  };
+
+  return (
+    <Accordion
+      disableGutters
+      elevation={0}
+      defaultExpanded={current.length > 0}
+      sx={{ mt: 1.5, '&:before': { display: 'none' }, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}
+    >
+      <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+        <Typography variant="caption" sx={{ fontWeight: 600 }}>
+          <FormattedMessage id="scopeEditor.assignableRolesTitle" />
+        </Typography>
+      </AccordionSummary>
+      <AccordionDetails>
+        <Typography variant="caption" color="text.secondary" component="p" sx={{ mb: 1.5 }}>
+          <FormattedMessage id="scopeEditor.assignableRolesHelp" />
+        </Typography>
+        <Autocomplete
+          multiple
+          freeSolo
+          disabled={disabled}
+          options={suggestions}
+          value={[...current]}
+          onChange={(_evt, v) => setRoles(v as string[])}
+          getOptionLabel={(opt) => {
+            const name = roleNameById.get(opt);
+            return name ? `${name} (${opt})` : opt;
+          }}
+          renderInput={(params) => (
+            <TextField
+              {...params}
+              label={intl.formatMessage({ id: 'scopeEditor.assignableRolesLabel' })}
+              placeholder={
+                current.length === 0
+                  ? intl.formatMessage({ id: 'scopeEditor.assignableRolesPlaceholder' })
+                  : undefined
+              }
+              size="small"
+              inputProps={{
+                ...params.inputProps,
+                spellCheck: false,
+              }}
+            />
+          )}
+        />
+      </AccordionDetails>
+    </Accordion>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // DataScopeSection — per-clause row-level ownership filters (`data_scope`).
 //
 // Each dimension is a `scope:<namespace>` allow-list; the null opt-in ALSO
@@ -979,8 +1234,8 @@ function CapabilitiesSection({
  * author has to already know to type.
  *
  * The namespace-scoped forms are offered for THIS row's own namespace AND for
- * `otherNamespaces` — the built-in namespaces plus the clause's other
- * authored dimensions. This is not redundancy: the feature's own canonical
+ * `otherNamespaces` — the registered namespaces the caller suggests plus the
+ * clause's other authored dimensions. This is not redundancy: the feature's own canonical
  * use case is cross-dimension (0.38.0's release note: *"a credential confined
  * to an organization can work with the clients under it"* — that's the
  * `client` DIMENSION matched by an `org`-scoped matcher). Suggesting only the
@@ -1009,10 +1264,14 @@ function placementMatcherSuggestions(
 function DataScopeSection({
   dataScope,
   disabled,
+  namespaceOptions,
+  canFlagUnregisteredNamespace,
   onChange,
 }: {
   dataScope: Record<string, unknown> | undefined;
   disabled: boolean;
+  namespaceOptions: readonly string[];
+  canFlagUnregisteredNamespace: boolean;
   onChange: (dataScope: Record<string, unknown>) => void;
 }): React.JSX.Element {
   const intl = useIntl();
@@ -1081,7 +1340,14 @@ function DataScopeSection({
           <FormattedMessage id="scopeEditor.dataScopeHelp" />
         </Typography>
         <Stack spacing={2}>
-          {dims.map((dim, i) => (
+          {dims.map((dim, i) => {
+            const trimmedNs = dim.namespace.trim();
+            const namespaceNotRegistered =
+              canFlagUnregisteredNamespace &&
+              trimmedNs !== '' &&
+              trimmedNs !== DIMENSION_WILDCARD &&
+              !namespaceOptions.includes(trimmedNs);
+            return (
             <Stack
               key={i}
               direction={{ xs: 'column', sm: 'row' }}
@@ -1091,7 +1357,7 @@ function DataScopeSection({
               <Autocomplete
                 freeSolo
                 disabled={disabled}
-                options={[...SCOPE_BUILTIN_NAMESPACES, DIMENSION_WILDCARD]}
+                options={[...namespaceOptions, DIMENSION_WILDCARD]}
                 value={dim.namespace}
                 onInputChange={(_evt, v) => updateDimension(i, { namespace: v })}
                 sx={{ width: { xs: '100%', sm: 200 } }}
@@ -1102,6 +1368,11 @@ function DataScopeSection({
                     placeholder={intl.formatMessage({
                       id: 'scopeEditor.dataScopeNamespacePlaceholder',
                     })}
+                    helperText={
+                      namespaceNotRegistered
+                        ? intl.formatMessage({ id: 'scopeEditor.dataScopeNamespaceUnregistered' })
+                        : undefined
+                    }
                     size="small"
                     inputProps={{
                       ...params.inputProps,
@@ -1118,7 +1389,7 @@ function DataScopeSection({
                   autoSelect
                   disabled={disabled}
                   options={placementMatcherSuggestions(dim.namespace, [
-                    ...SCOPE_BUILTIN_NAMESPACES,
+                    ...namespaceOptions,
                     ...dims.filter((_, j) => j !== i).map((d) => d.namespace),
                   ])}
                   value={[...dim.values]}
@@ -1165,7 +1436,8 @@ function DataScopeSection({
                 </span>
               </Tooltip>
             </Stack>
-          ))}
+            );
+          })}
         </Stack>
         <Button
           size="small"

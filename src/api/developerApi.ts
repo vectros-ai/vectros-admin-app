@@ -135,6 +135,71 @@ export interface AccountOwnerTransferResult {
 }
 
 /**
+ * One trigger execution that failed. Same field set the SDK's `GET /v1/trigger-failures` and the
+ * `trigger.failed` webhook envelope carry, plus `contextId` — this route is account-wide, so which
+ * context a failure came from is part of the shape here where it isn't on the single-context SDK
+ * surface.
+ */
+export interface TriggerFailureEntry {
+  readonly id: string;
+  readonly contextId: string;
+  readonly ruleId: string;
+  readonly ruleName?: string;
+  readonly category: string;
+  readonly retryable?: boolean;
+  readonly detail?: string;
+  readonly correlationId?: string;
+  readonly attempts?: number;
+  readonly schemaId?: string;
+  readonly event?: string;
+  readonly recordId?: string;
+  readonly executionDepth?: number;
+  readonly durationMs?: number;
+  /** ISO-8601 UTC — when this firing first failed. */
+  readonly createdAt?: string;
+  /** ISO-8601 UTC — the most recent failed attempt. */
+  readonly updatedAt?: string;
+}
+
+/**
+ * Query for the account-wide trigger-failures list. Omitting `contextId` walks every app context
+ * in the account, in a fixed deterministic order (not one chronological timeline — see
+ * {@link TriggerFailuresResponse}'s own doc); supplying it narrows to one context, which must
+ * belong to this account or the call fails with a uniform not-found.
+ */
+export interface TriggerFailuresQuery {
+  readonly contextId?: string;
+  readonly ruleId?: string;
+  readonly category?: string;
+  readonly retryable?: boolean;
+  /** ISO-8601 UTC — only failures that first occurred at or after this instant. */
+  readonly from?: string;
+  /** ISO-8601 UTC — only failures that first occurred before this instant. */
+  readonly to?: string;
+  readonly startFrom?: string;
+  readonly limit?: number;
+}
+
+/**
+ * One page of trigger failures. `incomplete`/`contextsNotSearched` name any app context this page
+ * could not read (a transient fault) — a caller MUST surface these rather than let an honest gap
+ * read as "nothing failed" (the same discipline `accessLog.coverageBody` states for disclosures).
+ * Results are newest-first WITHIN a context; walked across contexts in a fixed order, not merged
+ * into one account-wide timeline — a design tradeoff for a cursor whose size doesn't grow with the
+ * account's context count.
+ */
+export interface TriggerFailuresResponse {
+  readonly data: ReadonlyArray<TriggerFailureEntry>;
+  readonly nextCursor: string | null;
+  readonly incomplete: boolean;
+  readonly contextsNotSearched: ReadonlyArray<string>;
+  /** True when the account's context LIST itself (not a specific context's failures) could not be
+   *  read — distinct from a name appearing in `contextsNotSearched`, which always holds real
+   *  contextIds only. `incomplete` is also true whenever this is. */
+  readonly contextListUnavailable: boolean;
+}
+
+/**
  * Query for the account activity log. `startTime` is required (ISO-8601 UTC);
  * everything else narrows the result. Omitting `contextId` returns activity
  * across every app context in the account — a single context-pinned credential
@@ -254,6 +319,12 @@ export interface DeveloperApi {
    * {@link AdminLogsQuery.contextId} is set). Tenant-wide by design.
    */
   getAdminLogs(query: AdminLogsQuery): Promise<AdminLogsResponse>;
+  /**
+   * Read a page of trigger execution failures across every app context (or a single one when
+   * {@link TriggerFailuresQuery.contextId} is set). Account-wide by design — the single-context SDK
+   * surface (`client.triggers` / `GET /v1/trigger-failures`) can't produce this view.
+   */
+  getTriggerFailures(query: TriggerFailuresQuery): Promise<TriggerFailuresResponse>;
   /**
    * Transfer this account's OWNER role to another member
    * (`POST /developer/account-owner`). `targetUserId` is a member id
@@ -390,6 +461,23 @@ export function createDeveloperApi(deps: {
       return parse<AdminLogsResponse>(resp);
     },
 
+    async getTriggerFailures(query) {
+      const params = new URLSearchParams({ tenant: deps.tenant });
+      if (query.contextId) params.set('contextId', query.contextId);
+      if (query.ruleId) params.set('ruleId', query.ruleId);
+      if (query.category) params.set('category', query.category);
+      if (query.retryable !== undefined) params.set('retryable', String(query.retryable));
+      if (query.from) params.set('from', query.from);
+      if (query.to) params.set('to', query.to);
+      if (query.startFrom) params.set('startFrom', query.startFrom);
+      if (query.limit !== undefined) params.set('limit', String(query.limit));
+      const resp = await fetch(
+        endpoint(deps.baseUrl, `/developer/trigger-failures?${params.toString()}`),
+        { method: 'GET', headers: await authHeader() },
+      );
+      return parse<TriggerFailuresResponse>(resp);
+    },
+
     async transferOwnership(targetUserId) {
       // No `tenant` param — see the interface doc: this acts on the whole
       // account, not one tenant kind.
@@ -479,6 +567,13 @@ export function useDeveloperApi(tenantOverride?: TenantKind): DeveloperApi {
       createDeveloperApi({ baseUrl: API_CONFIG.developerApiBase, tenant, getIdToken }).getAdminLogs(query),
     [tenant, getIdToken],
   );
+  const getTriggerFailures = useCallback(
+    (query: TriggerFailuresQuery) =>
+      createDeveloperApi({ baseUrl: API_CONFIG.developerApiBase, tenant, getIdToken }).getTriggerFailures(
+        query,
+      ),
+    [tenant, getIdToken],
+  );
   const transferOwnership = useCallback(
     (targetUserId: string) =>
       createDeveloperApi({ baseUrl: API_CONFIG.developerApiBase, tenant, getIdToken }).transferOwnership(
@@ -496,6 +591,7 @@ export function useDeveloperApi(tenantOverride?: TenantKind): DeveloperApi {
     listScopedKeys,
     revokeScopedKey,
     getAdminLogs,
+    getTriggerFailures,
     transferOwnership,
   };
 }

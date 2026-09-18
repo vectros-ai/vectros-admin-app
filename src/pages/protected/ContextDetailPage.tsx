@@ -5,12 +5,19 @@
 //   - Breadcrumb (`Access > {contextId}`) anchored on the URL ctxId so it
 //     renders before the context data finishes loading.
 //   - Header: context's name + description from `getAppContext`.
-//   - Tab strip — Roles / Profiles — with `?tab=roles|profiles`
-//     URL state for deep-linkable tabs. Default tab is Roles.
+//   - Tab strip — Roles / Profiles / Entities — with
+//     `?tab=roles|profiles|entities` URL state for deep-linkable tabs.
+//     Default tab is Roles.
 //   - Roles tab: read-only table with Edit + Create actions that route
 //     to the RoleEditor, plus Clone + Delete actions.
 //   - Profiles tab: read-only table with Edit + Create actions that route
 //     to the ProfileEditor, plus Clone + Delete actions.
+//   - Entities tab (`EntitiesTab.tsx`): READ-ONLY browser over this
+//     context's entity-backed namespaces (tenant-wide ∪ this context's own,
+//     override-aware) and their identity entities. No create/edit UI here —
+//     this lane is read-only by scope, not because entity writes are
+//     unusually gated: namespace writes need root/a provisioning capability,
+//     but entity writes are the ordinary `entities:<verb>:<namespace>` scope.
 //
 // Cache reuse — and why tab-switch is instant:
 //   ContextsPage's row-count parallel `useQueries` already populate
@@ -61,6 +68,7 @@ import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
 import { usePrincipalDirectory } from '../../lib/usePrincipalDirectory';
 import type { ResolvedPrincipal } from '../../lib/usePrincipalDirectory';
 import { RESERVED_VECTROS_ADMIN_CONTEXT_ID } from '../../lib/reservedContexts';
+import { EntitiesTab } from './EntitiesTab';
 
 // ---------------------------------------------------------------------------
 // Constants — recognized tab values. Anything else in `?tab=` falls back to
@@ -68,7 +76,7 @@ import { RESERVED_VECTROS_ADMIN_CONTEXT_ID } from '../../lib/reservedContexts';
 // mapping a typecheck error away from drifting.
 // ---------------------------------------------------------------------------
 
-const TABS = ['roles', 'profiles'] as const;
+const TABS = ['roles', 'profiles', 'entities'] as const;
 type TabValue = (typeof TABS)[number];
 const DEFAULT_TAB: TabValue = 'roles';
 
@@ -166,11 +174,13 @@ export function ContextDetailPage(): React.JSX.Element {
             >
               <Tab value="roles" label={<FormattedMessage id="access.roles.title" />} />
               <Tab value="profiles" label={<FormattedMessage id="access.profiles.title" />} />
+              <Tab value="entities" label={<FormattedMessage id="access.entities.title" />} />
             </Tabs>
           </Box>
 
           {activeTab === 'roles' && <RolesTab ctxId={ctxId} />}
           {activeTab === 'profiles' && <ProfilesTab ctxId={ctxId} />}
+          {activeTab === 'entities' && <EntitiesTab ctxId={ctxId} />}
         </>
       )}
     </Stack>

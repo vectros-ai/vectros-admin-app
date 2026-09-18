@@ -87,10 +87,19 @@ interface MockOverrides {
   updateRole?: ReturnType<typeof vi.fn>;
   deleteRole?: ReturnType<typeof vi.fn>;
   listAccessProfiles?: ReturnType<typeof vi.fn>;
+  listRoles?: ReturnType<typeof vi.fn>;
+  listNamespaces?: ReturnType<typeof vi.fn>;
 }
 
 function makeMockClient(o: MockOverrides = {}) {
   return {
+    // The namespace registry (lib/namespaceRegistry.ts) — no test here
+    // exercises namespace SUGGESTIONS specifically (see ScopeEditor's own
+    // tests for that); defaulted so every existing test gets a resolved
+    // query rather than a silently-swallowed rejection.
+    identity: {
+      listNamespaces: o.listNamespaces ?? vi.fn().mockResolvedValue(pageOf([])),
+    },
     auth: {
       getRole:
         o.getRole ?? vi.fn().mockResolvedValue(ROLE_ENG_MEMBER),
@@ -105,6 +114,13 @@ function makeMockClient(o: MockOverrides = {}) {
         o.deleteRole ?? vi.fn().mockResolvedValue(undefined),
       listAccessProfiles:
         o.listAccessProfiles ?? vi.fn().mockResolvedValue(pageOf(PROFILES)),
+      // Sources the ScopeEditor's `assignable_roles` picker suggestions —
+      // same context-roles query ProfileEditor's role-composition
+      // Autocomplete uses. Defaulted (not left unstubbed) so every existing
+      // test here gets a resolved query rather than a silently-swallowed
+      // rejection; tests that care about the actual suggestions override it.
+      listRoles:
+        o.listRoles ?? vi.fn().mockResolvedValue(pageOf([ROLE_ENG_MEMBER])),
     },
   };
 }
@@ -243,6 +259,22 @@ describe('RoleEditor — edit mode', () => {
     expect(nameInput.value).toBe('Engineering Team Member');
     const descInput = screen.getByRole('textbox', { name: /description/i }) as HTMLInputElement;
     expect(descInput.value).toBe('Standard read-only access for engineering members');
+  });
+
+  it('never flags a typed data-scope namespace as unregistered while the namespace registry is still loading', async () => {
+    // The S2 regression this guards: ScopeEditor's data-scope namespace
+    // field must not read "not registered" just because the registry
+    // hasn't answered yet (a never-resolving listNamespaces here).
+    const user = userEvent.setup();
+    const client = makeMockClient({ listNamespaces: vi.fn(() => new Promise(() => undefined)) });
+    renderEditor({ client, initialUrl: '/access/contexts/engineering/roles/eng-member' });
+    await screen.findByRole('heading', { level: 1, name: /edit role eng-member/i });
+
+    await user.click(await screen.findByRole('button', { name: /row-level data filters/i }));
+    await user.click(screen.getByRole('button', { name: /add filter/i }));
+    await user.type(screen.getByRole('combobox', { name: /scope/i }), 'org');
+
+    expect(screen.queryByText(/not registered for this context/i)).not.toBeInTheDocument();
   });
 
   it('blocks saving and says why when the profile drain fails', async () => {
@@ -815,6 +847,28 @@ describe('RoleEditor — hardening states', () => {
       body: { scopes?: Array<Record<string, unknown>> };
     };
     expect(call.body.scopes?.[0]).not.toHaveProperty('assignable_roles');
+  });
+
+  it('offers this context\'s own roles as assignable_roles-picker suggestions', async () => {
+    // Regression target: dropping the `roleOptions={assignableRoleOptions}`
+    // prop from ScopeEditor's JSX (or the rolesQuery feeding it) would
+    // silently fall back to a suggestion-less freeSolo field with no other
+    // test noticing.
+    const user = userEvent.setup();
+    renderEditor({
+      client: makeMockClient({
+        listRoles: vi.fn().mockResolvedValue(pageOf([ROLE_ENG_MEMBER])),
+      }),
+      initialUrl: '/access/contexts/engineering/roles/new',
+    });
+    await screen.findByRole('heading', { level: 1, name: /create role/i });
+    await user.click(await screen.findByRole('button', { name: /composable roles/i }));
+    await user.click(
+      screen.getByRole('combobox', { name: /roles this clause may compose/i }),
+    );
+    expect(
+      await screen.findByRole('option', { name: 'Engineering Team Member (eng-member)' }),
+    ).toBeInTheDocument();
   });
 
   it('announces a scope-validation failure via role="alert"', async () => {

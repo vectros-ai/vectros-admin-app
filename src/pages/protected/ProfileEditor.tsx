@@ -31,12 +31,16 @@
 //   - **ScopeEditor reuse** (inline source branch): same component as
 //     RoleEditor, with the same readonly-array boundary conversion.
 //   - **Identity overrides** — expandable section. Ownership dimensions are
-//     namespaced (`scope:org`, `scope:client`, and custom `scope:<ns>`); the
-//     built-in org/client get dedicated fields and any custom namespace is an
+//     namespaced (`scope:org`, `scope:client`, and custom `scope:<ns>`); EVERY
+//     dimension — org/client included, no name special-casing (they are
+//     ordinary registrations, not built-ins) — is an
 //     "additional scopes" row. Values round-trip through the canonical
 //     `scope:<ns>` form. An owned identity may carry at
-//     most two scope namespaces. Expanded by default when the loaded profile has
-//     any overrides set; collapsed otherwise (the "Show advanced" pattern).
+//     most two scope namespaces. The namespace field suggests this context's
+//     registered namespaces (`lib/namespaceRegistry.ts`) but still accepts
+//     typing an unregistered one, since the backend permits it. Expanded by
+//     default when the loaded profile has any overrides set; collapsed
+//     otherwise (the "Show advanced" pattern).
 //     **Whether authoring is possible is a LIVE, per-SESSION question, not a
 //     fixed fact about this app** — the platform lets a caller confer exactly
 //     the identity value it itself holds (`sessionHoldsAnyIdentity` in
@@ -139,6 +143,7 @@ import type {
 } from '../../lib/identityOverrides';
 import { MAX_SCOPE_NAMESPACES } from '../../lib/scopeNamespace';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
+import { useNamespaceRegistry } from '../../lib/namespaceRegistry';
 import { useBeforeNavigate } from '../../lib/useBeforeNavigate';
 import { usePrincipalDirectory, userPrincipalId, userLabel } from '../../lib/usePrincipalDirectory';
 import { isMultiRoleComposed } from '../../lib/accessProfileRoles';
@@ -177,11 +182,6 @@ function formatOverridesValidationError(
         { id: 'access.profiles.editor.identityOverridesTooMany' },
         { max: error.max },
       );
-    case 'extraBuiltin':
-      return intl.formatMessage(
-        { id: 'access.profiles.editor.identityOverrideNamespaceBuiltin' },
-        { namespace: error.namespace },
-      );
     case 'extraDuplicate':
       return intl.formatMessage(
         { id: 'access.profiles.editor.identityOverrideNamespaceDuplicate' },
@@ -192,8 +192,6 @@ function formatOverridesValidationError(
         id: 'access.profiles.editor.identityOverrideValueRequired',
       });
     case 'extraInvalidValue':
-    case 'orgInvalidValue':
-    case 'clientInvalidValue':
       return intl.formatMessage({
         id: 'access.profiles.editor.identityOverrideValueInvalid',
       });
@@ -296,10 +294,48 @@ export function ProfileEditor(): React.JSX.Element {
     enabled: ctxId !== '',
   });
   const roles: RoleResponse[] = useMemo(() => rolesQuery.data ?? [], [rolesQuery.data]);
+  // Same `roles` query, reshaped for ScopeEditor's `assignable_roles` picker.
+  // `RoleResponse.roleId` is optional on the wire (SDK type); a row somehow
+  // missing one can't be composed into anything anyway, so it's dropped here
+  // rather than threaded through as an unusable suggestion.
+  const assignableRoleOptions = useMemo(
+    () =>
+      roles.flatMap((r) =>
+        r.roleId ? [{ roleId: r.roleId, ...(r.name ? { name: r.name } : {}) }] : [],
+      ),
+    [roles],
+  );
   // A failed role load falls back to [] above, which renders as "this context
   // has no roles" — indistinguishable from the real thing, and the drain now
   // fails rather than returning a partial list. Surfaced instead of implied.
   const rolesLoadFailed = rolesQuery.isError;
+
+  // Registered namespaces this context can see (tenant-wide ∪ own, override-
+  // aware) — suggests namespace names in the ScopeEditor's data-scope field
+  // and the identity-overrides "additional scopes" rows below. Every
+  // registered namespace, not just entity-backed ones (unlike the entity
+  // browser): authoring a scope filter or an identity override doesn't
+  // require the namespace to be entity-backed. A caller may still type an
+  // unregistered name — this is a suggestion list, not a gate.
+  const {
+    namespaces: registeredNamespaces,
+    isLoading: namespacesLoading,
+    isError: namespacesFailedToLoad,
+  } = useNamespaceRegistry(ctxId);
+  const namespaceSuggestions = useMemo(
+    () => registeredNamespaces.map((ns) => ns.namespace),
+    [registeredNamespaces],
+  );
+  const registeredNamespaceSet = useMemo(
+    () => new Set(namespaceSuggestions),
+    [namespaceSuggestions],
+  );
+  // Whether it's SAFE to mark a typed namespace "not registered" — only once
+  // the registry has actually resolved. While loading, or on a load failure
+  // (a 5xx, or a token-mint failure), `registeredNamespaceSet` reads empty
+  // exactly like "nothing is registered," which would mislabel an existing,
+  // correctly-registered namespace (e.g. a stored `org` row) as unanchored.
+  const canFlagUnregisteredNamespace = !namespacesLoading && !namespacesFailedToLoad;
 
   // ── Baseline + prefill ─────────────────────────────────────────────────
   const [baseline, setBaseline] = useState<AccessProfileResponse | null>(null);
@@ -327,16 +363,13 @@ export function ProfileEditor(): React.JSX.Element {
     }
     // Read identityOverrides through the canonical model so a `scope:org`-keyed
     // override (0.34 read-back) is visible + preserved, not silently dropped.
-    // Custom namespaces populate `extras`; org/client fill their fields.
+    // Every dimension — org/client included — populates `extras`.
     const parsed = parseIdentityOverrides(
       loaded.identityOverrides as Record<string, unknown> | undefined,
     );
     setOverrides(parsed);
     setOverridesExpanded(
-      parsed.org.trim() !== '' ||
-        parsed.client.trim() !== '' ||
-        parsed.extras.length > 0 ||
-        Object.keys(parsed.passthrough).length > 0,
+      parsed.extras.length > 0 || Object.keys(parsed.passthrough).length > 0,
     );
     setBaseline(loaded);
   }, [isCreate, profileQuery.data]);
@@ -371,8 +404,6 @@ export function ProfileEditor(): React.JSX.Element {
   };
 
   // ── Identity-override mutators ─────────────────────────────────────────
-  const setOverrideOrg = (v: string): void => setOverrides((o) => ({ ...o, org: v }));
-  const setOverrideClient = (v: string): void => setOverrides((o) => ({ ...o, client: v }));
   const addOverrideExtra = (): void =>
     setOverrides((o) => ({
       ...o,
@@ -872,7 +903,13 @@ export function ProfileEditor(): React.JSX.Element {
               <Typography variant="overline" color="text.secondary" component="div" sx={{ mb: 1 }}>
                 <FormattedMessage id="access.profiles.editor.scopesLabel" />
               </Typography>
-              <ScopeEditor value={scopes} onChange={setScopes} />
+              <ScopeEditor
+                value={scopes}
+                onChange={setScopes}
+                roleOptions={assignableRoleOptions}
+                namespaceOptions={namespaceSuggestions}
+                canFlagUnregisteredNamespace={canFlagUnregisteredNamespace}
+              />
               {scopeErrorMessage && (
                 <Typography variant="body2" color="error.main" role="alert" sx={{ mt: 1 }}>
                   {scopeErrorMessage}
@@ -934,30 +971,11 @@ export function ProfileEditor(): React.JSX.Element {
                     <FormattedMessage id="access.profiles.editor.identityOverridesUnavailable" />
                   </Alert>
                 )}
-                <Stack spacing={2} sx={{ maxWidth: 480 }}>
-                  <TextField
-                    size="small"
-                    label={intl.formatMessage({
-                      id: 'access.profiles.editor.identityOverrideOrgId',
-                    })}
-                    value={overrides.org}
-                    onChange={(e) => setOverrideOrg(e.target.value)}
-                    disabled={!canAuthorIdentityOverrides}
-                    inputProps={{ spellCheck: false }}
-                  />
-                  <TextField
-                    size="small"
-                    label={intl.formatMessage({
-                      id: 'access.profiles.editor.identityOverrideClientId',
-                    })}
-                    value={overrides.client}
-                    onChange={(e) => setOverrideClient(e.target.value)}
-                    disabled={!canAuthorIdentityOverrides}
-                    inputProps={{ spellCheck: false }}
-                  />
-                </Stack>
-
-                {/* Additional (custom-namespace) scope overrides. */}
+                {/* Scope overrides — every namespace, org/client included,
+                    with no dedicated fields and no name special-casing. The
+                    namespace field suggests this context's registered
+                    namespaces but still accepts an unregistered name, marked
+                    as such (the backend permits it). */}
                 <Box>
                   <Typography variant="overline" color="text.secondary" component="div">
                     <FormattedMessage id="access.profiles.editor.identityOverrideExtrasLegend" />
@@ -971,21 +989,45 @@ export function ProfileEditor(): React.JSX.Element {
                     <FormattedMessage id="access.profiles.editor.identityOverrideExtrasHelp" />
                   </Typography>
                   <Stack spacing={1}>
-                    {overrides.extras.map((extra, i) => (
+                    {overrides.extras.map((extra, i) => {
+                      const trimmedNs = extra.namespace.trim();
+                      const notRegistered =
+                        canFlagUnregisteredNamespace &&
+                        trimmedNs !== '' &&
+                        !registeredNamespaceSet.has(trimmedNs);
+                      return (
                       <Stack key={i} direction="row" spacing={1} alignItems="flex-start">
-                        <TextField
-                          size="small"
-                          label={intl.formatMessage({
-                            id: 'access.profiles.editor.identityOverrideNamespaceLabel',
-                          })}
-                          placeholder={intl.formatMessage({
-                            id: 'access.profiles.editor.identityOverrideNamespacePlaceholder',
-                          })}
-                          value={extra.namespace}
-                          onChange={(e) => updateOverrideExtra(i, { namespace: e.target.value })}
+                        <Autocomplete
+                          freeSolo
                           disabled={!canAuthorIdentityOverrides}
-                          inputProps={{ spellCheck: false }}
-                          sx={{ width: 200, '& input': { fontFamily: 'monospace' } }}
+                          options={namespaceSuggestions}
+                          value={extra.namespace}
+                          onInputChange={(_evt, v) => updateOverrideExtra(i, { namespace: v })}
+                          sx={{ width: 200 }}
+                          renderInput={(params) => (
+                            <TextField
+                              {...params}
+                              size="small"
+                              label={intl.formatMessage({
+                                id: 'access.profiles.editor.identityOverrideNamespaceLabel',
+                              })}
+                              placeholder={intl.formatMessage({
+                                id: 'access.profiles.editor.identityOverrideNamespacePlaceholder',
+                              })}
+                              helperText={
+                                notRegistered
+                                  ? intl.formatMessage({
+                                      id: 'access.profiles.editor.identityOverrideNamespaceUnregistered',
+                                    })
+                                  : undefined
+                              }
+                              inputProps={{
+                                ...params.inputProps,
+                                spellCheck: false,
+                                style: { fontFamily: 'monospace' },
+                              }}
+                            />
+                          )}
                         />
                         <TextField
                           size="small"
@@ -1018,7 +1060,8 @@ export function ProfileEditor(): React.JSX.Element {
                           </span>
                         </Tooltip>
                       </Stack>
-                    ))}
+                      );
+                    })}
                   </Stack>
                   <Button
                     size="small"

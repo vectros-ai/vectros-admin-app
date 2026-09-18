@@ -27,6 +27,7 @@ import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
 import BarChartIcon from '@mui/icons-material/BarChart';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 
 import { AppLayout, RequireAuth, RequireScope } from '@vectros-ai/react';
 import type { NavItemSpec } from '@vectros-ai/react';
@@ -40,6 +41,7 @@ import { AccessLogPage } from './pages/protected/AccessLogPage';
 import { KeysPage } from './pages/protected/KeysPage';
 import { LogsPage } from './pages/protected/LogsPage';
 import { MembersPage } from './pages/protected/MembersPage';
+import { TriggerFailuresPage } from './pages/protected/TriggerFailuresPage';
 import { ProfileEditor } from './pages/protected/ProfileEditor';
 import { RoleEditor } from './pages/protected/RoleEditor';
 import { UsagePage } from './pages/protected/UsagePage';
@@ -76,6 +78,11 @@ const ADMIN_ACTIONS = {
   members: 'users:r',
   keys: 'keys:r',
   logs: 'logs:r',
+  // Same literal the partner surface already enforces for this data
+  // (`GET /v1/trigger-failures` gates on `triggers:r`) — the dev-portal route
+  // behind it is owner-gated server-side regardless of scope, same as
+  // `contexts`/`issuers` below.
+  triggerFailures: 'triggers:r',
   // Accounting-of-disclosures gates on the SAME literal the backend enforces on
   // GET /v1/admin/access-log (`access-log:r`; an owner's wildcard covers it).
   accessLog: 'access-log:r',
@@ -109,6 +116,7 @@ const ADMIN_NAV_ITEMS: ReadonlyArray<NavItemSpec> = [
   { to: '/members', labelId: 'layout.navMembers', gateAction: ADMIN_ACTIONS.members, icon: <PeopleIcon fontSize="small" /> },
   { to: '/keys', labelId: 'layout.navKeys', gateAction: ADMIN_ACTIONS.keys, icon: <VpnKeyIcon fontSize="small" /> },
   { to: '/logs', labelId: 'layout.navLogs', gateAction: ADMIN_ACTIONS.logs, icon: <ArticleIcon fontSize="small" /> },
+  { to: '/trigger-failures', labelId: 'triggerFailures.nav', gateAction: ADMIN_ACTIONS.triggerFailures, icon: <ErrorOutlineIcon fontSize="small" /> },
   { to: '/disclosures', labelId: 'accessLog.nav', gateAction: ADMIN_ACTIONS.accessLog, icon: <VisibilityIcon fontSize="small" /> },
   { to: '/usage', labelId: 'layout.navUsage', gateAction: ADMIN_ACTIONS.usage, icon: <BarChartIcon fontSize="small" /> },
   { to: '/access/contexts', labelId: 'access.nav', gateAction: ADMIN_ACTIONS.contexts, icon: <AdminPanelSettingsIcon fontSize="small" /> },
@@ -155,6 +163,10 @@ export default function App(): React.JSX.Element {
         <Route
           path="/logs"
           element={<RequireScope action={ADMIN_ACTIONS.logs}><LogsPage /></RequireScope>}
+        />
+        <Route
+          path="/trigger-failures"
+          element={<RequireScope action={ADMIN_ACTIONS.triggerFailures}><TriggerFailuresPage /></RequireScope>}
         />
         <Route
           path="/disclosures"

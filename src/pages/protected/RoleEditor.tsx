@@ -76,6 +76,7 @@ import { vectrosApiClient } from '../../api/vectrosApi';
 import type { AccessProfileResponse, RoleResponse } from '../../api/vectrosApi';
 import { accessQueryKeys } from '../../lib/accessQueryKeys';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
+import { useNamespaceRegistry } from '../../lib/namespaceRegistry';
 import { useBeforeNavigate } from '../../lib/useBeforeNavigate';
 
 // ---------------------------------------------------------------------------
@@ -122,6 +123,57 @@ export function RoleEditor(): React.JSX.Element {
       }),
     enabled: !isCreate && ctxId !== '' && tplId !== '',
   });
+
+  // Context's roles, for the ScopeEditor's `assignable_roles` picker — same
+  // queryKey ProfileEditor's own role-composition Autocomplete uses,
+  // so the two share a cache entry rather than each minting their own fetch.
+  // Loaded in BOTH modes (unlike roleQuery/profilesQuery above): a brand-new
+  // role can restrict its own assignable_roles against sibling roles that
+  // already exist in this context just as validly as an edited one can.
+  const rolesQuery = useQuery({
+    queryKey: accessQueryKeys.roles(ctxId),
+    queryFn: () =>
+      drainPages<RoleResponse>((startFrom) =>
+        vectrosApiClient(tenant, ctxId).auth.listRoles(
+          startFrom === undefined
+            ? { contextId: ctxId, limit: AUTH_PAGE_SIZE }
+            : { contextId: ctxId, startFrom, limit: AUTH_PAGE_SIZE },
+        ),
+      ),
+    enabled: ctxId !== '',
+  });
+  // `roleId` is optional on the wire (SDK type) — a row missing one can't be
+  // composed into anything, so it's dropped rather than threaded through as
+  // an unusable suggestion. A failed load degrades to an empty (still fully
+  // functional, freeSolo) picker rather than blocking the page.
+  const assignableRoleOptions = useMemo(
+    () =>
+      (rolesQuery.data ?? []).flatMap((r) =>
+        r.roleId ? [{ roleId: r.roleId, ...(r.name ? { name: r.name } : {}) }] : [],
+      ),
+    [rolesQuery.data],
+  );
+
+  // Registered namespaces this context can see (tenant-wide ∪ own,
+  // override-aware) — suggests namespace names in the ScopeEditor's
+  // data-scope field. Every registered namespace, not just entity-backed
+  // ones: authoring a data-scope filter doesn't require the namespace to be
+  // entity-backed. A caller may still type an unregistered name — this is a
+  // suggestion list, not a gate. Same registry client ProfileEditor.tsx uses.
+  const {
+    namespaces: registeredNamespaces,
+    isLoading: namespacesLoading,
+    isError: namespacesFailedToLoad,
+  } = useNamespaceRegistry(ctxId);
+  const namespaceSuggestions = useMemo(
+    () => registeredNamespaces.map((ns) => ns.namespace),
+    [registeredNamespaces],
+  );
+  // Only safe to flag a typed namespace "not registered" once the registry
+  // has actually resolved — while loading or on a load failure,
+  // `namespaceSuggestions` reads identically empty to "nothing registered,"
+  // which would mislabel an existing, correctly-registered namespace.
+  const canFlagUnregisteredNamespace = !namespacesLoading && !namespacesFailedToLoad;
 
   // Edit mode: fetch profiles to count refs (for the propagation banner +
   // the delete-refs guard). Same queryKey as ContextDetailPage's Profiles
@@ -429,7 +481,13 @@ export function RoleEditor(): React.JSX.Element {
             <Typography variant="overline" color="text.secondary" component="div" sx={{ mb: 1 }}>
               <FormattedMessage id="access.roles.editor.scopesLabel" />
             </Typography>
-            <ScopeEditor value={scopes} onChange={setScopes} />
+            <ScopeEditor
+              value={scopes}
+              onChange={setScopes}
+              roleOptions={assignableRoleOptions}
+              namespaceOptions={namespaceSuggestions}
+              canFlagUnregisteredNamespace={canFlagUnregisteredNamespace}
+            />
             {scopeErrorMessage && (
               <Typography variant="body2" color="error.main" role="alert" sx={{ mt: 1 }}>
                 {scopeErrorMessage}
