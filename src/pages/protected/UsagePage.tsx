@@ -14,7 +14,7 @@
 // (0.40.0) instead sees every section narrowed to its own context, and the
 // environment its context does NOT belong to comes back `null` rather than a
 // real total (the `tenants.live` / `tenants.test` split below) — see
-// `isContextConfined` for the detectable signal and its two exceptions.
+// the platform's scope-confinement rule for the detectable signal and its two exceptions.
 //
 // Scope: the backend requires `billing:r` on scoped tokens (API keys always
 // pass); the route + nav item gate on the same literal action string.

@@ -26,8 +26,8 @@
 // pass-through. This flow is Cognito/embedded-specific by construction — a
 // hosted-redirect (Auth0 Universal Login) provider wouldn't use this page at
 // all: invite acceptance there passes `invite_token` directly on the
-// `/v1/auth/token/exchange` call instead (TOKEN-EXCHANGE-CONTRACT.md §6), no
-// signup form needed. admin-app is always Cognito, so this page stays as-is.
+// `/v1/auth/token/exchange` call instead, no signup form needed. admin-app is
+// always Cognito, so this page stays as-is.
 // ---------------------------------------------------------------------------
 
 import { useEffect, useState } from 'react';

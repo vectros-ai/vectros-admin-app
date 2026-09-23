@@ -373,6 +373,59 @@ describe('InviteMemberDialog', () => {
   });
 
   // -------------------------------------------------------------------------
+  // The manual-send accept link comes back from the server, built from the accept
+  // URL the inviter typed, and that path does not validate it. It is a clickable
+  // link only when it is https; anything else is plain, still-copyable text.
+  // -------------------------------------------------------------------------
+  async function submitManualSend(acceptLink: string) {
+    const { client } = renderDialog({
+      client: makeMockClient({
+        createInvite: vi.fn().mockResolvedValue({
+          userId: 'u_new123',
+          inviteToken: 'inv_test_token_abc',
+          acceptLink,
+        }),
+      }),
+    });
+    await waitFor(() => expect(client.auth.listRoles).toHaveBeenCalled());
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText(/email address/i), 'manual@example.com');
+    await user.click(screen.getByRole('button', { name: /advanced options/i }));
+    await user.click(await screen.findByRole('checkbox', { name: /send the invite email/i }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /send invite/i })).toBeEnabled());
+    await user.click(screen.getByRole('button', { name: /send invite/i }));
+    await screen.findByText(/Copy the accept link below/i);
+  }
+
+  it.each([
+    ['javascript:', 'javascript:alert(document.domain)//'],
+    ['a mixed-case script scheme', 'JaVaScRiPt:alert(1)'],
+    ['a tab inside the scheme', 'java\tscript:alert(1)'],
+    ['data:', 'data:text/html,<script>alert(1)</script>'],
+    ['plain http', 'http://admin.test.example/accept?t=abc'],
+    ['protocol-relative', '//evil.example/accept'],
+    ['a relative path', '/accept?t=abc'],
+  ])('renders an accept link with %s as plain text, not a link, and still offers copy', async (_name, acceptLink) => {
+    await submitManualSend(acceptLink);
+
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
+    expect(document.querySelector('a[href]')).toBeNull();
+    // Exact text (not normalised whitespace), in a plain paragraph.
+    expect(
+      screen.getByText((_content, element) => element?.tagName === 'P' && element.textContent === acceptLink),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /copy accept link/i })).toBeInTheDocument();
+  });
+
+  it('renders an https accept link as a link whose href is the checked, normalised value (control)', async () => {
+    await submitManualSend('  HTTPS://Admin.Test.Example/accept?t=abc  ');
+
+    const link = await screen.findByRole('link');
+    expect(link).toHaveAttribute('href', 'https://admin.test.example/accept?t=abc');
+    expect(document.querySelector('a[href]')).toBe(link);
+  });
+
+  // -------------------------------------------------------------------------
   // Live and test tenants are interchangeable, so this dialog submits
   // identically on either — no client-side tenant gate.
   // -------------------------------------------------------------------------

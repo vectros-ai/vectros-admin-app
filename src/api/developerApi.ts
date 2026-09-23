@@ -98,8 +98,9 @@ export interface IssuerSummary {
   readonly contextId?: string;
   readonly subClaim?: string;
   readonly emailClaim?: string;
-  /** `active` | `suspended`. A suspended issuer's tokens are rejected at exchange time identically
-   *  to an unregistered issuer. */
+  /** `active` | `suspended` | `pending_verification`. A suspended issuer's tokens are rejected at
+   *  exchange time identically to an unregistered issuer; so are those of an issuer awaiting
+   *  verification, which becomes active only once its registrant proves control of the identity provider. */
   readonly status?: string;
   /** ISO-8601 UTC registration timestamp. */
   readonly createdAt?: string;

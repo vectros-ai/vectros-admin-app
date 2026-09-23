@@ -560,8 +560,8 @@ function BindStep({ boundUser, onPickUser }: BindStepProps): React.JSX.Element {
   // onCreated). A created principal is deduped out once the server itself
   // starts returning it (were that ever to happen — today it structurally
   // never will, since the confined list this query backs never returns a
-  // profile-less principal; see the module comment on `listConfinedUsers`
-  // on the backend for why), rather than assuming it never will.
+  // profile-less principal; the backend documents why alongside
+  // that query), rather than assuming it never will.
   const users = useMemo(() => {
     const serverUsers = usersQuery.data ?? [];
     const serverIds = new Set(serverUsers.map((u) => u.id).filter(Boolean));

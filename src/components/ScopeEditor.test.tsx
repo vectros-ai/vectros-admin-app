@@ -232,7 +232,7 @@ describe('validateClauses()', () => {
   });
 
   // assignable_roles: format + count, mirroring the platform's own
-  // ScopeClause.validateAssignableRoles.
+  // assignable-roles validation.
   describe('assignable_roles', () => {
     it('accepts a well-formed list', () => {
       expect(

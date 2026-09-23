@@ -196,7 +196,7 @@ export function RoleEditor(): React.JSX.Element {
   // undercounts (down to 0) for a role that's only ever referenced via
   // multi-role composition, which would show "no profiles reference this
   // role" and enable Delete when that's false — the server independently
-  // refuses the delete either way (`effectiveRoleIds().contains(roleId)`),
+  // refuses the delete either way (it checks the effective, composed role list),
   // but the UI must not tell the operator the opposite of what's true.
   const referencingCount = useMemo<number>(
     () =>

@@ -3,6 +3,29 @@
 All notable changes to the Vectros Admin App are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.22.0 — 2026-09-22
+
+### Security
+
+- **An invite's accept link is clickable only when it is an https URL.** When you create an invitation
+  without sending the email, the app shows the accept link so you can send it yourself. That link is
+  built from the accept URL you entered. It is now clickable only for https URLs; any other value is
+  shown as plain text you can still copy. That includes a link on a local `http://localhost` origin
+  during development.
+
+### Changed
+
+- **An issuer that is awaiting verification is no longer shown as Active.** A trusted-issuer registration
+  made without a verified company domain now starts as *awaiting verification* and accepts no sign-ins
+  until its registrant proves control of the identity provider. The Issuers page showed every status other
+  than Suspended as Active, and sent a status back on save that the server refuses for such an issuer. It
+  now shows an "Awaiting verification" status, replaces the status selector with a short explanation, and
+  leaves the status out of the save so editing a claim name or a signup policy can't disturb it. Support
+  for this SDK-0.45.0-introduced status is what makes this release a minor, not a patch. A Verify action
+  and display of the verification challenge (`verificationClaim`/`verificationNonce`/`verificationExpiresAt`)
+  are not in this release — use `vectros issuers get`/`vectros issuers verify` (CLI 0.23.0) meanwhile.
+- **Repinned to `@vectros-ai/sdk` 0.45.0.** No client-side behavior change from the pin bump alone.
+
 ## 0.21.1 — 2026-09-17
 
 ### Added

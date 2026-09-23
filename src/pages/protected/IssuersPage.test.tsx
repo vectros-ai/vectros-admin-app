@@ -12,6 +12,8 @@
 //   7. Save calls updateIssuer with ONLY the safe fields — issuer/jwksUri/
 //      audience/contextId never appear in the payload, by construction.
 //   8. Save closes the dialog and invalidates the list on success.
+//   9. An issuer awaiting verification renders its own chip, shows a note in place of
+//      the status selector, and never sends `status` on save.
 // ---------------------------------------------------------------------------
 
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -171,5 +173,48 @@ describe('IssuersPage', () => {
     // Sent as an explicit empty string, not omitted — the server's own default-on-blank rule is what
     // actually resets it to "sub"; an omitted field would leave whatever was stored untouched instead.
     expect(payload.subClaim).toBe('');
+  });
+
+  // A registration awaiting verification accepts no sign-ins until its registrant proves control of the
+  // identity provider. The server refuses any status change on it, so the page must neither render it as
+  // active nor send a status on save (which would fail — or, coerced to "active", be an attempt to skip the
+  // proof).
+  describe('an issuer awaiting verification', () => {
+    const PENDING = { ...AUTH0_PROD, status: 'pending_verification' };
+
+    it('renders an "Awaiting verification" chip, not "Active"', async () => {
+      renderPage({ listIssuers: vi.fn().mockResolvedValue(pageOf([PENDING])) });
+      expect(await screen.findByText('Awaiting verification')).toBeInTheDocument();
+      expect(screen.queryByText('Active')).not.toBeInTheDocument();
+    });
+
+    it('shows a note instead of a status selector, and save omits status', async () => {
+      const user = userEvent.setup();
+      const { developerApi } = renderPage({ listIssuers: vi.fn().mockResolvedValue(pageOf([PENDING])) });
+      await screen.findByText('auth0-prod');
+
+      await user.click(screen.getByRole('button', { name: /edit safe fields/i }));
+      const dialog = await screen.findByRole('dialog');
+
+      expect(within(dialog).getByText(/awaiting verification and does not accept sign-ins yet/i)).toBeInTheDocument();
+      expect(within(dialog).queryByLabelText(/^status$/i)).not.toBeInTheDocument();
+
+      await user.click(within(dialog).getByRole('button', { name: /save/i }));
+      await waitFor(() => expect(developerApi.updateIssuer).toHaveBeenCalledTimes(1));
+      const [, payload] = developerApi.updateIssuer.mock.calls[0] as [string, Record<string, unknown>];
+      expect(payload).not.toHaveProperty('status');
+    });
+
+    it('control: an ACTIVE issuer still sends its status on save', async () => {
+      const user = userEvent.setup();
+      const { developerApi } = renderPage();
+      await screen.findByText('auth0-prod');
+      await user.click(screen.getByRole('button', { name: /edit safe fields/i }));
+      const dialog = await screen.findByRole('dialog');
+      await user.click(within(dialog).getByRole('button', { name: /save/i }));
+      await waitFor(() => expect(developerApi.updateIssuer).toHaveBeenCalledTimes(1));
+      const [, payload] = developerApi.updateIssuer.mock.calls[0] as [string, Record<string, unknown>];
+      expect(payload.status).toBe('active');
+    });
   });
 });

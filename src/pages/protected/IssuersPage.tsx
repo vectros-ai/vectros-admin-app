@@ -32,6 +32,7 @@
 
 import { useEffect, useId, useMemo, useState } from 'react';
 import {
+  Alert,
   Box,
   Button,
   Chip,
@@ -197,6 +198,7 @@ function IssuerRow({
 }): React.JSX.Element {
   const intl = useIntl();
   const suspended = issuer.status === 'suspended';
+  const pendingVerification = issuer.status === 'pending_verification';
   const selfSignupCount = issuer.selfSignupPolicies?.length ?? 0;
 
   return (
@@ -210,10 +212,14 @@ function IssuerRow({
         <Chip
           size="small"
           label={intl.formatMessage({
-            id: suspended ? 'access.issuers.statusSuspended' : 'access.issuers.statusActive',
+            id: pendingVerification
+              ? 'access.issuers.statusPendingVerification'
+              : suspended
+                ? 'access.issuers.statusSuspended'
+                : 'access.issuers.statusActive',
           })}
-          color={suspended ? 'default' : 'success'}
-          variant={suspended ? 'outlined' : 'filled'}
+          color={pendingVerification ? 'warning' : suspended ? 'default' : 'success'}
+          variant={suspended || pendingVerification ? 'outlined' : 'filled'}
         />
       </TableCell>
       <TableCell align="right">
@@ -274,6 +280,10 @@ function IssuerEditorDialog({
   const [emailClaim, setEmailClaim] = useState('');
   const [status, setStatus] = useState<'active' | 'suspended'>('active');
   const [policies, setPolicies] = useState<DraftPolicy[]>([]);
+  // A registration awaiting verification accepts no sign-ins until its registrant proves control of the
+  // identity provider (through the API). It has no status the owner can choose, and sending one is
+  // refused, so the dialog shows a note instead of the selector and leaves `status` out of the save.
+  const pendingVerification = target?.status === 'pending_verification';
 
   const mutation = useMutation({
     mutationFn: async (): Promise<void> => {
@@ -286,7 +296,9 @@ function IssuerEditorDialog({
       await devApi.updateIssuer(target.issuerId, {
         subClaim: subClaim.trim(),
         emailClaim: emailClaim.trim(),
-        status,
+        // Never send a status for a row awaiting verification: the server refuses any change to it, and
+        // omitting the field is what leaves the row awaiting verification rather than coercing it to active.
+        ...(pendingVerification ? {} : { status }),
         selfSignupPolicies: policies
           .filter((p) => p.signupType.trim() !== '' && p.roleId.trim() !== '')
           .map((p) => ({ signup_type: p.signupType.trim(), role_id: p.roleId.trim() })),
@@ -351,24 +363,30 @@ function IssuerEditorDialog({
             <ReadOnlyField labelId="access.issuers.editDialog.contextLabel" value={target?.contextId} />
           </Stack>
 
-          <FormControl fullWidth>
-            <InputLabel id={`${titleElementId}-status`}>
-              <FormattedMessage id="access.issuers.editDialog.statusLabel" />
-            </InputLabel>
-            <Select
-              labelId={`${titleElementId}-status`}
-              label={intl.formatMessage({ id: 'access.issuers.editDialog.statusLabel' })}
-              value={status}
-              onChange={(e) => setStatus(e.target.value as 'active' | 'suspended')}
-            >
-              <MenuItem value="active">
-                {intl.formatMessage({ id: 'access.issuers.statusActive' })}
-              </MenuItem>
-              <MenuItem value="suspended">
-                {intl.formatMessage({ id: 'access.issuers.statusSuspended' })}
-              </MenuItem>
-            </Select>
-          </FormControl>
+          {pendingVerification ? (
+            <Alert severity="info">
+              <FormattedMessage id="access.issuers.editDialog.pendingVerificationNote" />
+            </Alert>
+          ) : (
+            <FormControl fullWidth>
+              <InputLabel id={`${titleElementId}-status`}>
+                <FormattedMessage id="access.issuers.editDialog.statusLabel" />
+              </InputLabel>
+              <Select
+                labelId={`${titleElementId}-status`}
+                label={intl.formatMessage({ id: 'access.issuers.editDialog.statusLabel' })}
+                value={status}
+                onChange={(e) => setStatus(e.target.value as 'active' | 'suspended')}
+              >
+                <MenuItem value="active">
+                  {intl.formatMessage({ id: 'access.issuers.statusActive' })}
+                </MenuItem>
+                <MenuItem value="suspended">
+                  {intl.formatMessage({ id: 'access.issuers.statusSuspended' })}
+                </MenuItem>
+              </Select>
+            </FormControl>
+          )}
 
           <TextField
             label={intl.formatMessage({ id: 'access.issuers.editDialog.subClaimLabel' })}

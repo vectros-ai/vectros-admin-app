@@ -77,6 +77,7 @@ import type {
   RoleResponse,
 } from '../../api/vectrosApi';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
+import { httpsUrlOrNull } from '../../lib/httpsUrl';
 
 /**
  * AppContext an invited member is bound to — the base `default` context, which
@@ -192,6 +193,10 @@ export function InviteMemberDialog({
   });
   const submitting = inviteMutation.isPending;
   const successResponse = inviteMutation.isSuccess ? inviteMutation.data : null;
+  // The accept link is built by the server from the accept URL the inviter typed,
+  // so it is shown as a clickable link only when it is an https URL; anything else
+  // is shown as plain text the inviter can still copy.
+  const acceptHref = httpsUrlOrNull(successResponse?.acceptLink);
   // Render the generic <ApiErrorAlert> only when there's no domain message.
   const showGenericError = inviteMutation.isError && domainError === null;
 
@@ -274,14 +279,20 @@ export function InviteMemberDialog({
                     <FormattedMessage id="invite.successNoEmail" />
                     {successResponse.acceptLink && (
                       <Stack direction="row" spacing={1} alignItems="center">
-                        <Link
-                          href={successResponse.acceptLink}
-                          target="_blank"
-                          rel="noopener"
-                          sx={{ wordBreak: 'break-all', flex: 1 }}
-                        >
-                          {successResponse.acceptLink}
-                        </Link>
+                        {acceptHref ? (
+                          <Link
+                            href={acceptHref}
+                            target="_blank"
+                            rel="noopener"
+                            sx={{ wordBreak: 'break-all', flex: 1 }}
+                          >
+                            {successResponse.acceptLink}
+                          </Link>
+                        ) : (
+                          <Typography variant="body2" sx={{ wordBreak: 'break-all', flex: 1 }}>
+                            {successResponse.acceptLink}
+                          </Typography>
+                        )}
                         <Tooltip
                           title={intl.formatMessage({
                             id: copied === 'link' ? 'invite.copyLinkCopied' : 'invite.copyLinkLabel',
