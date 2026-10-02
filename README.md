@@ -13,12 +13,12 @@ Fork it. Re-brand it in one file. Point it at your own Cognito pool. Ship.
 | Capability | Implementation note |
 |---|---|
 | Member management | Invite, re-invite, and remove team members; per-member access-profile visibility with batch loading that distinguishes "no profile" from a lookup failure. |
-| Scoped API keys | List and revoke, plus a guided five-step create wizard (user → key name → contexts → roles → review). |
+| Scoped API keys | List and revoke, plus a guided five-step create wizard (basics → bind to user → app context → review → confirmation). |
 | App contexts, roles & access profiles | Create/edit/delete data contexts; per-context role and access-profile editors with role cloning and reference-aware deletes. |
 | Named platform capabilities (`granted_capabilities`) | Role, access-profile, and scoped-key editors can grant `member-lifecycle` and `delegate-mint` alongside the ordinary `allowed_actions`/`data_scope` clause — two of the platform's six named capabilities, the only ones these editors currently offer (a capability grant can only name what the granting session's own credential already holds; `forensic-read` and `context-directory-read` are tenant-wide and served by dedicated server-side endpoints instead, never by a browser session; `delegate-principal-stamp`, added alongside `member-lifecycle`'s own context-level partition, and `trigger-control-plane-grant`, which gates trigger-rule authoring this app doesn't offer, aren't wired into these editors either). The key-creation wizard surfaces the `delegate-mint` requirement up front when binding a key to someone other than yourself, not just as a late 403. |
 | Activity logs | API call history with time-range presets and resource/method/key filters (explicit-fetch gated — the backing log query is metered). |
 | Usage & credits | The account usage report: credits against your plan, a per-category breakdown, read metering, and live/test + per-context decompositions. |
-| Cognito authentication + MFA | Amplify v6 against the shared DeveloperUserPool; TOTP enrollment and management on the Account page. Single Cognito identity per email across both the Dev Portal and this Admin App. |
+| Cognito authentication + MFA | Amplify v6 against the Vectros developer user pool; TOTP enrollment and management on the Account page. Single Cognito identity per email across both the Dev Portal and this Admin App. |
 | Sub-user invitation acceptance | `/accept?t=<token>` verifies the invite token client-side against the API's JWKS endpoint (display is never trusted unverified), then runs Cognito self-signup with the `custom:invite_token` attribute. A PostConfirmation hook activates the membership server-side. |
 | Live/Test environment switcher | Every list and mutation keys on the active tenant; switching re-mints the API bearer. |
 | Scope-gated navigation | Nav items and routes share one action map (`billing:r`, `admin:users`, …) read from the session token's scope, so links and route guards can never drift. |
@@ -40,7 +40,7 @@ Fork it. Re-brand it in one file. Point it at your own Cognito pool. Ship.
 
 ## Quick start (local development)
 
-Prerequisites: Node 20+ (see [`.nvmrc`](.nvmrc)), npm 10+.
+Prerequisites: Node 22.22+ (see [`.nvmrc`](.nvmrc)), npm 10+.
 
 ```bash
 npm install
@@ -114,7 +114,7 @@ The posture below summarizes how the app handles tokens, scope, and CSP.
 |---|---|
 | **Cognito tokens at rest** | Stored by Amplify in browser `localStorage` (default). Mitigated by a strict CSP that blocks third-party scripts and inline scripts. Re-evaluate if your threat model includes browser-extension compromise — Amplify v6 supports `cookieStorage` as an alternative. |
 | **Invite token verification** | The accept page verifies the invite token client-side against the API's JWKS endpoint (`GET /v1/auth/jwks`) before displaying the inviter org + invitee email — a JWKS outage shows an error, never unverified content. Cryptographic verification ALSO happens server-side in the platform's PostConfirmation Lambda via KMS; the client-side check is defense-in-depth for the display. |
-| **Email field on accept page** | Pre-filled from the token's `email` claim and **locked** (read-only). This prevents a spectator who got the link from signing up under a different email — invariant from sub-user-invitations §11.2. |
+| **Email field on accept page** | Pre-filled from the token's `email` claim and **locked** (read-only). This prevents a spectator who got the link from signing up under a different email. |
 | **CSP** | Set at the CloudFront edge (not in `<meta>` tags). Strict — no inline scripts (other than the boot bundle), no third-party origins beyond Cognito + the Vectros API host. |
 | **HSTS** | Preload-ready (`max-age=63072000; includeSubDomains; preload`) on the production distribution. |
 | **No PII in logs** | The global `unhandledrejection` / `error` listeners log to `console.error` only. They do **not** include the user's email, name, or any URL query parameters (which may contain invite tokens). |
@@ -130,7 +130,7 @@ admin-app/
 │   ├── api/             # SDK client wiring (vectrosApi) + the Cognito-gated
 │   │   │                # developer API for context enumeration (developerApi)
 │   ├── auth/            # Thin re-export of @vectros-ai/react (single auth import surface)
-│   ├── components/      # ApiErrorAlert, ScopeEditor, TenantSwitcher, MFA wizard, …
+│   ├── components/      # ScopeEditor, TenantSwitcher, MemberProfileChipList, MFA wizard, …
 │   ├── i18n/            # IntlProvider wrapper + the English catalogs
 │   ├── invitations/     # Invite-token JWKS verification + decode
 │   ├── lib/             # queryClient, drainPages, scope helpers

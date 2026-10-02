@@ -41,6 +41,7 @@ import { AccessLogPage } from './pages/protected/AccessLogPage';
 import { KeysPage } from './pages/protected/KeysPage';
 import { LogsPage } from './pages/protected/LogsPage';
 import { MembersPage } from './pages/protected/MembersPage';
+import { MemberDetailPage } from './pages/protected/MemberDetailPage';
 import { TriggerFailuresPage } from './pages/protected/TriggerFailuresPage';
 import { ProfileEditor } from './pages/protected/ProfileEditor';
 import { RoleEditor } from './pages/protected/RoleEditor';
@@ -155,6 +156,10 @@ export default function App(): React.JSX.Element {
         <Route
           path="/members"
           element={<RequireScope action={ADMIN_ACTIONS.members}><MembersPage /></RequireScope>}
+        />
+        <Route
+          path="/members/:id"
+          element={<RequireScope action={ADMIN_ACTIONS.members}><MemberDetailPage /></RequireScope>}
         />
         <Route
           path="/keys"

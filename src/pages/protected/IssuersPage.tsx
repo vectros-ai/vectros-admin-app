@@ -62,6 +62,7 @@ import AddIcon from '@mui/icons-material/Add';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditIcon from '@mui/icons-material/Edit';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import VerifiedUserOutlinedIcon from '@mui/icons-material/VerifiedUserOutlined';
 import { FormattedMessage, useIntl } from 'react-intl';
 import { ApiErrorAlert, LoadingBlock, SubmitButton } from '@vectros-ai/react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -70,6 +71,7 @@ import { useDeveloperApi } from '../../api/developerApi';
 import type { IssuerSummary } from '../../api/developerApi';
 import { accessQueryKeys } from '../../lib/accessQueryKeys';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
+import { classifyVerifyRefusal } from './issuerVerifyRefusal';
 
 // ---------------------------------------------------------------------------
 // IssuersPage
@@ -88,6 +90,7 @@ export function IssuersPage(): React.JSX.Element {
   const issuers = useMemo<IssuerSummary[]>(() => issuersQuery.data ?? [], [issuersQuery.data]);
 
   const [editTarget, setEditTarget] = useState<IssuerSummary | null>(null);
+  const [verifyTarget, setVerifyTarget] = useState<IssuerSummary | null>(null);
 
   const handleRefresh = (): void => {
     void queryClient.invalidateQueries({ queryKey: accessQueryKeys.issuers() });
@@ -172,6 +175,7 @@ export function IssuersPage(): React.JSX.Element {
                     key={issuer.issuerId ?? `issuer-${index}`}
                     issuer={issuer}
                     onEdit={() => setEditTarget(issuer)}
+                    onVerify={() => setVerifyTarget(issuer)}
                   />
                 ))}
               </TableBody>
@@ -181,6 +185,7 @@ export function IssuersPage(): React.JSX.Element {
       )}
 
       <IssuerEditorDialog target={editTarget} onClose={() => setEditTarget(null)} />
+      <IssuerVerifyDialog target={verifyTarget} onClose={() => setVerifyTarget(null)} />
     </Stack>
   );
 }
@@ -192,9 +197,11 @@ export function IssuersPage(): React.JSX.Element {
 function IssuerRow({
   issuer,
   onEdit,
+  onVerify,
 }: {
   issuer: IssuerSummary;
   onEdit: () => void;
+  onVerify: () => void;
 }): React.JSX.Element {
   const intl = useIntl();
   const suspended = issuer.status === 'suspended';
@@ -231,6 +238,17 @@ function IssuerRow({
         {issuer.createdAt ? new Date(issuer.createdAt).toLocaleDateString() : '—'}
       </TableCell>
       <TableCell align="right">
+        {pendingVerification && (
+          <Tooltip title={intl.formatMessage({ id: 'access.issuers.verifyTooltip' })}>
+            <IconButton
+              size="small"
+              onClick={onVerify}
+              aria-label={intl.formatMessage({ id: 'access.issuers.verifyTooltip' })}
+            >
+              <VerifiedUserOutlinedIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        )}
         <Tooltip title={intl.formatMessage({ id: 'access.issuers.editTooltip' })}>
           <IconButton
             size="small"
@@ -475,5 +493,135 @@ function ReadOnlyField({ labelId, value }: { labelId: string; value: string | un
         {value ?? '—'}
       </Typography>
     </Stack>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// IssuerVerifyDialog — completes verification of a row awaiting proof of
+// control. The operator configures their identity provider to stamp
+// verificationClaim with verificationNonce, signs in once, and pastes the
+// resulting token here. A refusal is shown with the specific next action it
+// calls for (see issuerVerifyRefusal.ts) rather than a generic failure —
+// several refusals need a different fix than "try again".
+// ---------------------------------------------------------------------------
+
+/** Maps each classified refusal to the message that explains what to do about it. */
+const VERIFY_REFUSAL_MESSAGE_ID: Record<ReturnType<typeof classifyVerifyRefusal>['action'], string> = {
+  'retry-with-a-new-token': 'access.issuers.verifyDialog.refusal.retry',
+  'reconfigure-the-identity-provider': 'access.issuers.verifyDialog.refusal.reconfigureIdp',
+  'fix-the-identity-providers-discovery-document': 'access.issuers.verifyDialog.refusal.discovery',
+  're-register-the-issuer': 'access.issuers.verifyDialog.refusal.expired',
+  'app-context-unavailable': 'access.issuers.verifyDialog.refusal.appContextUnavailable',
+  'resolve-a-conflicting-registration': 'access.issuers.verifyDialog.refusal.conflict',
+  'reload-and-recheck-the-row': 'access.issuers.verifyDialog.refusal.staleRow',
+  'not-authorized': 'access.issuers.verifyDialog.refusal.notAuthorized',
+  unknown: 'access.issuers.verifyDialog.refusal.unknown',
+};
+
+function IssuerVerifyDialog({
+  target,
+  onClose,
+}: {
+  target: IssuerSummary | null;
+  onClose: () => void;
+}): React.JSX.Element {
+  const intl = useIntl();
+  const queryClient = useQueryClient();
+  const devApi = useDeveloperApi();
+  const titleElementId = useId();
+
+  const [token, setToken] = useState('');
+
+  const mutation = useMutation({
+    mutationFn: async (): Promise<void> => {
+      if (!target?.issuerId) return;
+      // Trim: a pasted token very commonly carries a trailing newline or space (e.g. from `cat
+      // token.txt`), which would otherwise reach the server as part of the JWT and fail to parse —
+      // surfacing as a generic "bad token" refusal for what's actually just a paste artifact.
+      await devApi.verifyIssuer(target.issuerId, token.trim());
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: accessQueryKeys.issuers() });
+      onClose();
+    },
+  });
+
+  useEffect(() => {
+    setToken('');
+    mutation.reset();
+    // `mutation` is stable across renders; depend only on the target.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target]);
+
+  const refusal = mutation.isError ? classifyVerifyRefusal(mutation.error) : null;
+
+  return (
+    <Dialog
+      open={target !== null}
+      onClose={() => !mutation.isPending && onClose()}
+      maxWidth="sm"
+      fullWidth
+      aria-labelledby={titleElementId}
+    >
+      <DialogTitle id={titleElementId}>
+        <FormattedMessage id="access.issuers.verifyDialog.title" values={{ issuerId: target?.issuerId ?? '' }} />
+      </DialogTitle>
+      <DialogContent>
+        <Stack spacing={2.5} sx={{ pt: 1 }}>
+          <DialogContentText component="div">
+            <FormattedMessage id="access.issuers.verifyDialog.intro" />
+          </DialogContentText>
+
+          <Stack spacing={0.5} sx={{ p: 1.5, bgcolor: 'action.hover', borderRadius: 1 }}>
+            <ReadOnlyField labelId="access.issuers.verifyDialog.claimLabel" value={target?.verificationClaim} />
+            <ReadOnlyField labelId="access.issuers.verifyDialog.nonceLabel" value={target?.verificationNonce} />
+            <ReadOnlyField
+              labelId="access.issuers.verifyDialog.expiresLabel"
+              value={
+                target?.verificationExpiresAt ? new Date(target.verificationExpiresAt).toLocaleString() : undefined
+              }
+            />
+          </Stack>
+
+          <TextField
+            label={intl.formatMessage({ id: 'access.issuers.verifyDialog.tokenLabel' })}
+            helperText={intl.formatMessage({ id: 'access.issuers.verifyDialog.tokenHelper' })}
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            multiline
+            minRows={4}
+            maxRows={10}
+            sx={{ '& textarea': { fontFamily: 'monospace', fontSize: 12 } }}
+          />
+
+          {refusal && (
+            <ApiErrorAlert error={mutation.error}>
+              <FormattedMessage
+                id={VERIFY_REFUSAL_MESSAGE_ID[refusal.action]}
+                values={{ claim: target?.verificationClaim ?? '' }}
+              />
+              {refusal.action === 'unknown' && (
+                <Typography component="div" variant="body2" sx={{ mt: 0.5 }}>
+                  {refusal.message}
+                </Typography>
+              )}
+            </ApiErrorAlert>
+          )}
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} disabled={mutation.isPending}>
+          <FormattedMessage id="access.shared.cancel" />
+        </Button>
+        <SubmitButton
+          variant="contained"
+          onClick={() => mutation.mutate()}
+          pending={mutation.isPending}
+          disabled={token.trim() === ''}
+        >
+          <FormattedMessage id="access.issuers.verifyDialog.submit" />
+        </SubmitButton>
+      </DialogActions>
+    </Dialog>
   );
 }

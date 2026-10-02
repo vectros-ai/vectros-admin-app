@@ -422,8 +422,8 @@ describe('RESOURCE_CATALOG (grantable scope resources)', () => {
 // axes (its own grammar check admits an entry only when the qualifier applies
 // to EVERY letter the entry grants):
 //
-//   records, entities  — any letters
-//   documents, users   — the reveal letter alone
+//   records, entities, documents — any c/r/u/d/s letters (documents since 0.46.0)
+//   users                        — the reveal letter alone
 //   profiles           — the three authoring letters alone
 //   scripts            — the execute letter alone
 //
@@ -441,6 +441,7 @@ function qualifierIsLegal(resource: string, ops: string): boolean {
     case 'entities':
       return true;
     case 'documents':
+      return every('cruds');
     case 'users':
       return every('s');
     case 'profiles':
@@ -491,18 +492,26 @@ describe('scopeEditor.advancedHint (customer-facing grammar copy)', () => {
     ).toEqual([]);
   });
 
-  it('keeps the reveal-only resources reveal-only — the exact drift that shipped in the sibling app', () => {
-    // The regression this guards: copy that says the qualifier "narrows to a
-    // type on records/documents" reads fine and invites `documents:r:<type>`,
-    // which the platform rejects because the qualifier is inert on that letter.
-    // Naming that form is fine; naming it WITHOUT saying it is refused is not.
-    for (const form of ['documents:r:', 'documents:c:', 'documents:u:', 'documents:d:', 'users:r:']) {
+  it('keeps users reveal-only, and no longer calls a qualified documents form refused', () => {
+    // The drift this guards runs in both directions. Copy that invites `users:r:<type>` teaches a form the
+    // platform treats as inert there, so naming it without saying it is refused is wrong. And since 0.46.0
+    // `documents` is a genuine narrowing resource on every letter, so copy that still calls
+    // `documents:r:<type>` refused teaches the reader to avoid something that works.
+    for (const form of ['users:r:', 'users:c:', 'users:u:', 'users:d:']) {
       if (!copy.includes(form)) continue;
       const idx = copy.indexOf(form);
       expect(
         copy.slice(idx, idx + 80),
         `"${form}…" appears without being marked refused`,
       ).toMatch(/refused|rejected|not accepted|inert/i);
+    }
+    for (const form of ['documents:r:', 'documents:c:', 'documents:u:', 'documents:d:']) {
+      if (!copy.includes(form)) continue;
+      const idx = copy.indexOf(form);
+      expect(
+        copy.slice(idx, idx + 80),
+        `"${form}…" is shown as refused, but the platform accepts it`,
+      ).not.toMatch(/refused|rejected|not accepted|inert/i);
     }
   });
 

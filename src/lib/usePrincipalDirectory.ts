@@ -41,6 +41,21 @@ export function userPrincipalId(userId: string): string {
   return `${PRINCIPAL_PREFIX_USER}${userId}`;
 }
 
+/**
+ * The raw user id from a `usr_<userId>` principal, or `undefined` for a `key_` principal (or
+ * anything else). Purely structural — the caller decides that.
+ *
+ * Deliberately does NOT depend on this hook's directory (whose "Known gap" module comment above
+ * means a principal profiled only in a non-default context resolves as `unresolved` there): the
+ * `usr_` prefix already carries the id, so a caller that just needs to LINK to the member (not
+ * display its name) shouldn't need the directory to have loaded first.
+ */
+export function userIdFromPrincipal(principalId: string): string | undefined {
+  return principalId.startsWith(PRINCIPAL_PREFIX_USER)
+    ? principalId.slice(PRINCIPAL_PREFIX_USER.length)
+    : undefined;
+}
+
 /** A principal resolved (or not) to a human label. */
 export interface ResolvedPrincipal {
   readonly kind: 'user' | 'key' | 'unknown';

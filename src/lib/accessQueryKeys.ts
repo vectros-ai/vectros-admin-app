@@ -110,4 +110,16 @@ export const accessQueryKeys = {
     contextId: string,
   ): readonly ['schemas', 'entity-surface', string, string] =>
     ['schemas', 'entity-surface', tenantId, contextId] as const,
+
+  /** Schemas bindable to the `user` surface, for one tenant (no context — see EntitiesTab's own note on why `entitySurfaceSchemas` IS context-keyed; a member's payload schema is read through the same default-context bearer MembersPage/usePrincipalDirectory already use). */
+  userSurfaceSchemas: (tenantId: string): readonly ['schemas', 'user-surface', string] =>
+    ['schemas', 'user-surface', tenantId] as const,
+
+  /** One member's access profiles across EVERY app context (the OWNER-gated developer-API cross-context view — see `developerApi.ts#listUserProfiles`). */
+  memberProfiles: (tenantId: string, memberId: string): readonly ['memberProfiles', string, string] =>
+    ['memberProfiles', tenantId, memberId] as const,
+
+  /** One member's identity record (`GET /v1/users/{id}`), for MemberDetailPage. */
+  member: (tenantId: string, memberId: string): readonly ['members', string, string] =>
+    ['members', tenantId, memberId] as const,
 } as const;

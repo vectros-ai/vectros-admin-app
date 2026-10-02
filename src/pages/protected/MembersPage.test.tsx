@@ -94,11 +94,22 @@ function makeMockClient(overrides: {
   };
 }
 
-function makeMockDeveloperApi(overrides: { transferOwnership?: ReturnType<typeof vi.fn> } = {}) {
+function makeMockDeveloperApi(
+  overrides: {
+    transferOwnership?: ReturnType<typeof vi.fn>;
+    listUserProfiles?: ReturnType<typeof vi.fn>;
+  } = {},
+) {
   return {
     transferOwnership:
       overrides.transferOwnership ??
       vi.fn().mockResolvedValue({ partnerId: 'ptr_1', ownerUserId: 'u_alice' }),
+    // MembersPage calls this unconditionally (via useDeveloperApi())
+    // whenever the session is an OWNER (the default seeded membership — see
+    // TestTenantProvider). Defaults to an empty cross-context view so tests
+    // that don't care about it aren't forced to reason about it; tests
+    // exercising the cross-context column itself override with real data.
+    listUserProfiles: overrides.listUserProfiles ?? vi.fn().mockResolvedValue(pageOf([])),
   };
 }
 
@@ -156,11 +167,16 @@ describe('MembersPage', () => {
     expect(screen.getByText('research-bot')).toBeInTheDocument();
   });
 
-  it('links the AccessProfile chip to the real profile editor route (not a 404)', async () => {
+  // The OWNER default session now renders the cross-context chip list
+  // (see the "cross-context profile view" describe block below) — these two
+  // pin the still-unchanged single-default-context chip, which only a
+  // SUB_USER session falls back to now (a SUB_USER can't reach the
+  // OWNER-gated developer-API route the cross-context view needs).
+  it('SUB_USER: links the AccessProfile chip to the real profile editor route (not a 404)', async () => {
     // The chip must point at the live ProfileEditor route
     // (/access/contexts/<ctx>/profiles/<principalId>), NOT the old
     // /access-profiles?focus=... path that falls through to NotFoundPage.
-    renderPage();
+    renderPage({ memberships: [{ ...TEST_MEMBERSHIPS[0]!, role: 'SUB_USER' }] });
     const aliceRow = (await screen.findByText('alice@example.com')).closest('tr')!;
     const chip = within(aliceRow).getByRole('link', { name: 'tmpl-owner' });
     expect(chip).toHaveAttribute(
@@ -169,7 +185,7 @@ describe('MembersPage', () => {
     );
   });
 
-  it('AccessProfile chip shows "N roles" for a multi-role profile, not the bare principalId', async () => {
+  it('SUB_USER: AccessProfile chip shows "N roles" for a multi-role profile, not the bare principalId', async () => {
     // roleId is absent for a 2+-role composition (0.41.0) — the chip's
     // `profile.roleId ?? profile.principalId` fallback previously showed
     // the raw principalId (a valid-looking but uninformative label) for
@@ -178,12 +194,112 @@ describe('MembersPage', () => {
       ({ principalId }: { principalId: string }) =>
         Promise.resolve({ principalId, roleIds: ['hr-admin', 'eng-member'], status: 'active' }),
     );
-    renderPage({ client: makeMockClient({ getAccessProfile }) });
+    renderPage({
+      client: makeMockClient({ getAccessProfile }),
+      memberships: [{ ...TEST_MEMBERSHIPS[0]!, role: 'SUB_USER' }],
+    });
     const aliceRow = (await screen.findByText('alice@example.com')).closest('tr')!;
     const chip = await within(aliceRow).findByRole('link', { name: /2 roles/i });
     expect(chip.textContent).toMatch(/hr-admin/);
     expect(chip.textContent).toMatch(/eng-member/);
     expect(chip.textContent).not.toBe('usr_u_alice');
+  });
+
+  it('shows the usr_<id> principal beneath each member\'s email and links the row into the detail page', async () => {
+    renderPage();
+    const aliceRow = (await screen.findByText('alice@example.com')).closest('tr')!;
+    expect(within(aliceRow).getByText('usr_u_alice')).toBeInTheDocument();
+    const emailLink = within(aliceRow).getByRole('link', { name: 'alice@example.com' });
+    expect(emailLink).toHaveAttribute('href', '/members/u_alice');
+  });
+
+  // ---------------------------------------------------------------------
+  // The AccessProfile column stops implying a single-context 1:1
+  // relationship for an OWNER session: it shows every context the
+  // member holds a profile in, each linking to that context's editor.
+  // ---------------------------------------------------------------------
+  describe('cross-context profile view (OWNER)', () => {
+    it('renders one chip per context the member holds a profile in, each linking to its editor', async () => {
+      const listUserProfiles = vi.fn().mockResolvedValue(
+        pageOf([
+          { id: 'p1', contextId: 'default', principalId: 'usr_u_alice', roleId: 'tmpl-owner' },
+          { id: 'p2', contextId: 'billing', principalId: 'usr_u_alice', roleId: 'tmpl-billing' },
+        ]),
+      );
+      renderPage({ devApi: makeMockDeveloperApi({ listUserProfiles }) });
+      const aliceRow = (await screen.findByText('alice@example.com')).closest('tr')!;
+
+      const defaultChip = await within(aliceRow).findByRole('link', { name: 'default' });
+      expect(defaultChip).toHaveAttribute(
+        'href',
+        '/access/contexts/default/profiles/usr_u_alice',
+      );
+      const billingChip = within(aliceRow).getByRole('link', { name: 'billing' });
+      expect(billingChip).toHaveAttribute(
+        'href',
+        '/access/contexts/billing/profiles/usr_u_alice',
+      );
+    });
+
+    it('shows "No profile" when the member holds no profile in any context', async () => {
+      const listUserProfiles = vi.fn().mockResolvedValue(pageOf([]));
+      renderPage({ devApi: makeMockDeveloperApi({ listUserProfiles }) });
+      const aliceRow = (await screen.findByText('alice@example.com')).closest('tr')!;
+      await waitFor(() => expect(within(aliceRow).getByText('—')).toBeInTheDocument());
+    });
+
+    it('shows a distinct "couldn\'t load" cell on a genuine failure, not "No profile"', async () => {
+      const listUserProfiles = vi.fn().mockRejectedValue(new Error('boom'));
+      renderPage({ devApi: makeMockDeveloperApi({ listUserProfiles }) });
+      const aliceRow = (await screen.findByText('alice@example.com')).closest('tr')!;
+      await waitFor(() =>
+        expect(within(aliceRow).getByText(/couldn't load/i)).toBeInTheDocument(),
+      );
+    });
+
+    it('renders a profile in the reserved control-plane context as a non-clickable chip, not a dead link', async () => {
+      // admin-app's browser bearer can never mint against vectros-admin (see
+      // MembersPage's own header comment) — a link there would 404 every time.
+      const listUserProfiles = vi.fn().mockResolvedValue(
+        pageOf([
+          { id: 'p1', contextId: 'vectros-admin', principalId: 'usr_u_alice', roleId: 'admin' },
+        ]),
+      );
+      renderPage({ devApi: makeMockDeveloperApi({ listUserProfiles }) });
+      const aliceRow = (await screen.findByText('alice@example.com')).closest('tr')!;
+      await screen.findByText('alice@example.com');
+      expect(
+        within(aliceRow).queryByRole('link', { name: 'vectros-admin' }),
+      ).not.toBeInTheDocument();
+      expect(within(aliceRow).getByText('vectros-admin')).toBeInTheDocument();
+    });
+
+    it('SUB_USER never calls the OWNER-gated cross-context route', async () => {
+      const listUserProfiles = vi.fn().mockResolvedValue(pageOf([]));
+      renderPage({
+        devApi: makeMockDeveloperApi({ listUserProfiles }),
+        memberships: [{ ...TEST_MEMBERSHIPS[0]!, role: 'SUB_USER' }],
+      });
+      await screen.findByText('alice@example.com');
+      // Give any stray async query a tick to have fired if it were going to.
+      await waitFor(() => expect(screen.getAllByText('tmpl-owner').length).toBeGreaterThan(0));
+      expect(listUserProfiles).not.toHaveBeenCalled();
+    });
+
+    it('the Refresh button re-fetches the cross-context view too, not just the member list', async () => {
+      const user = userEvent.setup();
+      const listUserProfiles = vi.fn().mockResolvedValue(pageOf([]));
+      renderPage({ devApi: makeMockDeveloperApi({ listUserProfiles }) });
+      await screen.findByText('alice@example.com');
+      await waitFor(() => expect(listUserProfiles).toHaveBeenCalled());
+      const callsBeforeRefresh = listUserProfiles.mock.calls.length;
+
+      await user.click(screen.getByRole('button', { name: /^refresh$/i }));
+
+      await waitFor(() =>
+        expect(listUserProfiles.mock.calls.length).toBeGreaterThan(callsBeforeRefresh),
+      );
+    });
   });
 
   it('drains paginated listUsers across pages, threading the cursor', async () => {
@@ -435,8 +551,9 @@ describe('MembersPage', () => {
     expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
   });
 
-  it('distinguishes a 404 profile (No profile) from a non-404 profile error', async () => {
-    // Alice → real 500, Bob → 404, bot → success.
+  it('SUB_USER: distinguishes a 404 profile (No profile) from a non-404 profile error', async () => {
+    // Alice → real 500, Bob → 404, bot → success. SUB_USER — an OWNER session
+    // renders this cell from the cross-context view instead (see below).
     const getAccessProfile = vi.fn().mockImplementation(
       ({ principalId }: { principalId: string }) => {
         if (principalId === 'usr_u_alice') {
@@ -448,7 +565,10 @@ describe('MembersPage', () => {
         return Promise.resolve({ principalId, roleId: 'tmpl-owner', status: 'active' });
       },
     );
-    renderPage({ client: makeMockClient({ getAccessProfile }) });
+    renderPage({
+      client: makeMockClient({ getAccessProfile }),
+      memberships: [{ ...TEST_MEMBERSHIPS[0]!, role: 'SUB_USER' }],
+    });
 
     const aliceRow = (await screen.findByText('alice@example.com')).closest('tr')!;
     const bobRow = screen.getByText('bob@example.com').closest('tr')!;
@@ -464,20 +584,28 @@ describe('MembersPage', () => {
 
   it('blocks resend with a specific message when the member has no bound role', async () => {
     const user = userEvent.setup();
-    // Bob is PENDING (so the resend action shows) but has no profile (404).
-    const getAccessProfile = vi.fn().mockImplementation(
-      ({ principalId }: { principalId: string }) => {
-        if (principalId === 'usr_u_bob') {
-          return Promise.reject(new VectrosError({ message: 'missing', statusCode: 404 }));
-        }
-        return Promise.resolve({ principalId, roleId: 'tmpl-owner', status: 'active' });
-      },
+    // The default session is an OWNER, so resend's roleId now derives from
+    // the cross-context view (listUserProfiles), not the disabled
+    // single-context profileQueries — see MembersPage's own `enabled:
+    // !isOwner` comment. Bob is PENDING (so the resend action shows) but
+    // has no profile anywhere.
+    const listUserProfiles = vi.fn().mockImplementation((id: string) =>
+      Promise.resolve(
+        pageOf(
+          id === 'u_bob'
+            ? []
+            : [{ contextId: 'default', principalId: `usr_${id}`, roleId: 'tmpl-owner', status: 'active' }],
+        ),
+      ),
     );
     const resendInvite = vi.fn().mockResolvedValue(undefined);
-    renderPage({ client: makeMockClient({ getAccessProfile, resendInvite }) });
+    renderPage({
+      client: makeMockClient({ resendInvite }),
+      devApi: makeMockDeveloperApi({ listUserProfiles }),
+    });
     await screen.findByText('bob@example.com');
-    // Let the profile query settle so the no-role state is known.
-    await waitFor(() => expect(getAccessProfile).toHaveBeenCalled());
+    // Let the cross-context query settle so the no-role state is known.
+    await waitFor(() => expect(listUserProfiles).toHaveBeenCalled());
     // Wait past the client-side scope gate's own async mint before
     // clicking, or the button is still disabled and the click is a no-op.
     await waitFor(() =>
@@ -496,18 +624,22 @@ describe('MembersPage', () => {
     // roleIds is present. Without the fix this reads as "no role bound",
     // which is false — the member genuinely has roles, just not one this
     // admin app can resend against yet.
-    const getAccessProfile = vi.fn().mockImplementation(
-      ({ principalId }: { principalId: string }) => {
-        if (principalId === 'usr_u_bob') {
-          return Promise.resolve({ principalId, roleIds: ['hr-admin', 'eng-member'], status: 'active' });
-        }
-        return Promise.resolve({ principalId, roleId: 'tmpl-owner', status: 'active' });
-      },
+    const listUserProfiles = vi.fn().mockImplementation((id: string) =>
+      Promise.resolve(
+        pageOf([
+          id === 'u_bob'
+            ? { contextId: 'default', principalId: `usr_${id}`, roleIds: ['hr-admin', 'eng-member'], status: 'active' }
+            : { contextId: 'default', principalId: `usr_${id}`, roleId: 'tmpl-owner', status: 'active' },
+        ]),
+      ),
     );
     const resendInvite = vi.fn().mockResolvedValue(undefined);
-    renderPage({ client: makeMockClient({ getAccessProfile, resendInvite }) });
+    renderPage({
+      client: makeMockClient({ resendInvite }),
+      devApi: makeMockDeveloperApi({ listUserProfiles }),
+    });
     await screen.findByText('bob@example.com');
-    await waitFor(() => expect(getAccessProfile).toHaveBeenCalled());
+    await waitFor(() => expect(listUserProfiles).toHaveBeenCalled());
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /resend invite/i })).toBeEnabled(),
     );
@@ -683,6 +815,12 @@ describe('MembersPage', () => {
     vi.mocked(vectrosApiClient).mockReturnValue(
       makeMockClient({ resendInvite }) as never,
     );
+    const listUserProfiles = vi.fn().mockImplementation((id: string) =>
+      Promise.resolve(
+        pageOf([{ contextId: 'default', principalId: `usr_${id}`, roleId: 'tmpl-owner', status: 'active' }]),
+      ),
+    );
+    vi.mocked(useDeveloperApi).mockReturnValue(makeMockDeveloperApi({ listUserProfiles }) as never);
     render(
       <TestIntlProvider>
         <MemoryRouter>
@@ -693,6 +831,8 @@ describe('MembersPage', () => {
       </TestIntlProvider>,
     );
     await screen.findByText('bob@example.com');
+    // Let the cross-context query settle so resend's roleId derivation sees it.
+    await waitFor(() => expect(listUserProfiles).toHaveBeenCalled());
     // Wait past the client-side scope gate's own async mint before
     // clicking, or the button is still disabled and the click is a no-op.
     await waitFor(() =>
@@ -718,16 +858,23 @@ describe('MembersPage', () => {
   // here rather than in staging.
   // -------------------------------------------------------------------------
   it('pins every context-scoped call to a bearer minted for that same context', async () => {
+    // SUB_USER: an OWNER session's per-row profile lookup is disabled (see
+    // MembersPage's own `enabled: !isOwner` comment) in favor of the
+    // OWNER-gated developer-API cross-context route, which mints no
+    // context-pinned bearer at all — there's nothing for THIS check to
+    // verify on that path. The `getAccessProfile`/`resendInvite` calls this
+    // test pins are still real and still context-bound for a SUB_USER.
     const user = userEvent.setup();
     const records: ContextBindingRecord[] = [];
     vi.mocked(vectrosApiClient).mockImplementation(
       makeBindingTrackedClient(() => makeMockClient(), records) as never,
     );
+    vi.mocked(useDeveloperApi).mockReturnValue(makeMockDeveloperApi() as never);
 
     render(
       <TestIntlProvider>
         <MemoryRouter>
-          <TestTenantProvider kind="live">
+          <TestTenantProvider memberships={[{ ...TEST_MEMBERSHIPS[0]!, role: 'SUB_USER' }]}>
             <MembersPage />
           </TestTenantProvider>
         </MemoryRouter>

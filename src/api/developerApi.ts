@@ -36,7 +36,7 @@ import { useCallback } from 'react';
 
 import { useAuth, useCurrentTenant } from '../auth';
 import { API_CONFIG } from '../config';
-import type { AdminLogsResponse, ScopedKeyResponse } from './vectrosApi';
+import type { AccessProfileResponse, AdminLogsResponse, ScopedKeyResponse } from './vectrosApi';
 
 /**
  * An app context as returned by the Developer API list/create routes. Mirrors
@@ -61,6 +61,12 @@ export interface AppContextSummary {
 /** One page of the `{ data, nextCursor }` list envelope. */
 export interface AppContextPage {
   readonly data: ReadonlyArray<AppContextSummary>;
+  readonly nextCursor: string | null;
+}
+
+/** One page of a member's access profiles, across every app context (see {@link DeveloperApi.listUserProfiles}). */
+export interface MemberProfilePage {
+  readonly data: ReadonlyArray<AccessProfileResponse>;
   readonly nextCursor: string | null;
 }
 
@@ -105,6 +111,16 @@ export interface IssuerSummary {
   /** ISO-8601 UTC registration timestamp. */
   readonly createdAt?: string;
   readonly selfSignupPolicies?: ReadonlyArray<SelfSignupPolicy>;
+  /**
+   * The three challenge fields, present ONLY while `status` is `pending_verification` (absent once
+   * active or suspended). Configure the identity provider to stamp `verificationClaim` with
+   * `verificationNonce` on the tokens it issues, then present a token carrying that claim to
+   * {@link DeveloperApi.verifyIssuer}. `verificationExpiresAt` is an ISO-8601 UTC timestamp; the
+   * challenge is refused once it passes.
+   */
+  readonly verificationClaim?: string;
+  readonly verificationNonce?: string;
+  readonly verificationExpiresAt?: string;
 }
 
 /** One page of the `{ data, nextCursor }` issuer list envelope. */
@@ -279,6 +295,21 @@ async function parse<T>(resp: Response): Promise<T> {
 export interface DeveloperApi {
   /** List one page of the tenant's app contexts. */
   listAppContexts(startFrom?: string, limit?: number): Promise<AppContextPage>;
+  /**
+   * List one page of a member's access profiles, across EVERY app context — not just the one
+   * this app's own bearer happens to be pinned to. `id` is the member's `UserResponse.id` (the
+   * suffix of its `usr_<id>` principal), not the prefixed principal itself.
+   *
+   * **Why this lives here and not on the SDK.** The Vectros API's own cross-context lookup
+   * (`auth.listProfilesForPrincipal`) only answers cross-context for a caller looking up
+   * ITSELF or holding the `context-directory-read` capability — admin-app's browser bearer
+   * deliberately holds neither (cross-context admin authority stays server-side behind this
+   * gate, never on a browser bearer). This route gives the account OWNER's own Cognito session
+   * that reach, same posture as {@link listAppContexts}. **OWNER-only** — a SUB_USER session
+   * gets a 403; callers should treat that as "cross-context view unavailable" and fall back to
+   * whatever single-context read they already have, not as an error to surface.
+   */
+  listUserProfiles(id: string, startFrom?: string, limit?: number): Promise<MemberProfilePage>;
   /** Create (or idempotently return) an app context. */
   createAppContext(input: CreateAppContextInput): Promise<AppContextSummary>;
   /**
@@ -304,6 +335,18 @@ export interface DeveloperApi {
    * deleting and re-registering the issuer (via the CLI/SDK — not exposed in this UI).
    */
   updateIssuer(issuerId: string, input: UpdateIssuerInput): Promise<IssuerSummary>;
+  /**
+   * Complete verification of an issuer awaiting proof of control. `token` is a JWT from a real sign-in
+   * at the identity provider, carrying `verificationClaim` set to `verificationNonce` — configure the
+   * provider to stamp it, sign in once, and pass the resulting token through. The token is checked
+   * against the issuer's own published key set and discarded; it is never stored. On success the
+   * registration becomes `active` and the returned {@link IssuerSummary} carries no challenge fields.
+   * Refuses (400) for a wide range of reasons — an expired challenge, a token that doesn't verify, a
+   * pair another registration already holds, and more — each with its own distinct message; see
+   * {@link DeveloperApi.updateIssuer}'s trust-anchor note for why re-registering (CLI/SDK) is sometimes
+   * the only way forward, not a retry here.
+   */
+  verifyIssuer(issuerId: string, token: string): Promise<IssuerSummary>;
   /**
    * List every scoped API key in the account, across both environments and ALL
    * app contexts. A context-pinned bearer only ever sees its own context's keys,
@@ -374,6 +417,17 @@ export function createDeveloperApi(deps: {
       return parse<AppContextPage>(resp);
     },
 
+    async listUserProfiles(id, startFrom, limit) {
+      const params = new URLSearchParams({ tenant: deps.tenant });
+      if (startFrom) params.set('startFrom', startFrom);
+      if (limit !== undefined) params.set('limit', String(limit));
+      const resp = await fetch(
+        endpoint(deps.baseUrl, `/developer/users/${encodeURIComponent(id)}/profiles?${params.toString()}`),
+        { method: 'GET', headers: await authHeader() },
+      );
+      return parse<MemberProfilePage>(resp);
+    },
+
     async createAppContext(input) {
       const params = new URLSearchParams({ tenant: deps.tenant });
       const resp = await fetch(
@@ -421,6 +475,19 @@ export function createDeveloperApi(deps: {
           method: 'PUT',
           headers: { ...(await authHeader()), 'Content-Type': 'application/json' },
           body: JSON.stringify(input),
+        },
+      );
+      return parse<IssuerSummary>(resp);
+    },
+
+    async verifyIssuer(issuerId, token) {
+      const params = new URLSearchParams({ tenant: deps.tenant });
+      const resp = await fetch(
+        endpoint(deps.baseUrl, `/developer/issuers/${encodeURIComponent(issuerId)}/verify?${params.toString()}`),
+        {
+          method: 'POST',
+          headers: { ...(await authHeader()), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token }),
         },
       );
       return parse<IssuerSummary>(resp);
@@ -528,6 +595,15 @@ export function useDeveloperApi(tenantOverride?: TenantKind): DeveloperApi {
       ),
     [tenant, getIdToken],
   );
+  const listUserProfiles = useCallback(
+    (id: string, startFrom?: string, limit?: number) =>
+      createDeveloperApi({ baseUrl: API_CONFIG.developerApiBase, tenant, getIdToken }).listUserProfiles(
+        id,
+        startFrom,
+        limit,
+      ),
+    [tenant, getIdToken],
+  );
   const createAppContext = useCallback(
     (input: CreateAppContextInput) =>
       createDeveloperApi({ baseUrl: API_CONFIG.developerApiBase, tenant, getIdToken }).createAppContext(input),
@@ -551,6 +627,14 @@ export function useDeveloperApi(tenantOverride?: TenantKind): DeveloperApi {
       createDeveloperApi({ baseUrl: API_CONFIG.developerApiBase, tenant, getIdToken }).updateIssuer(
         issuerId,
         input,
+      ),
+    [tenant, getIdToken],
+  );
+  const verifyIssuer = useCallback(
+    (issuerId: string, token: string) =>
+      createDeveloperApi({ baseUrl: API_CONFIG.developerApiBase, tenant, getIdToken }).verifyIssuer(
+        issuerId,
+        token,
       ),
     [tenant, getIdToken],
   );
@@ -585,10 +669,12 @@ export function useDeveloperApi(tenantOverride?: TenantKind): DeveloperApi {
 
   return {
     listAppContexts,
+    listUserProfiles,
     createAppContext,
     deleteAppContext,
     listIssuers,
     updateIssuer,
+    verifyIssuer,
     listScopedKeys,
     revokeScopedKey,
     getAdminLogs,

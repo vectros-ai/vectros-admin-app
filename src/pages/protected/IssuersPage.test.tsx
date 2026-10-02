@@ -14,6 +14,9 @@
 //   8. Save closes the dialog and invalidates the list on success.
 //   9. An issuer awaiting verification renders its own chip, shows a note in place of
 //      the status selector, and never sends `status` on save.
+//  10. A pending row shows a Verify action (an active row does not); the dialog shows the
+//      challenge fields, submits the pasted token, and closes + invalidates the list on success.
+//  11. A refused verify shows the guidance matching its refusal reason, not a generic failure.
 // ---------------------------------------------------------------------------
 
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -51,12 +54,14 @@ const AUTH0_PROD = {
 interface MockOverrides {
   listIssuers?: ReturnType<typeof vi.fn>;
   updateIssuer?: ReturnType<typeof vi.fn>;
+  verifyIssuer?: ReturnType<typeof vi.fn>;
 }
 
 function makeMockDeveloperApi(o: MockOverrides = {}) {
   return {
     listIssuers: o.listIssuers ?? vi.fn().mockResolvedValue(pageOf([AUTH0_PROD])),
     updateIssuer: o.updateIssuer ?? vi.fn().mockResolvedValue({ ...AUTH0_PROD, status: 'suspended' }),
+    verifyIssuer: o.verifyIssuer ?? vi.fn().mockResolvedValue({ ...AUTH0_PROD, status: 'active' }),
   };
 }
 
@@ -215,6 +220,157 @@ describe('IssuersPage', () => {
       await waitFor(() => expect(developerApi.updateIssuer).toHaveBeenCalledTimes(1));
       const [, payload] = developerApi.updateIssuer.mock.calls[0] as [string, Record<string, unknown>];
       expect(payload.status).toBe('active');
+    });
+
+    it('shows a Verify action on a pending row', async () => {
+      renderPage({ listIssuers: vi.fn().mockResolvedValue(pageOf([PENDING])) });
+      expect(await screen.findByRole('button', { name: /^verify$/i })).toBeInTheDocument();
+    });
+
+    it('control: an ACTIVE row shows no Verify action', async () => {
+      renderPage();
+      await screen.findByText('auth0-prod');
+      expect(screen.queryByRole('button', { name: /^verify$/i })).not.toBeInTheDocument();
+    });
+
+    it('opens the verify dialog showing the challenge fields, submits the token, and closes + refreshes on success', async () => {
+      const user = userEvent.setup();
+      const PENDING_WITH_CHALLENGE = {
+        ...PENDING,
+        verificationClaim: 'https://vectros.ai/claims/issuer_challenge',
+        verificationNonce: 'nonce-abc-123',
+        verificationExpiresAt: '2026-10-01T00:00:00Z',
+      };
+      const { developerApi } = renderPage({
+        listIssuers: vi.fn().mockResolvedValue(pageOf([PENDING_WITH_CHALLENGE])),
+      });
+      await screen.findByText('auth0-prod');
+
+      await user.click(screen.getByRole('button', { name: /^verify$/i }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByText(/verify issuer auth0-prod/i)).toBeInTheDocument();
+      expect(within(dialog).getByText('https://vectros.ai/claims/issuer_challenge')).toBeInTheDocument();
+      expect(within(dialog).getByText('nonce-abc-123')).toBeInTheDocument();
+
+      const tokenField = within(dialog).getByLabelText(/token/i);
+      await user.type(tokenField, 'a.b.c');
+      await user.click(within(dialog).getByRole('button', { name: /^verify$/i }));
+
+      await waitFor(() => expect(developerApi.verifyIssuer).toHaveBeenCalledWith('auth0-prod', 'a.b.c'));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    });
+
+    it('trims a pasted token before sending it (a trailing newline is a common paste artifact)', async () => {
+      const user = userEvent.setup();
+      const { developerApi } = renderPage({ listIssuers: vi.fn().mockResolvedValue(pageOf([PENDING])) });
+      await screen.findByText('auth0-prod');
+
+      await user.click(screen.getByRole('button', { name: /^verify$/i }));
+      const dialog = await screen.findByRole('dialog');
+      // userEvent types literal characters; \n in the source means a real newline goes into the textarea.
+      await user.type(within(dialog).getByLabelText(/token/i), '  a.b.c\n');
+      await user.click(within(dialog).getByRole('button', { name: /^verify$/i }));
+
+      await waitFor(() => expect(developerApi.verifyIssuer).toHaveBeenCalledWith('auth0-prod', 'a.b.c'));
+    });
+
+    it('disables the submit button until a token is entered', async () => {
+      const user = userEvent.setup();
+      renderPage({ listIssuers: vi.fn().mockResolvedValue(pageOf([PENDING])) });
+      await screen.findByText('auth0-prod');
+      await user.click(screen.getByRole('button', { name: /^verify$/i }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByRole('button', { name: /^verify$/i })).toBeDisabled();
+      await user.type(within(dialog).getByLabelText(/token/i), 'x');
+      expect(within(dialog).getByRole('button', { name: /^verify$/i })).toBeEnabled();
+    });
+
+    describe('a refused verify shows the matching guidance, not a generic failure', () => {
+      class FakeApiError extends Error {
+        readonly statusCode: number;
+        constructor(statusCode: number, message: string) {
+          super(message);
+          this.statusCode = statusCode;
+        }
+      }
+
+      async function submitAndGetAlert(rejection: Error) {
+        const user = userEvent.setup();
+        renderPage({
+          listIssuers: vi.fn().mockResolvedValue(pageOf([PENDING])),
+          verifyIssuer: vi.fn().mockRejectedValue(rejection),
+        });
+        await screen.findByText('auth0-prod');
+        await user.click(screen.getByRole('button', { name: /^verify$/i }));
+        const dialog = await screen.findByRole('dialog');
+        await user.type(within(dialog).getByLabelText(/token/i), 'a.b.c');
+        await user.click(within(dialog).getByRole('button', { name: /^verify$/i }));
+        return within(await screen.findByRole('alert'));
+      }
+
+      it('a bad/expired/wrong-audience token points at retrying with a fresh token', async () => {
+        const alert = await submitAndGetAlert(
+          new FakeApiError(400, "The token's audience does not include this registration's audience."),
+        );
+        expect(alert.getByText(/sign in again to mint a fresh token/i)).toBeInTheDocument();
+      });
+
+      it('a missing challenge claim points at reconfiguring the identity provider', async () => {
+        const alert = await submitAndGetAlert(
+          new FakeApiError(400, "The token does not carry the 'https://vectros.ai/claims/issuer_challenge' claim."),
+        );
+        expect(alert.getByText(/isn't sending the/i)).toBeInTheDocument();
+      });
+
+      it('a discovery-document mismatch says it is not fixable from this form', async () => {
+        const alert = await submitAndGetAlert(
+          new FakeApiError(400, "The issuer's discovery document names a different issuer than the one registered."),
+        );
+        expect(alert.getByText(/isn't fixable from this form/i)).toBeInTheDocument();
+      });
+
+      it('an expired challenge says retrying will not help — re-register instead', async () => {
+        const alert = await submitAndGetAlert(
+          new FakeApiError(400, "This registration's verification challenge has expired."),
+        );
+        expect(alert.getByText(/retrying won't help/i)).toBeInTheDocument();
+      });
+
+      it('a pair conflict points at the conflicting registration', async () => {
+        const alert = await submitAndGetAlert(
+          new FakeApiError(400, 'This (issuer, audience) pair is already registered by another registration.'),
+        );
+        expect(alert.getByText(/already holds this issuer and audience pair/i)).toBeInTheDocument();
+      });
+
+      it('"not awaiting verification" says the row changed — reload first', async () => {
+        const alert = await submitAndGetAlert(new FakeApiError(400, 'This registration is not awaiting verification.'));
+        expect(alert.getByText(/state changed while you were verifying/i)).toBeInTheDocument();
+      });
+
+      it('a torn-down app context says no token can fix it', async () => {
+        const alert = await submitAndGetAlert(
+          new FakeApiError(400, "contextId 'default' does not name an existing app context in your tenant."),
+        );
+        expect(alert.getByText(/no longer exists or is being torn down/i)).toBeInTheDocument();
+      });
+
+      it('a 403 says only the owner can verify', async () => {
+        const alert = await submitAndGetAlert(new FakeApiError(403, 'Forbidden'));
+        expect(alert.getByText(/only the account owner can verify/i)).toBeInTheDocument();
+      });
+
+      it('a 409 says the row changed mid-verify — reload first', async () => {
+        const alert = await submitAndGetAlert(
+          new FakeApiError(409, 'This registration changed or was removed while it was being verified.'),
+        );
+        expect(alert.getByText(/state changed while you were verifying/i)).toBeInTheDocument();
+      });
+
+      it('an unrecognized refusal falls back to showing the raw message', async () => {
+        const alert = await submitAndGetAlert(new FakeApiError(400, 'A brand new refusal the UI has never seen.'));
+        expect(alert.getByText(/a brand new refusal the ui has never seen/i)).toBeInTheDocument();
+      });
     });
   });
 });

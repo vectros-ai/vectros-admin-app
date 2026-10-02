@@ -211,6 +211,7 @@ function renderEditor(
               <Route path="/access/contexts/:ctxId" element={<LocationProbe />} />
               <Route path="/access/contexts/:ctxId/roles/:tplId" element={<LocationProbe />} />
               <Route path="/access/contexts" element={<LocationProbe />} />
+              <Route path="/members/:id" element={<LocationProbe />} />
             </Routes>
           </MemoryRouter>
         </TestTenantProvider>
@@ -456,6 +457,29 @@ describe('ProfileEditor — edit mode', () => {
     expect(call.principalId).toBe('usr_alice');
     expect(call.body.roleId).toBe('analyst');
     expect(call.body.roleIds).toBeUndefined();
+  });
+
+  it('links the principal back to the member', async () => {
+    renderEditor({
+      initialUrl: '/access/contexts/engineering/profiles/usr_alice',
+    });
+    const link = await screen.findByRole('link', { name: /view member/i });
+    expect(link).toHaveAttribute('href', '/members/alice');
+  });
+
+  it('does not offer a "View member" link for a key_ principal', async () => {
+    renderEditor({
+      client: makeMockClient({
+        getAccessProfile: vi.fn().mockResolvedValue({
+          contextId: 'engineering',
+          principalId: 'key_abc123',
+          roleId: 'eng-member',
+        }),
+      }),
+      initialUrl: '/access/contexts/engineering/profiles/key_abc123',
+    });
+    await screen.findByRole('radio', { name: /use a role/i });
+    expect(screen.queryByRole('link', { name: /view member/i })).not.toBeInTheDocument();
   });
 
   it('Identity overrides prefill from loaded profile + expand by default when set', async () => {

@@ -11,14 +11,23 @@
 //   - "Invite member" button opens `<InviteMemberDialog>` for the
 //     createInvite + AccessProfileRole-dropdown flow.
 //   - Per-row actions: Resend invite (PENDING rows only) + Revoke (DELETE).
-//   - AccessProfile chip per row: batch-loaded on page mount via
-//     `getAccessProfile(default, usr_<userId>)`. The chip renders the
-//     profile's roleId (falling back to principalId — no human-readable name
-//     field on the model yet). Click routes to the profile editor at
-//     `/access/contexts/default/profiles/<principalId>`.
-//     A 404 renders a distinct "no profile" cell; any OTHER lookup failure
-//     renders a distinct "couldn't load" cell rather than masquerading as
-//     "no profile" (so a real backend error isn't silently swallowed).
+//   - Email cell also links to `/members/<id>` (MemberDetailPage) and shows the
+//     row's `usr_<id>` principal as a quiet secondary line — the only way to
+//     correlate a row here with a principal shown on the App Contexts
+//     profiles surface.
+//   - AccessProfile column — profiles are PER-CONTEXT, not 1:1: an OWNER
+//     session sees every context the member holds a profile in, one
+//     chip per context, each linking to that context's profile editor
+//     (`crossContextByMember`, backed by the OWNER-gated developer-API route
+//     `GET /developer/users/{id}/profiles` — see `lib/useMemberProfiles.ts`'s
+//     module doc for why this can't be the ordinary Vectros API SDK call). A
+//     SUB_USER session — which can't reach that OWNER-gated route — falls back
+//     to the original single-context behavior unchanged: a single chip
+//     batch-loaded via `getAccessProfile(default, usr_<userId>)`, scoped to
+//     just the `default` context. Either way: a 404/empty result renders a
+//     distinct "no profile" cell; any OTHER lookup failure renders a distinct
+//     "couldn't load" cell rather than masquerading as "no profile" (so a
+//     real backend error isn't silently swallowed).
 //
 // **Why `default` and not the reserved control-plane context.** A member's
 // admin-app session is backed by the AccessProfile the token mint resolves,
@@ -85,6 +94,7 @@ import {
 } from '@vectros-ai/react';
 
 import { useActiveTenantId, useAuth, useCurrentTenant } from '../../auth';
+import { useDeveloperApi } from '../../api/developerApi';
 import type { AccountOwnerTransferResult } from '../../api/developerApi';
 import { RESERVED_DEFAULT_CONTEXT_ID } from '../../lib/reservedContexts';
 import { BRAND } from '../../brand';
@@ -96,6 +106,9 @@ import type {
 } from '../../api/vectrosApi';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
 import { isMultiRoleComposed } from '../../lib/accessProfileRoles';
+import { userPrincipalId } from '../../lib/usePrincipalDirectory';
+import { accessQueryKeys } from '../../lib/accessQueryKeys';
+import { MemberProfileChipList } from '../../components/MemberProfileChipList';
 import { InviteMemberDialog } from './InviteMemberDialog';
 import { TransferOwnershipDialog } from './TransferOwnershipDialog';
 
@@ -156,6 +169,14 @@ export function MembersPage(): React.JSX.Element {
   // profile doesn't poison the row. Any OTHER error (e.g. 500) is RE-THROWN
   // so the query lands in `isError` and the row can surface a distinct
   // "couldn't load" affordance rather than silently conflating it with 404.
+  //
+  // `enabled: !isOwner` — an OWNER session already fetches this same
+  // default-context profile as part of its cross-context view below
+  // (`crossContextByMember`); re-fetching it here too would double the
+  // per-row network calls for no reason (nothing reads `profilesByPrincipal`
+  // for an OWNER — see `defaultContextProfile` below, which reads the
+  // cross-context result instead). A SUB_USER can't reach that OWNER-gated
+  // route, so it still needs this fetch.
   const profileQueries = useQueries({
     queries: (members ?? [])
       .filter((m) => Boolean(m.id))
@@ -172,6 +193,7 @@ export function MembersPage(): React.JSX.Element {
             throw err;
           }
         },
+        enabled: !isOwner,
       })),
   });
 
@@ -194,6 +216,57 @@ export function MembersPage(): React.JSX.Element {
     });
     return map;
   }, [members, profileQueries]);
+
+  // Cross-context profile view — OWNER-only (see useMemberProfiles'
+  // sibling reasoning in lib/useMemberProfiles.ts; this is the same
+  // developerApi.listUserProfiles call, fanned out per row instead of
+  // wrapped one-at-a-time, since a custom hook can't be called inside
+  // `.map()`). `enabled: isOwner` keeps every query idle (never `isError`)
+  // for a SUB_USER session, so the column below falls back to the
+  // single-default-context `profilesByPrincipal` map above unchanged — the
+  // pre-existing behavior for anyone who isn't an OWNER.
+  const { listUserProfiles } = useDeveloperApi();
+  const memberProfilesQueries = useQueries({
+    queries: (members ?? [])
+      .filter((m) => Boolean(m.id))
+      .map((m) => ({
+        queryKey: accessQueryKeys.memberProfiles(tenant, m.id!),
+        queryFn: () =>
+          drainPages<AccessProfileResponse>((startFrom) =>
+            listUserProfiles(m.id!, startFrom, AUTH_PAGE_SIZE),
+          ),
+        enabled: isOwner,
+      })),
+  });
+
+  type CrossContextCell = ReadonlyArray<AccessProfileResponse> | 'error';
+  const crossContextByMember = useMemo(() => {
+    const map: Record<string, CrossContextCell> = {};
+    if (!isOwner) return map;
+    const validMembers = (members ?? []).filter((m) => Boolean(m.id));
+    validMembers.forEach((m, i) => {
+      const q = memberProfilesQueries[i];
+      if (q?.isError) {
+        map[m.id!] = 'error';
+      } else if (q?.isSuccess) {
+        map[m.id!] = q.data;
+      }
+    });
+    return map;
+  }, [isOwner, members, memberProfilesQueries]);
+
+  // The default-context profile, read out of the cross-context result
+  // instead of a separate fetch — the OWNER-only counterpart to
+  // `profilesByPrincipal` above (which an OWNER session's `profileQueries`
+  // no longer populates; see that query's own `enabled: !isOwner` comment).
+  // Used by `handleResend` below, the one place besides the table cell that
+  // needs to know a member's bound role.
+  const defaultContextProfile = (memberId: string): ProfileCell | undefined => {
+    const cell = crossContextByMember[memberId];
+    if (cell === undefined) return undefined;
+    if (cell === 'error') return 'error';
+    return cell.find((p) => p.contextId === MEMBERS_CONTEXT_ID) ?? null;
+  };
 
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
@@ -304,7 +377,9 @@ export function MembersPage(): React.JSX.Element {
     setSuccessMessage(null);
     setResendGuardMessage(null);
     resendMutation.reset();
-    const profile = profilesByPrincipal[`usr_${member.id}`];
+    const profile = isOwner
+      ? defaultContextProfile(member.id)
+      : profilesByPrincipal[`usr_${member.id}`];
     const roleId = profile && profile !== 'error' ? profile.roleId : undefined;
     // roleId is absent for a 2+-role composition (roleIds-only, 0.41.0) as
     // well as for a genuinely role-less member — resendInvite takes a
@@ -464,6 +539,14 @@ export function MembersPage(): React.JSX.Element {
               onClick={() => {
                 void queryClient.invalidateQueries({ queryKey: ['members', tenant] });
                 void queryClient.invalidateQueries({ queryKey: ['accessProfile', tenant] });
+                // The OWNER-only cross-context view rides a separate key
+                // (accessQueryKeys.memberProfiles) — the line above only
+                // ever covered the SUB_USER-path single-context query, so
+                // an OWNER's Refresh silently left the Profile column's
+                // chips unrequeried. Prefix-invalidate every member's entry
+                // under this tenant (accessQueryKeys.memberProfiles(tenant,
+                // memberId) all start with this same two-element prefix).
+                void queryClient.invalidateQueries({ queryKey: ['memberProfiles', tenant] });
               }}
               disabled={membersQuery.isFetching}
               aria-label={intl.formatMessage({ id: 'members.refresh' })}
@@ -549,9 +632,36 @@ export function MembersPage(): React.JSX.Element {
                 const transferLabel = canTransferOwnership
                   ? intl.formatMessage({ id: 'members.actionTransferOwnership' })
                   : '';
+                const crossContext = member.id ? crossContextByMember[member.id] : undefined;
                 return (
                   <TableRow key={rowKey}>
-                    <TableCell>{member.email ?? member.externalId ?? '—'}</TableCell>
+                    <TableCell>
+                      {member.id ? (
+                        <Link
+                          component={RouterLink}
+                          to={`/members/${encodeURIComponent(member.id)}`}
+                          variant="body2"
+                          sx={{ fontWeight: 500 }}
+                        >
+                          {member.email ?? member.externalId ?? '—'}
+                        </Link>
+                      ) : (
+                        (member.email ?? member.externalId ?? '—')
+                      )}
+                      {/* The `usr_<id>` principal — the only way to correlate this row with a
+                          principal shown on the App Contexts profiles surface. Quiet secondary
+                          line, same treatment as ProfileRow's principal id in
+                          ContextDetailPage.tsx. */}
+                      {member.id && (
+                        <Typography
+                          variant="caption"
+                          color="text.secondary"
+                          sx={{ display: 'block', fontFamily: 'monospace' }}
+                        >
+                          {userPrincipalId(member.id)}
+                        </Typography>
+                      )}
+                    </TableCell>
                     <TableCell>
                       <FormattedMessage
                         id={member.type === 'SERVICE' ? 'members.typeService' : 'members.typeHuman'}
@@ -581,7 +691,15 @@ export function MembersPage(): React.JSX.Element {
                       />
                     </TableCell>
                     <TableCell>
-                      {profile === undefined ? (
+                      {isOwner ? (
+                        // An OWNER session can see every context the member holds a
+                        // profile in (crossContextByMember, backed by the OWNER-gated developer
+                        // API) — never implying the old single-context 1:1 relationship. A
+                        // SUB_USER falls through to the unchanged single-default-context branch
+                        // below (crossContext stays undefined forever for them: the query is
+                        // disabled, not merely slow).
+                        <MemberProfileChipList result={crossContext} />
+                      ) : profile === undefined ? (
                         <Typography variant="caption" color="text.secondary">
                           <FormattedMessage id="members.profileLoading" />
                         </Typography>

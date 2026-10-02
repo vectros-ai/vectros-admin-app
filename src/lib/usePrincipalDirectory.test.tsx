@@ -14,7 +14,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { vectrosApiClient } from '../api/vectrosApi';
 import type * as VectrosApi from '../api/vectrosApi';
 import { TestTenantProvider } from '../test/TestTenantProvider';
-import { usePrincipalDirectory } from './usePrincipalDirectory';
+import { usePrincipalDirectory, userIdFromPrincipal } from './usePrincipalDirectory';
 
 vi.mock('../api/vectrosApi', async (importOriginal) => {
   const actual = await importOriginal<typeof VectrosApi>();
@@ -98,5 +98,19 @@ describe('usePrincipalDirectory', () => {
       label: 'usr_alice',
       unresolved: true,
     });
+  });
+});
+
+describe('userIdFromPrincipal', () => {
+  it('strips the usr_ prefix', () => {
+    expect(userIdFromPrincipal('usr_alice')).toBe('alice');
+  });
+
+  it('returns undefined for a key_ principal', () => {
+    expect(userIdFromPrincipal('key_abc123')).toBeUndefined();
+  });
+
+  it('returns undefined for an unrecognized principal shape', () => {
+    expect(userIdFromPrincipal('alice')).toBeUndefined();
   });
 });

@@ -8,6 +8,11 @@
 //     navigates to the new profile's edit page.
 //   - Edit mode: fetches the profile; on save PATCHes via PUT (the SDK's
 //     idempotent update path) and stays on the page.
+//   - Edit mode's principal display links to `/members/<id>` for a `usr_`
+//     principal — the reverse of MembersPage's own link into
+//     here, derived from the `usr_` prefix directly (not the principal
+//     directory, whose own "Known gap" would drop this link for a principal
+//     profiled only in a non-default context).
 //   - **XOR source radio**: 'role' vs 'inline'. The backend rejects
 //     bodies with neither or both set; the UI enforces by only showing
 //     ONE of (role Autocomplete | ScopeEditor) at a time.
@@ -145,7 +150,12 @@ import { MAX_SCOPE_NAMESPACES } from '../../lib/scopeNamespace';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
 import { useNamespaceRegistry } from '../../lib/namespaceRegistry';
 import { useBeforeNavigate } from '../../lib/useBeforeNavigate';
-import { usePrincipalDirectory, userPrincipalId, userLabel } from '../../lib/usePrincipalDirectory';
+import {
+  usePrincipalDirectory,
+  userPrincipalId,
+  userLabel,
+  userIdFromPrincipal,
+} from '../../lib/usePrincipalDirectory';
 import { isMultiRoleComposed } from '../../lib/accessProfileRoles';
 
 // ---------------------------------------------------------------------------
@@ -600,6 +610,16 @@ export function ProfileEditor(): React.JSX.Element {
     },
     onSuccess: (data) => {
       void queryClient.invalidateQueries({ queryKey: accessQueryKeys.profiles(ctxId) });
+      // The Members surface's cross-context profile view reads through this
+      // key too (MembersPage's per-row fan-out, MemberDetailPage's profiles
+      // panel) — without this, a saved role/scope change would still show
+      // the pre-save profile there until its own staleTime lapses.
+      const savedMemberId = data?.principalId ? userIdFromPrincipal(data.principalId) : undefined;
+      if (savedMemberId) {
+        void queryClient.invalidateQueries({
+          queryKey: accessQueryKeys.memberProfiles(tenant, savedMemberId),
+        });
+      }
       if (isCreate && data?.principalId) {
         setBaseline(data);
         navigate(`/access/contexts/${ctxId}/profiles/${encodeURIComponent(data.principalId)}`);
@@ -633,6 +653,10 @@ export function ProfileEditor(): React.JSX.Element {
   // selection, so toggling the picker mid-edit doesn't itself enable/disable
   // Clone before the change is saved.
   const baselineIsMultiRole = isMultiRoleComposed(baseline);
+
+  // The member id for the reverse-link below, derived once (not re-derived
+  // on every render inside the JSX that reads it twice).
+  const reverseLinkMemberId = userIdFromPrincipal(principalIdFromUrl);
 
   // ── Render ─────────────────────────────────────────────────────────────
 
@@ -809,6 +833,23 @@ export function ProfileEditor(): React.JSX.Element {
                   </Typography>
                 )}
               </Stack>
+              {/* The reverse link, from a profile's principal back to the
+                  member. Derived from the `usr_` prefix directly rather than the
+                  directory's own resolution: the directory only ever sees users
+                  profiled in the DEFAULT context (its own module doc's "Known gap"),
+                  so a principal profiled only in THIS (non-default) context would
+                  otherwise never get a link at all, even though it's a perfectly
+                  real member. */}
+              {reverseLinkMemberId && (
+                <Link
+                  component={RouterLink}
+                  to={`/members/${encodeURIComponent(reverseLinkMemberId)}`}
+                  variant="body2"
+                  sx={{ mt: 0.5, display: 'inline-block' }}
+                >
+                  <FormattedMessage id="access.profiles.editor.viewMember" />
+                </Link>
+              )}
             </Box>
           )}
 
@@ -1324,6 +1365,12 @@ function CloneProfileDialog({
     },
     onSuccess: (data) => {
       void queryClient.invalidateQueries({ queryKey: accessQueryKeys.profiles(ctxId) });
+      const clonedMemberId = data?.principalId ? userIdFromPrincipal(data.principalId) : undefined;
+      if (clonedMemberId) {
+        void queryClient.invalidateQueries({
+          queryKey: accessQueryKeys.memberProfiles(tenant, clonedMemberId),
+        });
+      }
       onClose();
       if (data?.principalId) {
         navigate(`/access/contexts/${ctxId}/profiles/${encodeURIComponent(data.principalId)}`);
@@ -1451,6 +1498,12 @@ function DeleteProfileDialog({
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: accessQueryKeys.profiles(ctxId) });
+      const deletedMemberId = userIdFromPrincipal(principalId);
+      if (deletedMemberId) {
+        void queryClient.invalidateQueries({
+          queryKey: accessQueryKeys.memberProfiles(tenant, deletedMemberId),
+        });
+      }
       onClose();
       navigate(`/access/contexts/${ctxId}?tab=profiles`);
     },

@@ -3,6 +3,34 @@
 All notable changes to the Vectros Admin App are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.23.0 — 2026-10-01
+
+### Added
+
+- **A trusted issuer awaiting verification can be verified from the Issuers page.** Its row has a Verify action
+  that shows the challenge to configure in your identity provider, accepts the resulting token, and explains the
+  next step when the platform refuses it, such as getting a fresh token, reconfiguring the identity provider,
+  fixing the provider's discovery document, or registering the issuer again.
+- **The Members list shows each member's `usr_<id>` principal** beneath their email, the id you use to match a
+  member to the principal on the App Contexts profiles surface. Selecting a member opens a detail page
+  (`/members/<id>`) with their identity summary (id, email, externalId, status, type, externalSubject, created)
+  and its payload: rendered from the identity's schema when it has one, with the raw JSON shown below it.
+- **An account OWNER sees every app context in which a member holds an access profile**, on the Members list and the
+  detail page, each linking to that context's profile editor. A SUB_USER session sees the `default`
+  context's profile on the Members list only.
+- **An access profile bound to a `usr_` principal links back to its member.** The profile editor has a "View
+  member" link to the member's detail page.
+
+### Changed
+
+- **The Advanced scope hint states that `documents` accept a type qualifier on every operation.**
+  `documents:r:invoice` reads only documents of type `invoice`, and an untyped document matches only an unqualified
+  `documents:r`. `users` accepts a qualifier on `s` alone.
+
+### Fixed
+
+- **The Members list shows "Couldn't load" in the Access profile column when a member's profile cannot be loaded.**
+
 ## 0.22.0 — 2026-09-22
 
 ### Security
