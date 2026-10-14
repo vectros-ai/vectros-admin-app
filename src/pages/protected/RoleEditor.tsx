@@ -6,9 +6,9 @@
 //   - Create mode (route ends in `/new`): blank form; on save POSTs and
 //     navigates to the new role's edit page.
 //   - Edit mode (route ends in a real roleId): fetches the role;
-//     on save PATCHes and stays on the page (the design's deferred
-//     "navigate back to list with Snackbar" UX would also be valid —
-//     staying on the page makes successive small edits frictionless).
+//     on save PATCHes and stays on the page (navigating back to the list
+//     with a Snackbar would also be valid — staying on the page makes
+//     successive small edits frictionless).
 //   - Reuses `ScopeEditor` verbatim — exported helpers
 //     (`emptyClause`, `validateClauses`, `formatScopeClauseValidationError`)
 //     drive the in-place validation pattern.

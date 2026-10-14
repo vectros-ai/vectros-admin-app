@@ -28,7 +28,7 @@
 // returns `{ kind: 'JWKS_UNAVAILABLE' }` — it does NOT fall back to
 // unverified display. The error UI tells the user to try the link again
 // or contact their inviter. Falling back to unverified would re-introduce
-// the trust-boundary risk this MR specifically removed.
+// the trust-boundary risk that verifying the signature removes.
 //
 // **Partner-fork knob.** Two constants below (`EXPECTED_ISSUER` +
 // `EXPECTED_AUDIENCE`) are hardcoded with a "fork to change" comment. The
@@ -121,7 +121,7 @@ export interface InviteTokenClaims {
    * used for Dev Admins).
    *
    * **Optional + defensively-nullable** for one specific backward-compat
-   * case: tokens minted before this MR's signer change shipped do not
+   * case: tokens minted before the signer change shipped do not
    * carry the claim. Those tokens will still decode VALID; AcceptPage
    * simply skips the `custom:uuid` seeding and the sub-user falls back
    * to the legacy "no developer-API access" state. New invites all carry

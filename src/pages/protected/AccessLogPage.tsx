@@ -11,6 +11,9 @@
 //     a nested client/patient, a single action, a revealed-sensitive filter,
 //     and a time window. Metadata only — the payload, the looked-up value, and
 //     any query text are never recorded, so they are never shown here.
+//   - `destinationAlias` / `destinationHost` fill the "Delivered to" column for a read that disclosed content into a
+//     model call routed to the account's own provider: the alias of the provider configuration and the host of its
+//     endpoint. Every other read, and a platform that predates the fields, shows an em dash.
 //   - `revealedSensitive` is a first-class column: it is true only when at
 //     least one sensitive field was actually returned unmasked, which is
 //     materially different from a masked read for accounting purposes.
@@ -670,6 +673,9 @@ export function AccessLogPage(): React.JSX.Element {
                   <TableCell sx={{ width: 150, fontWeight: 600 }}>
                     <FormattedMessage id="accessLog.columnRevealed" />
                   </TableCell>
+                  <TableCell sx={{ width: 200, fontWeight: 600 }}>
+                    <FormattedMessage id="accessLog.columnDestination" />
+                  </TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -715,6 +721,12 @@ function AccessLogTableRow({ row }: { row: ReadAccessLogRow }): React.JSX.Elemen
     row.resourceType || row.resourceId
       ? `${row.resourceType ?? ''}${row.resourceType && row.resourceId ? ':' : ''}${row.resourceId ?? ''}`
       : null;
+  // Where a routed model call delivered what it disclosed: the alias of the provider config and the host of its
+  // endpoint. Both are absent for every other read, and from a platform that predates the fields, so each half is
+  // shown only when it is a non-empty string, and shown trimmed (the filter tests the trimmed value, so the cell shows it too).
+  const destination = [row.destinationAlias, row.destinationHost]
+    .map((part) => (typeof part === 'string' ? part.trim() : ''))
+    .filter((part) => part !== '');
 
   return (
     <TableRow sx={{ '&:hover': { bgcolor: 'action.hover' } }}>
@@ -755,6 +767,26 @@ function AccessLogTableRow({ row }: { row: ReadAccessLogRow }): React.JSX.Elemen
       </TableCell>
       <TableCell>
         <RevealedChip revealed={row.revealedSensitive} />
+      </TableCell>
+      <TableCell sx={{ fontFamily: 'monospace', fontSize: 11 }}>
+        {destination.length > 0 ? (
+          <Tooltip title={destination.join(' · ')}>
+            <Box component="span" sx={{ display: 'block' }}>
+              {/* Each line clips on its own: text-overflow does not reach the block children of an overflow:hidden box. */}
+              {destination.map((part, i) => (
+                <Box
+                  component="span"
+                  key={i}
+                  sx={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                >
+                  {part}
+                </Box>
+              ))}
+            </Box>
+          </Tooltip>
+        ) : (
+          emDash
+        )}
       </TableCell>
     </TableRow>
   );

@@ -32,6 +32,7 @@
   "accessLog.columnResource": "Resource read",
   "accessLog.columnCaller": "Caller key",
   "accessLog.columnRevealed": "Sensitive revealed",
+  "accessLog.columnDestination": "Delivered to",
   "accessLog.revealedYes": "Revealed",
   "accessLog.revealedNo": "No",
   "accessLog.loadMore": "Load more",

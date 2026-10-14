@@ -29,13 +29,13 @@ import { TestIntlProvider } from '../../test/intl';
 // ---------------------------------------------------------------------------
 // Mock the invite-token decoder.
 //
-// Post-MR-#7.99 the real decoder is async + does ES256 signature verification
+// The real decoder is async + does ES256 signature verification
 // via jose against the platform's JWKS endpoint. That's exercised in
 // `src/invitations/token.test.ts` with mocked jose.
 //
 // HERE we want AcceptPage tests to assert AcceptPage's logic given a
 // specific decoder result, without engaging jose at all (jsdom has no real
-// JWKS server). The mock below mimics the *structural* pre-MR-#7.99
+// JWKS server). The mock below mimics the *structural* earlier synchronous
 // behavior of decodeInviteToken — enough for the existing tests' makeToken-
 // driven token shapes to drive the AcceptPage through the right states.
 // The 3 new variants (NOT_YET_VALID / INVALID_SIGNATURE / JWKS_UNAVAILABLE)
@@ -51,7 +51,7 @@ vi.mock('../../invitations/token', async () => {
 
 /**
  * Mock decoder — structural-only (does NOT verify signatures or fetch JWKS).
- * Same shape as the pre-MR-#7.99 sync decoder, made async. The base64url
+ * Same shape as the earlier sync decoder, made async. The base64url
  * payload segment is decoded + claims spot-checked exactly like the old
  * implementation.
  */

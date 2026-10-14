@@ -5,7 +5,7 @@
 //   - Use the LEGACY `<MemoryRouter>` component — NOT `createMemoryRouter`.
 //     Production wires the app under `<BrowserRouter>` in main.tsx, and
 //     `<BrowserRouter>` + `<MemoryRouter>` share the legacy non-data-router
-//     plumbing. The original test file in this MR used `createMemoryRouter`
+//     plumbing. An earlier version of this test used `createMemoryRouter`
 //     (the data-router variant) which silently diverged from production —
 //     hiding a runtime crash caught only by smoke. The convention going
 //     forward: tests should run against the SAME router type production

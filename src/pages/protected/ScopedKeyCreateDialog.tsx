@@ -933,9 +933,8 @@ function ServicePrincipalCreateDialog({
 // Step 3: Context — AppContext picker + AccessProfile existence check.
 //
 // Backend contract: createScopedKey requires a pre-existing AccessProfile
-// for (tenantId, contextId, usr_<userId>). The handoff doc calls this out
-// as "two round-trips per create" — we surface the inline-create UX in
-// this step so a partner picking a context that has no profile yet doesn't
+// for (tenantId, contextId, usr_<userId>), so creating a key takes two round-trips.
+// This step offers inline profile creation so a partner picking a context that has no profile yet doesn't
 // have to leave the wizard.
 //
 // Profile existence is checked by attempting `getAccessProfile`. A 404

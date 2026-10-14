@@ -5,7 +5,7 @@
 // public-reference app for developers building on top of the Vectros API.
 // "Use our SDK" is the pitch; hand-rolling our own HTTP client
 // here would contradict the framing. The SDK is type-safe (regenerated
-// from the backend's OpenAPI spec per MR), so admin-app's call sites
+// from the backend's OpenAPI spec per backend release), so admin-app's call sites
 // stay in sync with backend changes by construction — adding a new
 // field or endpoint on the backend means we get it for free on the
 // next SDK version bump.

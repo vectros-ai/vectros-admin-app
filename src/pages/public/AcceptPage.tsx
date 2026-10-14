@@ -86,7 +86,7 @@ function ErrorState({ message }: { readonly message: string }): React.JSX.Elemen
 }
 
 /**
- * Existing-identity AUTO-LINK branch (§6.3.2 case 4a): the invitee is already
+ * Existing-identity AUTO-LINK branch: the invitee is already
  * signed in AS the invited email. Instead of a doomed signUp (Cognito would
  * 409 on the duplicate email), link the pending membership to their current
  * identity via the provider's linkInvitation(). On success a full reload lands
@@ -185,7 +185,7 @@ function AutoLinkCard({
 }
 
 /**
- * Wrong-identity branch (§6.3.2 case 4c): signed in as someone OTHER than the
+ * Wrong-identity branch: signed in as someone OTHER than the
  * invited email. Never link the invite to the wrong account — ask them to sign
  * out + reopen the link (which then falls through to signup / sign-in-to-link).
  */
@@ -402,8 +402,7 @@ export function AcceptPage(): React.JSX.Element {
 
   const { claims } = decoded;
 
-  // Existing-identity pivot (shared-cognito-pool-ambiguity.md §6.3.2). If the
-  // invitee is already signed in:
+  // Existing-identity pivot. If the invitee is already signed in:
   //   - as the invited email → auto-link this membership (a signUp would 409).
   //   - as a DIFFERENT email → sign-out-and-retry (identity-confusion guard).
   // Not signed in → fall through to the first-time signup form below, which
@@ -464,8 +463,8 @@ export function AcceptPage(): React.JSX.Element {
         metadata,
       });
       // Defense-in-depth: drop the password fields from component state once
-      // signUp has succeeded (known-followups §3 — secrets shouldn't linger in
-      // React state past the moment they're needed).
+      // signUp has succeeded (secrets shouldn't linger in React state past the
+      // moment they're needed).
       setPassword('');
       setConfirmPassword('');
       if (result.kind === 'CONFIRMATION_REQUIRED') {
@@ -520,8 +519,7 @@ export function AcceptPage(): React.JSX.Element {
             autoComplete="email"
             value={claims.email}
             disabled
-            // Locked email — invariant A from sub-user-invitations §11.2.
-            // The signup proceeds against the token's email claim, not
+            // Locked email: the signup proceeds against the token's email claim, not
             // whatever the user might type. `disabled` covers both the
             // visual + interaction lock; aria-readonly clarifies for AT.
             // MUI v7 — `slotProps.htmlInput` passes native HTML attributes

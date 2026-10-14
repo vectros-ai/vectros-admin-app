@@ -733,6 +733,111 @@ describe('AccessLogPage', () => {
     expect(within(table).getAllByText('—').length).toBeGreaterThan(0);
   });
 
+  describe('Delivered to (where a routed model call delivered what it disclosed)', () => {
+    const ROUTED_ROW = {
+      id: 'ral_routed',
+      contextId: 'ctx_intake',
+      subjects: [{ type: 'user', id: 'user_abc' }],
+      callerKeyId: 'key_scoped',
+      action: 'rag',
+      resourceType: 'rag',
+      resourceId: 'rec_9',
+      revealedSensitive: true,
+      destinationAlias: 'my-vllm',
+      destinationHost: 'llm.example.com',
+      createdAt: '2026-05-30T14:25:00.000Z',
+    } satisfies ReadAccessLogRow;
+
+    async function fetchRows(rows: unknown[]) {
+      const user = userEvent.setup();
+      renderPage({
+        client: makeMockClient({
+          getAccessLog: vi.fn().mockResolvedValue({ data: rows, nextCursor: null }),
+        }),
+      });
+      await fillRequired(user);
+      await user.click(screen.getByRole('button', { name: /fetch disclosures/i }));
+      return screen.findByRole('table', { name: /read-access disclosure rows/i });
+    }
+
+    /** The "Delivered to" cell of the data row whose resource cell reads `resource`. */
+    function destinationCell(table: HTMLElement, resource: string): HTMLElement {
+      const headers = within(table).getAllByRole('columnheader').map((h) => h.textContent);
+      const col = headers.indexOf('Delivered to');
+      expect(col).toBeGreaterThanOrEqual(0);
+      const row = within(table).getByText(resource).closest('tr') as HTMLElement;
+      return within(row).getAllByRole('cell')[col] as HTMLElement;
+    }
+
+    it('shows the alias and the host for a routed read, and an em dash for one that was not routed', async () => {
+      const table = await fetchRows([ROUTED_ROW, ...SAMPLE_ROWS]);
+      const routed = destinationCell(table, 'rag:rec_9');
+      expect(within(routed).getByText('my-vllm')).toBeInTheDocument();
+      expect(within(routed).getByText('llm.example.com')).toBeInTheDocument();
+      expect(destinationCell(table, 'intake_form:rec_1')).toHaveTextContent(/^—$/);
+      expect(destinationCell(table, 'search:rec_2')).toHaveTextContent(/^—$/);
+    });
+
+    it('carries both values in the tooltip, alias then host', async () => {
+      const user = userEvent.setup();
+      const table = await fetchRows([ROUTED_ROW]);
+      const cell = destinationCell(table, 'rag:rec_9');
+      await user.hover(within(cell).getByText('my-vllm'));
+      expect(await screen.findByRole('tooltip')).toHaveTextContent('my-vllm · llm.example.com');
+    });
+
+    it('shows and carries the TRIMMED value when the API pads it with whitespace', async () => {
+      const user = userEvent.setup();
+      const table = await fetchRows([
+        { ...ROUTED_ROW, destinationAlias: '  my-vllm  ', destinationHost: '	llm.example.com ' },
+      ]);
+      const cell = destinationCell(table, 'rag:rec_9');
+      // getByText normalizes whitespace, so read the raw text of each line instead.
+      const lines = Array.from(cell.querySelectorAll('span span')).map((n) => n.textContent);
+      expect(lines).toEqual(['my-vllm', 'llm.example.com']);
+      await user.hover(within(cell).getByText('my-vllm'));
+      expect(await screen.findByRole('tooltip')).toHaveTextContent(/^my-vllm · llm\.example\.com$/);
+    });
+
+    it('clips a long host on its own line (nowrap + ellipsis) and keeps the whole value in the DOM and the tooltip', async () => {
+      const user = userEvent.setup();
+      const longHost = `${'a'.repeat(200)}.example.com`;
+      const table = await fetchRows([{ ...ROUTED_ROW, destinationHost: longHost }]);
+      const cell = destinationCell(table, 'rag:rec_9');
+      const hostLine = within(cell).getByText(longHost);
+      expect(hostLine).toHaveStyle({ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' });
+      // The alias line clips the same way: each line owns its ellipsis.
+      expect(within(cell).getByText('my-vllm')).toHaveStyle({ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' });
+      await user.hover(hostLine);
+      expect(await screen.findByRole('tooltip')).toHaveTextContent(`my-vllm · ${longHost}`);
+    });
+
+    it('treats null and empty values as not routed (the API returns null for every other read)', async () => {
+      const table = await fetchRows([
+        { ...SAMPLE_ROWS[0], destinationAlias: null, destinationHost: null },
+        { ...SAMPLE_ROWS[1], destinationAlias: '', destinationHost: '  ' },
+      ]);
+      expect(destinationCell(table, 'intake_form:rec_1')).toHaveTextContent(/^—$/);
+      expect(destinationCell(table, 'search:rec_2')).toHaveTextContent(/^—$/);
+    });
+
+    it('shows whichever half is present, and does not crash on a response from a platform without the fields', async () => {
+      const table = await fetchRows([
+        { ...ROUTED_ROW, id: 'ral_alias_only', resourceId: 'rec_a', destinationHost: undefined },
+        { ...ROUTED_ROW, id: 'ral_host_only', resourceId: 'rec_h', destinationAlias: undefined },
+        SPARSE_ROW,
+      ]);
+      const aliasOnly = destinationCell(table, 'rag:rec_a');
+      expect(within(aliasOnly).getByText('my-vllm')).toBeInTheDocument();
+      expect(within(aliasOnly).queryByText('llm.example.com')).not.toBeInTheDocument();
+      const hostOnly = destinationCell(table, 'rag:rec_h');
+      expect(within(hostOnly).getByText('llm.example.com')).toBeInTheDocument();
+      expect(within(hostOnly).queryByText('my-vllm')).not.toBeInTheDocument();
+      // 3 data rows rendered, the sparse one (no fields at all) included.
+      expect(within(table).getAllByRole('row')).toHaveLength(4);
+    });
+  });
+
   it('surfaces a context-list failure instead of leaving Fetch silently gated', async () => {
     // The selector's source is a drained list that now REFUSES to return a
     // partial result. Before, a failure left the dropdown empty and Fetch

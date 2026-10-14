@@ -109,7 +109,7 @@ describe('WelcomePage', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { level: 2, name: "What's next" })).toBeInTheDocument();
     });
-    // Post-MR-#7.5 copy: all admin surfaces are live; the What's next
+    // Current copy: all admin surfaces are live; the What's next
     // card now reads as a recap rather than a "coming soon" promise.
     expect(screen.getByText(/all admin surfaces are now live/i)).toBeInTheDocument();
   });

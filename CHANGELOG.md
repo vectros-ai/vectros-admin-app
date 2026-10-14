@@ -3,6 +3,33 @@
 All notable changes to the Vectros Admin App are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.24.0 — 2026-10-12
+
+### Added
+
+- **The Access log shows where a routed model call delivered what it disclosed.** A new "Delivered to" column shows
+  the alias of the provider configuration and the host of its endpoint for a read that disclosed content into a call
+  you routed to your own model provider (`providerAlias` on Ask or document Ask). Every other read, including a read
+  served by the platform's own models, shows a dash. The record exists only where read-access logging is on for the context or the document type.
+
+### Changed
+
+- **Built against SDK 0.47.0.** See the
+  [SDK changelog](https://github.com/vectros-ai/vectros-api-spec/blob/main/CHANGELOG.md) for the full release.
+- **The comment in the served `index.html` says forks can re-brand the app by editing one file.**
+- **Source comments state their rules themselves.** Comments that pointed at internal design documents now say what
+  the rule is, so the published source reads on its own. No behavior changes.
+
+### Security
+
+- **Build and test dependencies updated to patched releases.** `brace-expansion`, `js-yaml`, `nanoid`, `undici` and
+  `vitest` (with its coverage plugin) now resolve to versions that fix their published advisories, and `postcss` is
+  raised so that the patched `nanoid` is the one it uses. These packages are used while building and testing the app
+  and are not part of the built app, so the app's behavior is unchanged. If you forked the app, the `overrides` block
+  in `package.json` keeps the patched floors for `brace-expansion`, `js-yaml`, `nanoid`, `postcss` and `undici` in
+  place when you regenerate your lockfile; `vitest` with its coverage plugin is fixed by their exact `devDependencies`
+  pins.
+
 ## 0.23.0 — 2026-10-01
 
 ### Added

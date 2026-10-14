@@ -10,7 +10,7 @@
 //      - BasicsStep field + env radio with live preselected (default prop).
 //      - Next disabled until keyName valid; enabled after.
 //      - Inline error renders for whitespace + tooLong cases.
-//      - BindStep (Step 4 — this commit):
+//      - BindStep (Step 4):
 //        - Humans tab default + list renders + click selects + Next enables
 //        - Switching to Services tab swaps the visible rows
 //        - Empty state copy per tab
@@ -994,7 +994,7 @@ describe('<ScopedKeyCreateDialog>', () => {
     await advancePastContext(user);
     await user.click(screen.getByRole('button', { name: /^create$/i }));
 
-    // Post-MR-#8-Phase-7: the key is minted in a REAL tenant id. The wizard
+    // The key is minted in a REAL tenant id. The wizard
     // maps the selected env to the matching membership's tenantId; with the
     // single seeded (test) membership it resolves to the active TEST_TENANT_ID.
     await waitFor(() => {
@@ -1010,7 +1010,7 @@ describe('<ScopedKeyCreateDialog>', () => {
     await waitFor(() => expect(onSuccess).toHaveBeenCalled());
   });
 
-  it('mints a PER-CONTEXT bearer for the profile + key when a DATA context is picked (BUG-2)', async () => {
+  it('mints a PER-CONTEXT bearer for the profile + key when a DATA context is picked', async () => {
     const user = userEvent.setup();
     const { client } = renderDialog();
     await advancePastBind(user);
@@ -1026,7 +1026,7 @@ describe('<ScopedKeyCreateDialog>', () => {
         expect.objectContaining({ contextId: 'data-eng' }),
       ),
     );
-    // ...and — the BUG-2 fix — the profile read AND the key mint ride a bearer
+    // ...and — the per-context fix — the profile read AND the key mint ride a bearer
     // minted for THAT context (the second vectrosApiClient arg). Reverting any
     // context-scoped call to vectrosApiClient(tenant) would drop this arg.
     expect(vectrosApiClient).toHaveBeenCalledWith(TEST_TENANT_ID, 'data-eng');

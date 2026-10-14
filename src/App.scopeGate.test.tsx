@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// App scope-gating integration tests (nav-gating wave surface).
+// App scope-gating integration tests (navigation gating).
 //
 // Two client-side authz layers, both exercised here against the SHIPPING
 // ADMIN_NAV_ITEMS wiring (incl. the app-contexts:r-gated /access/contexts item
@@ -217,7 +217,7 @@ describe('App nav scope-gating (real gate, shipping ADMIN_NAV_ITEMS)', () => {
     expect(screen.queryByRole('link', { name: /app contexts/i })).not.toBeInTheDocument();
   });
 
-  // F-1 regression lock. `admin:users`/`admin:keys`/`admin:logs`/`admin:profiles`
+  // Regression lock. `admin:users`/`admin:keys`/`admin:logs`/`admin:profiles`
   // were this app's ORIGINAL gateAction literals — and the platform's scope
   // grammar rejects every one of them at mint time (the post-colon segment must
   // be composed only of single-letter op verbs; none of "users"/"keys"/"logs"/
@@ -294,7 +294,7 @@ describe('App route scope-gating (RequireScope enforces gated routes, not just t
     expect(await screen.findByRole('heading', { name: 'Members' })).toBeInTheDocument();
   });
 
-  // F-1 regression lock, route level (the nav-gating describe block above
+  // Regression lock, route level (the nav-gating describe block above
   // covers the same fact at the link-visibility level). Before the fix this
   // registerScope(['admin:users']) fixture minted a token shape the real
   // authorizer can never issue and the test read as proof RequireScope
