@@ -3,6 +3,31 @@
 All notable changes to the Vectros Admin App are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.24.1 — 2026-10-25
+
+### Security
+
+- **Build tooling updated to patched releases.** `vite` is now 8.1.6 and `source-map-js` resolves to 1.2.2. Both are used
+  only while building the app, so the built app is unchanged. If you forked the app, raise your `vite` pin to 8.1.6 or later.
+
+### Changed
+
+- **Text corrections.** The message for a member without permission to re-send an invitation lists all three permissions it
+  needs (`users:c`, `users:r` and `users:u`). Scoped keys are described as long-lived. Removing a member says their
+  access ends within about 5 minutes. The Welcome page lists the sections the navigation offers. The notes on multi-role
+  profiles say what the app does and name the CLI for the rest.
+- **The README lists Accounting of disclosures, Trigger failures and Trusted issuers.** They are existing pages that the
+  capability table did not name.
+- **Source comments describe the code as it is.** Behaviour is unchanged.
+- **Built against SDK 0.48.0.** Saving a role or an app context while another request changes the same item now fails with
+  the platform's `409` instead of overwriting the other change. The role editor shows the platform's message under the
+  error; the app-context dialog says "Could not save your changes. Please try again." Re-open the item and save again.
+  Re-sending an invitation meets the same rule and shows "We couldn't re-send that invitation. Please try again."
+  A person whose external subject was stored only through `PUT /v1/users/{id}` is not given your account in their
+  sign-in or tenant switcher and cannot be the target of an ownership transfer; invite them instead. A user or entity
+  whose schema no longer exists is not listed or opened. See the
+  [SDK changelog](https://github.com/vectros-ai/vectros-api-spec/blob/main/CHANGELOG.md) for the full release.
+
 ## 0.24.0 — 2026-10-12
 
 ### Added

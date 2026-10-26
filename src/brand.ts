@@ -7,7 +7,7 @@
 // email. If you see one elsewhere, that's a bug — move it here.
 //
 // Typography choices live in src/theme.ts (which consumes this module).
-// User-visible strings live in src/strings.ts (which also consumes this
+// User-visible strings live in src/i18n/messages.en.json (which also consumes this
 // module for product-name interpolation).
 // ---------------------------------------------------------------------------
 

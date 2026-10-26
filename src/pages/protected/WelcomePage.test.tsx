@@ -109,9 +109,8 @@ describe('WelcomePage', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { level: 2, name: "What's next" })).toBeInTheDocument();
     });
-    // Current copy: all admin surfaces are live; the What's next
-    // card now reads as a recap rather than a "coming soon" promise.
-    expect(screen.getByText(/all admin surfaces are now live/i)).toBeInTheDocument();
+    // The What's next card is a recap of the sections the navigation offers.
+    expect(screen.getByText(/use the nav to manage members/i)).toBeInTheDocument();
   });
 
   it('renders a labeled loading affordance when no user (defensive — RequireAuth normally prevents this)', async () => {

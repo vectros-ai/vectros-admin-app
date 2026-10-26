@@ -355,7 +355,7 @@ describe('RESOURCE_CATALOG (grantable scope resources)', () => {
     const values = RESOURCE_CATALOG.map((r) => r.value);
     // The generic entities surface replaced the retired org/client routes.
     expect(values).toContain('entities');
-    // `orgs`/`clients` are dead authority (routes 404) — no longer grantable.
+    // `orgs`/`clients` are dead authority (routes 404) — not grantable.
     expect(values).not.toContain('orgs');
     expect(values).not.toContain('clients');
     // `namespaces` is delisted as a grantable resource (registry reads are open,
@@ -492,7 +492,7 @@ describe('scopeEditor.advancedHint (customer-facing grammar copy)', () => {
     ).toEqual([]);
   });
 
-  it('keeps users reveal-only, and no longer calls a qualified documents form refused', () => {
+  it('keeps users reveal-only, and does not call a qualified documents form refused', () => {
     // The drift this guards runs in both directions. Copy that invites `users:r:<type>` teaches a form the
     // platform treats as inert there, so naming it without saying it is refused is wrong. And since 0.46.0
     // `documents` is a genuine narrowing resource on every letter, so copy that still calls
@@ -1207,8 +1207,7 @@ describe('<ScopeEditor> permission matrix', () => {
     // through untouched, so the ONLY thing standing between a tenant's
     // role-composition restriction and silent removal on an unrelated edit is
     // that those updaters spread the existing clause. A refactor to explicit
-    // field construction — the exact mistake this branch fixes at the save
-    // sites — would break it here instead, and nothing else would notice.
+    // field construction would break it here instead, and nothing else would notice.
     const onChange = vi.fn();
     render(
       <TestIntlProvider>
@@ -1327,9 +1326,9 @@ describe('<ScopeEditor> data-scope filters', () => {
     });
   });
 
-  // The "*" dimension wildcard (0.38.0) previously could not be authored at
-  // all through this editor — the namespace field's grammar rejected a
-  // leading "*". Both the option's discoverability and the actual save path
+  // The "*" dimension wildcard (0.38.0) must be authorable through this
+  // editor — the namespace field's grammar has to accept a leading "*".
+  // Both the option's discoverability and the actual save path
   // are pinned here, not just the underlying dataScope.ts model.
   it('offers "*" as a namespace suggestion and saves it as the bare wildcard key', async () => {
     const user = userEvent.setup();
@@ -1505,7 +1504,7 @@ describe('<ScopeEditor> data-scope filters', () => {
     expect(screen.queryByText(/not registered for this context/i)).not.toBeInTheDocument();
   });
 
-  it('never flags a namespace as unregistered while the caller has NOT said it is safe to (the default) — the S2 regression this guards', async () => {
+  it('never flags a namespace as unregistered while the caller has NOT said it is safe to (the default)', async () => {
     // No `canFlagUnregisteredNamespace` passed — defaults to false. A caller
     // whose own registry query is still loading, or has failed, MUST omit
     // (or explicitly withhold) this prop rather than pass an empty

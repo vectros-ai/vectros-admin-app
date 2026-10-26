@@ -38,7 +38,7 @@ import type * as DeveloperApi from '../../api/developerApi';
 import { TestTenantProvider, TEST_TENANT_ID } from '../../test/TestTenantProvider';
 import { AccessLogPage } from './AccessLogPage';
 
-// The read-access query goes through the partner-API SDK client; the context
+// The read-access query goes through the Vectros API SDK client; the context
 // list through the owner-gated developer API. Mock both so the page is
 // deterministic.
 vi.mock('../../api/vectrosApi', async (importOriginal) => {

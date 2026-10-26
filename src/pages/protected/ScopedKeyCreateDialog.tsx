@@ -151,10 +151,10 @@ export function formatKeyNameError(code: KeyNameErrorCode, intl: IntlShape): str
 }
 
 // ---------------------------------------------------------------------------
-// The wizard used to gate "Next" on mere EXISTENCE of a bound user or access
-// profile, so a suspended one looked identical to an active one all the way
-// to the final step, where the create call's own refusal showed up as a
-// generic error. These two predicates let each earlier step react
+// Gating "Next" on mere EXISTENCE of a bound user or access profile would
+// make a suspended one look identical to an active one all the way to the
+// final step, where the create call's own refusal shows up as a generic
+// error. These two predicates let each earlier step react
 // immediately instead. This is a UX signal only — the server's own refusal
 // remains authoritative if either check here is ever wrong or stale.
 // ---------------------------------------------------------------------------
@@ -215,9 +215,9 @@ export function ScopedKeyCreateDialog({
   // can't allow advance prematurely.
   const [profileExists, setProfileExists] = useState(false);
   // SEPARATE from profileExists: a profile can exist and still not be usable
-  // (suspended). Existence alone used to be the whole gate, which was the
-  // bug — a suspended profile rendered a green "exists" check
-  // and Next stayed enabled. See ContextStep's onProfileResolved call site.
+  // (suspended). Existence alone must not be the whole gate: a suspended
+  // profile would render a green "exists" check and Next would stay enabled.
+  // See ContextStep's onProfileResolved call site.
   const [profileMintable, setProfileMintable] = useState(false);
   // Result of the createScopedKey call. ConfirmationStep distinguishes
   // by `result.rawKey != null` — fresh creates carry the raw secret
@@ -391,7 +391,7 @@ export function ScopedKeyCreateDialog({
               {/* The server's message is the actionable part here, and the set
                   of things it can say keeps growing: 0.40.0's 403 when minting
                   bound to a different principal without the delegate-mint
-                  capability; the uniform 404 that no longer distinguishes "user
+                  capability; the uniform 404 that does not distinguish "user
                   doesn't exist" from "no profile in this context"; and, since
                   0.43.0, two 409s — the bound access profile is suspended, or
                   the bound user is. Each names the offending profile or user,
@@ -534,9 +534,8 @@ function BindStep({ boundUser, onPickUser }: BindStepProps): React.JSX.Element {
 
   // Principals created THIS wizard session via "Create service principal"
   // below. Held in local state, deliberately NEVER written into the
-  // ['users', tenant] query cache — see onCreated's own comment for why an
-  // earlier version of this fix (writing straight into the cache) was
-  // itself a real regression, not just a race.
+  // ['users', tenant] query cache — see onCreated's own comment for why
+  // writing straight into the cache is itself a real regression, not just a race.
   const [optimisticPrincipals, setOptimisticPrincipals] = useState<UserResponse[]>([]);
 
   const usersQuery = useQuery({
@@ -590,10 +589,9 @@ function BindStep({ boundUser, onPickUser }: BindStepProps): React.JSX.Element {
       <Alert severity="info" sx={{ mb: 2 }}>
         <FormattedMessage id="keysWizard.bind.delegateMintNotice" />
       </Alert>
-      {/* The picker used to render nothing at all for a suspended user
-          (id/email/externalId only), so picking one and hitting Next five steps
-          later was the first the caller learned about it. Named here, at the
-          point of selection, with the reactivation remedy. */}
+      {/* A suspended user must be called out at the point of selection, not
+          five steps later when Next finally refuses it. Named here, with the
+          reactivation remedy. */}
       {boundUser !== null && !isUserStatusMintable(boundUser.status) && (
         <Alert severity="warning" sx={{ mb: 2 }} role="status">
           <Typography variant="body2" sx={{ fontWeight: 600, mb: 0.5 }}>
@@ -767,13 +765,12 @@ function BindStep({ boundUser, onPickUser }: BindStepProps): React.JSX.Element {
           // backed by will never return it — not on this fetch, not on the
           // NEXT one, not ever, until it's granted a profile. That ruled out
           // both an invalidate+refetch (asks a membership-scoped query a
-          // does-this-exist question it structurally can't answer) AND an
-          // earlier version of this fix that wrote the row straight into the
-          // query cache: that stopped the immediate symptom but broke a
-          // DIFFERENT way — cancelling the tenant's only (still-loading)
-          // fetch to protect the write also discarded every REAL existing
-          // user that fetch would have returned, so the picker showed only
-          // the just-created principal until something else refetched.
+          // does-this-exist question it structurally can't answer) AND writing
+          // the row straight into the query cache: that avoids the immediate
+          // symptom but breaks a DIFFERENT way — cancelling the tenant's only
+          // (still-loading) fetch to protect the write also discards every REAL
+          // existing user that fetch would have returned, so the picker would
+          // show only the just-created principal until something else refetched.
           // Track it in local state instead, unioned into the rendered list
           // (see `users` above) — the real query is free to load, refetch,
           // get cancelled, whatever react-query wants; this row is immune to
@@ -984,7 +981,7 @@ function ContextStep({
         devApi.listAppContexts(startFrom, AUTH_PAGE_SIZE),
       ),
     // A scoped key needs a data context to bind to; the reserved control-plane
-    // context is non-data-bearing and the partner API now rejects an explicit
+    // context is non-data-bearing and the Vectros API now rejects an explicit
     // mint (and any access-profile read/write) pinned to it outright — never a
     // meaningful pick here, so it's dropped before the picker ever sees it.
     select: (contexts) => contexts.filter((c) => c.contextId !== RESERVED_VECTROS_ADMIN_CONTEXT_ID),
@@ -1020,8 +1017,7 @@ function ContextStep({
   //
   // Mintable is a SEPARATE signal from existence: a suspended profile
   // exists (so the "Create profile" prompt correctly stays hidden) but must
-  // not let Next advance. Splitting these is what closes the bug — before
-  // this fix "exists" was the whole gate.
+  // not let Next advance, so the two signals are kept separate.
   useEffect(() => {
     const exists = profileQuery.isSuccess && profileQuery.data != null;
     onProfileResolved(exists);
@@ -1106,9 +1102,8 @@ function ContextStep({
 
           {profileQuery.isSuccess && profileQuery.data != null && (
             // A profile that EXISTS but is not ACTIVE must not render as
-            // the same green "all good" card: before this fix a suspended profile
-            // rendered success + a real CheckCircleIcon, with "status: suspended"
-            // sitting right beside it, and Next stayed enabled regardless.
+            // the same green "all good" card (a real CheckCircleIcon beside
+            // "status: suspended"), and must not leave Next enabled.
             <Alert
               severity={isProfileStatusMintable(profileQuery.data.status) ? 'success' : 'warning'}
               role="status"
@@ -1485,7 +1480,7 @@ function ReviewRow({ labelId, value }: ReviewRowProps): React.JSX.Element {
 // Step 5: Confirmation — show the rawKey ONCE (with copy button) on fresh
 // creates, or an idempotent-match info card if the (partner, tenant,
 // context, userId, keyName) tuple already mapped to an active key. The
-// 5-min Rust authorizer cache window is surfaced here because it's the
+// 5-min authorizer cache window is surfaced here because it's the
 // only place the partner sees the new key — anything sooner would be
 // premature; anything later would be too late to act on.
 // ---------------------------------------------------------------------------

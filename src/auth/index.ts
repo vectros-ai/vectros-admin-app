@@ -2,7 +2,7 @@
 // Auth entry point for the Admin App.
 //
 // The auth stack (provider-agnostic adapter, Cognito reference implementation,
-// partner-API token cache, scope gating, tenant switching, MFA) now lives in
+// Vectros API token cache, scope gating, tenant switching, MFA) now lives in
 // the shared @vectros-ai/react package so the reference apps share one
 // implementation. This module re-exports it as the app's single auth import
 // surface — call sites do `import { useAuth, AuthError } from '../auth'`.

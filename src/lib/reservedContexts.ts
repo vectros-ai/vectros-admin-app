@@ -8,7 +8,7 @@
 
 /**
  * The reserved, auto-seeded control-plane context. Non-data-bearing; the
- * partner API rejects an explicit token mint pinned to it (both as a bearer's
+ * Vectros API rejects an explicit token mint pinned to it (both as a bearer's
  * own context and as a request-body `contextId` the bearer's context must
  * match), so nothing in this app mints against it, offers it as a pickable
  * target context, or fetches per-context data for it.

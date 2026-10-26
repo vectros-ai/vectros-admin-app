@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// InviteMemberDialog — drives the partner-API `createInvite` flow.
+// InviteMemberDialog — drives the Vectros API `createInvite` flow.
 //
 // **UX decisions:**
 //   - Email + Role dropdown upfront. Roles are loaded from
@@ -85,8 +85,8 @@ import { httpsUrlOrNull } from '../../lib/httpsUrl';
  * resolve it.
  *
  * Seeded at tenant provisioning, but note the limit of that: seeding of this
- * context was added on 2026-06-02 and nothing backfills, so a tenant
- * provisioned before then does not have it. The invite then fails with a clean
+ * context was added later and nothing backfills, so a tenant
+ * provisioned before that does not have it. The invite then fails with a clean
  * 404 naming the missing context — loud, and not something this dialog can
  * repair — rather than landing somewhere wrong.
  */

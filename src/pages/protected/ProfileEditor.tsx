@@ -1334,9 +1334,9 @@ function CloneProfileDialog({
         };
       }
       // `status` is the third field in this family — accepted by create, present
-      // on the source, and previously not carried. Create applies it
+      // on the source, and carried explicitly. Create applies it
       // unconditionally and defaults a missing one to active, so cloning a
-      // SUSPENDED profile silently produced an ACTIVE one.
+      // SUSPENDED profile without it would silently produce an ACTIVE one.
       //
       // Carried deliberately, and the choice is between two bad outcomes rather
       // than an obvious one. Dropping it fails OPEN: an admin who suspended a

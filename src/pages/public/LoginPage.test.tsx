@@ -300,11 +300,11 @@ describe('LoginPage MFA stage', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Accessibility hardening: the submit buttons are now the shared <SubmitButton>, which
+// Accessibility hardening: the submit buttons are the shared <SubmitButton>, which
 // disables + shows a labeled spinner + sets aria-busy while the auth call is
 // in flight. These pin that pending state on BOTH stages (a revert to the
 // hand-rolled Button would lose aria-busy and fail here). The error path stays
-// a plain role="alert" Alert — intentional for this slice (auth-adapter errors
+// a plain role="alert" Alert (auth-adapter errors
 // carry no requestId, so ApiErrorAlert is not used here).
 // ---------------------------------------------------------------------------
 describe('LoginPage — submit pending state', () => {

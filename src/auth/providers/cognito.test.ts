@@ -153,12 +153,12 @@ describe('CognitoAuthProvider.signIn', () => {
     expect(result).toEqual({ kind: 'NEW_PASSWORD_REQUIRED' });
   });
 
-  it('reads the REAL allowedMFATypes at the MFA-selection step (closes the hardcoding)', async () => {
+  it('reads the REAL allowedMFATypes at the MFA-selection step', async () => {
     mockSignIn.mockResolvedValue({
       isSignedIn: false,
       nextStep: {
         signInStep: 'CONTINUE_SIGN_IN_WITH_MFA_SELECTION',
-        // Pool offers only TOTP here — the old code hardcoded ['TOTP','SMS'].
+        // Pool offers only TOTP here — the methods come from the pool, not a hardcoded ['TOTP','SMS'].
         allowedMFATypes: ['TOTP'],
       },
     });
@@ -491,7 +491,7 @@ describe('CognitoAuthProvider.getIdToken', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Phase 7 — multi-tenancy methods.
+// Multi-tenancy methods.
 // ---------------------------------------------------------------------------
 
 describe('CognitoAuthProvider.getActiveTenant', () => {

@@ -15,7 +15,7 @@
 //   - Entities tab (`EntitiesTab.tsx`): READ-ONLY browser over this
 //     context's entity-backed namespaces (tenant-wide ∪ this context's own,
 //     override-aware) and their identity entities. No create/edit UI here —
-//     this lane is read-only by scope, not because entity writes are
+//     this tab is read-only by design, not because entity writes are
 //     unusually gated: namespace writes need root/a provisioning capability,
 //     but entity writes are the ordinary `entities:<verb>:<namespace>` scope.
 //

@@ -59,8 +59,8 @@ import { NotFoundPage } from './pages/public/NotFoundPage';
 // one place but not the other is exactly the bug class this prevents).
 //
 // These are the real `resource:ops` grammar (see `RESOURCE_CATALOG` in
-// components/ScopeEditor.tsx) — NOT the `admin:<resource>` spelling this
-// table previously used. `admin:users`/`admin:keys`/`admin:logs`/
+// components/ScopeEditor.tsx) — NOT an `admin:<resource>` spelling.
+// `admin:users`/`admin:keys`/`admin:logs`/
 // `admin:profiles` are unauthorable, and stay so however the grammar grows:
 // the segment after the colon is read as a string of SINGLE-LETTER op verbs,
 // and each of `users`/`keys`/`logs`/`profiles` contains letters that are not
@@ -96,8 +96,7 @@ const ADMIN_ACTIONS = {
   // has no separate `roles` resource; role and profile item routes are both
   // enforced on `profiles`. Read-only here (matching the read-only route
   // gates elsewhere in this table); Save/Clone/Delete on those editors don't
-  // yet carry their own per-action gates (tracked as a follow-up, same shape
-  // as MembersPage's action gates).
+  // yet carry their own per-action gates, unlike MembersPage's action gates.
   profiles: 'profiles:r',
   // Usage gates on the SAME literal the backend enforces on GET /v1/usage
   // (`billing:r` on scoped tokens; an owner's wildcard covers it).

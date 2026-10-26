@@ -11,7 +11,7 @@
 //   6. Mint failure → degraded (loading→false, empty allowedActions).
 //   7. Re-runs when the tenant override changes.
 //
-// Strategy: inject a partner-API token MINTER (the cache's own seam) that
+// Strategy: inject a Vectros API token MINTER (the cache's own seam) that
 // resolves to a mint response carrying the given actions/identity as
 // `resolvedScope` — the shape useScopeGate reads directly now,
 // replacing the old client-decoded compressed-`scope`-claim token this file

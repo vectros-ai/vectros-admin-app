@@ -181,7 +181,7 @@ describe('useCurrentTenant', () => {
     expect(result.current.tenant).toBe('tnt_live');
   });
 
-  it('setTenant clears the partner-API token cache so the old tenant re-mints (cross-tenant bearer-leak guard)', async () => {
+  it('setTenant clears the Vectros API token cache so the old tenant re-mints (cross-tenant bearer-leak guard)', async () => {
     // Behavioral proof of the security-critical clearVectrosApiTokenCache() in
     // CurrentTenantProvider.setTenant: a bearer cached under the PREVIOUS tenant
     // must NOT survive the switch (else the old tenant's token could be handed

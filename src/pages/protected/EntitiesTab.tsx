@@ -14,7 +14,7 @@
 // update/delete) need root or a provisioning capability; entity writes are
 // gated on the ordinary `entities:<verb>:<namespace>` scope instead — a
 // grantable action, not a root-only one. Neither has a console-reachable
-// path here regardless: this lane is read-only by scope (no create/edit UI
+// path here regardless: this tab is read-only by design (no create/edit UI
 // at all), not because the entity-write gate itself is unusually strict.
 //
 // Entity payloads are schema-governed (`schemaId`/`schemaVersion`); the

@@ -9,7 +9,7 @@
 //   5. Clicking Fetch sends a request with the expected ISO-UTC shape. The
 //      request body carries NO tenantId — the backend derives the tenant from
 //      the caller's token (SDK 0.8.8 dropped the field). The active
-//      tenant only selects which partner-API client/token issues the call.
+//      tenant only selects which Vectros API client/token issues the call.
 //   6. Empty result set → empty-state copy + hint.
 //   7. With entries → table renders all visible columns.
 //   8. data.truncated = true → truncation banner visible above the table.
@@ -243,7 +243,7 @@ describe('LogsPage', () => {
 
     // SDK 0.8.8: the request body carries NO tenantId — the backend
     // derives the tenant from the caller's token. The active tenant only
-    // selects which partner-API client/token issues the call.
+    // selects which Vectros API client/token issues the call.
     expect(payload.tenantId).toBeUndefined();
     // startTime + endTime come through as ISO-8601 with millisecond
     // precision (datetime-local strips seconds; new Date() pads).

@@ -12,19 +12,19 @@
 // envelope cursor, null-terminated. (listScopedKeys is the one auth list that
 // takes no pagination params, so it can't be drained.)
 //
-// **The bound counts PAGES, and it FAILS CLOSED.** Two things this file used to
-// get wrong, both of which read as defensive while defending nothing:
+// **The bound counts PAGES, and it FAILS CLOSED.** Two properties that matter,
+// both easy to get wrong in a way that reads as defensive while defending nothing:
 //
 //  1. Comparing the new cursor against the previous one is NOT a no-progress
 //     guard. The cursor is opaque and sealed with a random nonce per seal, so
 //     two cursors for the same position never compare equal and that test is
-//     permanently false. It has been removed rather than left in place looking
-//     like a defense this file does not have.
-//  2. Hitting the ceiling used to RETURN what had been read so far. That is the
+//     permanently false, so none is made: it would look like a defense this
+//     file does not have.
+//  2. Hitting the ceiling must not RETURN what has been read so far. That is the
 //     silent truncation the drain exists to prevent, handed back under a
 //     different name — and every caller here needs completeness (a role picker
 //     missing its tail offers a choice that isn't there; a members table missing
-//     its tail looks like the member was removed). Now it throws. Every caller
+//     its tail looks like the member was removed). So it throws. Every caller
 //     is a react-query `queryFn`, so the throw surfaces as that surface's error
 //     state rather than as a quietly short list.
 //

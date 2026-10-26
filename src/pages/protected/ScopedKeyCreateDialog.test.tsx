@@ -69,7 +69,7 @@ const SAMPLE_USERS = [
 ];
 
 // The reserved control-plane context is deliberately absent here: it's never
-// a pickable target (a scoped key needs a data context, and the partner API
+// a pickable target (a scoped key needs a data context, and the Vectros API
 // rejects an explicit mint pinned to the reserved context outright) — see
 // the "never offers the reserved context" test below, which simulates the
 // developer API still returning it and asserts the picker excludes it anyway.
@@ -394,9 +394,9 @@ describe('<ScopedKeyCreateDialog>', () => {
     );
   });
 
-  // The wizard used to gate "Next" on existence alone, so picking a
-  // suspended user was indistinguishable from picking anyone else until the
-  // final step's generic error. These pin the fix: the row is
+  // The wizard must not gate "Next" on existence alone, or picking a
+  // suspended user would be indistinguishable from picking anyone else until
+  // the final step's generic error. These pin the behavior: the row is
   // labeled, Next stays disabled, and a named warning explains why.
   it('BindStep — a SUSPENDED user is labeled in the list and blocks Next when picked', async () => {
     const user = userEvent.setup();
@@ -465,8 +465,7 @@ describe('<ScopedKeyCreateDialog>', () => {
 
     // Focus Alice's option, then activate via keyboard. Pins the
     // role="option" + tabIndex=0 + onKeyDown wiring that exists for
-    // a11y compliance (the dev-portal's onClick-only Box pattern lost
-    // keyboard access; this fixes it).
+    // a11y compliance (an onClick-only Box would not be keyboard-accessible).
     const aliceOption = screen.getByText('alice@example.com').closest('[role="option"]');
     expect(aliceOption).not.toBeNull();
     (aliceOption as HTMLElement).focus();
@@ -553,16 +552,14 @@ describe('<ScopedKeyCreateDialog>', () => {
   });
 
   it('BindStep — a created principal survives the initial (still in-flight) listUsers fetch resolving late with the pre-create list', async () => {
-    // The fix for the vanishing-principal race writes the created principal
-    // straight into the cache. But
-    // BindStep's OWN initial listUsers fetch — the one that's already
-    // running when the dialog mounts — can still be in flight when that
-    // write happens (it may be draining several pages), and its eventual
-    // resolution carries the PRE-create list. If the fix didn't also cancel
-    // that stale fetch, its late resolution would silently overwrite the
-    // write and reproduce that same symptom. Prove it doesn't: create
-    // while the initial fetch is deliberately held open, THEN let the stale
-    // fetch resolve, and assert the created row survives.
+    // The created principal is held in local state, not written into the
+    // query cache. BindStep's OWN initial listUsers fetch — the one that's already
+    // running when the dialog mounts — can still be in flight when the principal
+    // is created (it may be draining several pages), and its eventual resolution
+    // carries the PRE-create list. That late resolution must neither drop the
+    // created row nor be needed to show it. Prove it: create while the initial
+    // fetch is deliberately held open, THEN let the stale fetch resolve, and
+    // assert the created row survives.
     let resolveInitialFetch!: (v: { data: readonly (typeof SAMPLE_USERS)[number][]; nextCursor: null }) => void;
     const initialFetch = new Promise<{ data: readonly (typeof SAMPLE_USERS)[number][]; nextCursor: null }>((resolve) => {
       resolveInitialFetch = resolve;
@@ -580,9 +577,9 @@ describe('<ScopedKeyCreateDialog>', () => {
     await user.type(within(subDialog).getByLabelText(/^external id$/i), 'new-service-bot');
     await user.click(within(subDialog).getByRole('button', { name: /^create$/i }));
 
-    // The regression proof itself: the row appears without ever waiting for
-    // the initial fetch — proving the cache write, not that fetch, is what
-    // renders it.
+    // The row appears without ever waiting for
+    // the initial fetch — proving the locally held principal, not that fetch,
+    // is what renders it.
     const row = await screen.findByRole('option', { name: /new-service-bot/i });
     expect(row).toHaveAttribute('aria-selected', 'true');
 
@@ -591,11 +588,10 @@ describe('<ScopedKeyCreateDialog>', () => {
     // just-created row must still be there (this fetch's resolution must
     // not silently become the sole truth), AND SAMPLE_USERS' own rows —
     // including 'research-bot', another pre-existing SERVICE row — must
-    // ALSO still be there. An earlier version of this fix got the first
-    // half right by cancelling this fetch outright, which broke the second
-    // half: cancelling the tenant's only in-flight fetch to protect the
-    // optimistic write also discarded every real user that fetch would
-    // have returned.
+    // ALSO still be there. Cancelling this fetch outright would satisfy the
+    // first half but break the second: cancelling the tenant's only in-flight
+    // fetch to keep it from overwriting the created row would also discard every real
+    // user that fetch would have returned.
     await act(async () => {
       resolveInitialFetch(pageOf(SAMPLE_USERS));
     });
@@ -719,7 +715,7 @@ describe('<ScopedKeyCreateDialog>', () => {
     // The real, non-reserved contexts are still offered...
     expect(within(listbox).getByText(/^partner-api/)).toBeInTheDocument();
     // ...but the reserved control-plane context is never a pickable target: a
-    // scoped key needs a data context, and the partner API rejects an
+    // scoped key needs a data context, and the Vectros API rejects an
     // explicit mint pinned to the reserved context outright.
     expect(within(listbox).queryByText(/^vectros-admin/)).not.toBeInTheDocument();
   });
@@ -757,9 +753,9 @@ describe('<ScopedKeyCreateDialog>', () => {
     expect(screen.getByText(/tmpl-owner/i)).toBeInTheDocument();
   });
 
-  // A profile that EXISTS but is SUSPENDED used to render the identical
-  // green success alert (a real CheckCircleIcon, "status: suspended" beside
-  // it) and left Next enabled. Pins the fix: a warning
+  // A profile that EXISTS but is SUSPENDED must not render the green
+  // success alert (a real CheckCircleIcon, "status: suspended" beside
+  // it) or leave Next enabled. Pins: a warning
   // alert instead, naming reactivation, Next stays disabled.
   it('ContextStep — a suspended profile shows a warning (not success) and blocks Next', async () => {
     const user = userEvent.setup();
@@ -786,8 +782,8 @@ describe('<ScopedKeyCreateDialog>', () => {
 
   it('ContextStep — a multi-role (roleIds) profile shows a role-composition detail, not a silently-omitted one', async () => {
     // roleId is absent for a 2+-role composition (0.41.0), and scopes is
-    // also absent on that shape — without the fix, neither detail chip
-    // rendered and the success alert showed only the status.
+    // also absent on that shape — if unhandled, neither detail chip
+    // would render and the success alert would show only the status.
     const user = userEvent.setup();
     renderDialog({
       client: makeMockClient({
@@ -864,7 +860,7 @@ describe('<ScopedKeyCreateDialog>', () => {
   });
 
   it('InlineProfileCreateDialog — never flags a typed data-scope namespace as unregistered while the registry is still loading', async () => {
-    // The S2 regression this guards: ScopeEditor's data-scope namespace
+    // What this guards: ScopeEditor's data-scope namespace
     // field must not read "not registered" just because the tenant-scoped
     // registry query (this dialog's own explicit-tenant caller) hasn't
     // answered yet.
@@ -1071,7 +1067,7 @@ describe('<ScopedKeyCreateDialog>', () => {
     // Contexts are enumerated for the LIVE env...
     expect(vi.mocked(useDeveloperApi)).toHaveBeenCalledWith('live');
     // ...and the profile probe + key mint ride the LIVE tenant, never the active
-    // TEST tenant — profile-check and mint can no longer diverge across tenants.
+    // TEST tenant, so profile-check and mint cannot diverge across tenants.
     expect(vectrosApiClient).toHaveBeenCalledWith(LIVE_TENANT, 'data-eng');
     expect(vectrosApiClient).not.toHaveBeenCalledWith(TEST_TENANT_ID, 'data-eng');
   });
@@ -1088,7 +1084,7 @@ describe('<ScopedKeyCreateDialog>', () => {
       await screen.findByText(/Copy this key now — it won't be shown again/i),
     ).toBeInTheDocument();
     expect(screen.getByText(SAMPLE_CREATED_KEY.rawKey)).toBeInTheDocument();
-    expect(screen.getByText(/Rust authorizer's policy-cache window/i)).toBeInTheDocument();
+    expect(screen.getByText(/the authorizer's policy-cache window/i)).toBeInTheDocument();
     // Copy icon button is present + accessible.
     expect(screen.getByRole('button', { name: /^copy$/i })).toBeInTheDocument();
   });
@@ -1109,7 +1105,7 @@ describe('<ScopedKeyCreateDialog>', () => {
     // Cache warning NOT shown on the idempotent path — the partner
     // didn't get a new key, so there's nothing to wait for.
     expect(
-      screen.queryByText(/Rust authorizer's policy-cache window/i),
+      screen.queryByText(/the authorizer's policy-cache window/i),
     ).not.toBeInTheDocument();
     // No copy button — no rawKey to copy.
     expect(screen.queryByRole('button', { name: /^copy$/i })).not.toBeInTheDocument();

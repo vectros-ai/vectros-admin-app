@@ -35,7 +35,7 @@
 //   is the covered entity's compliance determination, not something this view
 //   adjudicates.
 //
-// Data path: the query is the partner API's owner-gated `getAccessLog`
+// Data path: the query is the Vectros API's owner-gated `getAccessLog`
 // (`access-log:r` scope; an account owner's token carries it). Because the
 // query is scoped to a single context, it is issued with a bearer minted for
 // THAT context — `vectrosApiClient(tenant, contextId)` — mirroring the other

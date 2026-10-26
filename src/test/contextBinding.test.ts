@@ -8,8 +8,7 @@
 // shape it was written to catch, one level up — so each case below pins a
 // condition the helper MUST reject, not merely one it accepts.
 //
-// Mutation-verified (2026-08-04), unmutated baseline green through the same
-// path first. All seven mutations turn at least one case below red:
+// Mutation-verified: each of the seven mutations below turns at least one case red:
 //   - `!==` → `===` in the agreement check
 //   - `readString` returning undefined unconditionally
 //   - dropping the reserved-context (legality) check
@@ -18,7 +17,7 @@
 //   - removing the `records.push`
 //   - making the `expect.fail` branch unreachable (violations swallowed)
 //
-// The fifth SURVIVED the first run: every set case differed in SIZE, so a
+// The fifth is the subtle one: every set case differed in SIZE, so a
 // length comparison passed all of them. "FAILS a same-size set whose method
 // NAMES differ" exists because of that, and is the case none of the others
 // implied — which is the argument for running the mutations rather than
@@ -167,7 +166,7 @@ describe('expectContextBindingHolds', () => {
 
   // ---- the cases that must FAIL -----------------------------------------
 
-  it('FAILS the exact bug this branch fixes: default bearer, control-plane request', () => {
+  it('FAILS a default bearer used for a control-plane request', () => {
     expect(() =>
       expectContextBindingHolds(
         [rec({ clientContextId: undefined, requestContextId: 'vectros-admin' })],

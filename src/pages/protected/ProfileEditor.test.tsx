@@ -160,6 +160,19 @@ function LocationProbe() {
   return <div data-testid="probe-pathname">{location.pathname + location.search}</div>;
 }
 
+/**
+ * Clicks a toolbar button once it is enabled. Clone and Delete stay disabled until the baseline
+ * has loaded, the heading renders from the URL before that, and a disabled MUI button ignores
+ * pointer events, so a click straight after the heading is a race on a slow runner.
+ */
+async function clickWhenEnabled(
+  user: ReturnType<typeof userEvent.setup>,
+  name: RegExp,
+): Promise<void> {
+  await waitFor(() => expect(screen.getByRole('button', { name })).toBeEnabled());
+  await user.click(screen.getByRole('button', { name }));
+}
+
 function renderEditor(
   opts: { client?: ReturnType<typeof makeMockClient>; initialUrl: string } = {
     initialUrl: '/access/contexts/engineering/profiles/new',
@@ -1260,7 +1273,7 @@ describe('ProfileEditor — delete dialog', () => {
       initialUrl: '/access/contexts/engineering/profiles/usr_alice',
     });
     await screen.findByRole('heading', { level: 1, name: /edit profile for usr_alice/i });
-    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+    await clickWhenEnabled(user, /^delete$/i);
     const dialog = await screen.findByRole('dialog', { name: /delete access profile/i });
 
     // Body mentions the ~5-min cache window.
@@ -1290,7 +1303,7 @@ describe('ProfileEditor — delete dialog', () => {
       initialUrl: '/access/contexts/engineering/profiles/usr_alice',
     });
     await screen.findByRole('heading', { level: 1, name: /edit profile for usr_alice/i });
-    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+    await clickWhenEnabled(user, /^delete$/i);
     const dialog = await screen.findByRole('dialog', { name: /delete access profile/i });
 
     expect(within(dialog).getByText(/this sign-in doesn't hold/i)).toBeInTheDocument();
@@ -1312,7 +1325,7 @@ describe('ProfileEditor — delete dialog', () => {
       initialUrl: '/access/contexts/engineering/profiles/usr_alice',
     });
     await screen.findByRole('heading', { level: 1, name: /edit profile for usr_alice/i });
-    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+    await clickWhenEnabled(user, /^delete$/i);
     const dialog = await screen.findByRole('dialog', { name: /delete access profile/i });
 
     const confirmBtn = within(dialog).getByRole('button', { name: /delete profile/i });
@@ -1342,7 +1355,7 @@ describe('ProfileEditor — delete dialog', () => {
       initialUrl: '/access/contexts/engineering/profiles/usr_alice',
     });
     await screen.findByRole('heading', { level: 1, name: /edit profile for usr_alice/i });
-    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+    await clickWhenEnabled(user, /^delete$/i);
     const dialog = await screen.findByRole('dialog', { name: /delete access profile/i });
     await user.click(within(dialog).getByRole('button', { name: /delete profile/i }));
 

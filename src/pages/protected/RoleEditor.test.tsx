@@ -132,6 +132,19 @@ function LocationProbe() {
   );
 }
 
+/**
+ * Clicks a toolbar button once it is enabled. Clone and Delete stay disabled until the baseline
+ * has loaded, the heading renders from the URL before that, and a disabled MUI button ignores
+ * pointer events, so a click straight after the heading is a race on a slow runner.
+ */
+async function clickWhenEnabled(
+  user: ReturnType<typeof userEvent.setup>,
+  name: RegExp,
+): Promise<void> {
+  await waitFor(() => expect(screen.getByRole('button', { name })).toBeEnabled());
+  await user.click(screen.getByRole('button', { name }));
+}
+
 function renderEditor(
   opts: { client?: ReturnType<typeof makeMockClient>; initialUrl: string } = {
     initialUrl: '/access/contexts/engineering/roles/new',
@@ -262,7 +275,7 @@ describe('RoleEditor — edit mode', () => {
   });
 
   it('never flags a typed data-scope namespace as unregistered while the namespace registry is still loading', async () => {
-    // The S2 regression this guards: ScopeEditor's data-scope namespace
+    // What this guards: ScopeEditor's data-scope namespace
     // field must not read "not registered" just because the registry
     // hasn't answered yet (a never-resolving listNamespaces here).
     const user = userEvent.setup();
@@ -502,7 +515,7 @@ describe('RoleEditor — delete dialog', () => {
     // Wait for the profiles fetch to complete (referencing count = 1).
     await screen.findByText(/changes propagate to 1 referencing profile/i);
 
-    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+    await clickWhenEnabled(user, /^delete$/i);
     const dialog = await screen.findByRole('dialog', { name: /delete role/i });
     expect(within(dialog).getByText(/1 profile reference/i)).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: /delete role/i })).toBeDisabled();
@@ -530,7 +543,7 @@ describe('RoleEditor — delete dialog', () => {
     await screen.findByRole('heading', { level: 1, name: /edit role eng-member/i });
     await screen.findByText(/changes propagate to 1 referencing profile/i);
 
-    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+    await clickWhenEnabled(user, /^delete$/i);
     const dialog = await screen.findByRole('dialog', { name: /delete role/i });
     expect(within(dialog).getByText(/1 profile reference/i)).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: /delete role/i })).toBeDisabled();
@@ -559,7 +572,7 @@ describe('RoleEditor — delete dialog', () => {
       expect(client.auth.listAccessProfiles).toHaveBeenCalled();
     });
 
-    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+    await clickWhenEnabled(user, /^delete$/i);
     const dialog = await screen.findByRole('dialog', { name: /delete role/i });
     const deleteBtn = within(dialog).getByRole('button', { name: /delete role/i });
     await waitFor(() => expect(deleteBtn).toBeEnabled());
@@ -599,7 +612,7 @@ describe('RoleEditor — delete dialog', () => {
     await screen.findByRole('heading', { level: 1, name: /edit role eng-member/i });
     await waitFor(() => expect(client.auth.listAccessProfiles).toHaveBeenCalled());
 
-    await user.click(screen.getByRole('button', { name: /^delete$/i }));
+    await clickWhenEnabled(user, /^delete$/i);
     const dialog = await screen.findByRole('dialog', { name: /delete role/i });
     const deleteBtn = within(dialog).getByRole('button', { name: /delete role/i });
     await waitFor(() => expect(deleteBtn).toBeEnabled());
@@ -895,7 +908,7 @@ describe('RoleEditor — hardening states', () => {
       initialUrl: '/access/contexts/engineering/roles/eng-member',
     });
     await screen.findByRole('heading', { level: 1, name: /edit role eng-member/i });
-    await user.click(screen.getByRole('button', { name: /^clone$/i }));
+    await clickWhenEnabled(user, /^clone$/i);
     const dialog = await screen.findByRole('dialog', { name: /clone role/i });
     await user.click(within(dialog).getByRole('button', { name: /^clone$/i }));
 

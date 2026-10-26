@@ -3,29 +3,24 @@
 //
 // `RESOURCE_CATALOG` and `CRUD_OPS` mirror a catalog the platform owns — the op
 // letters of the compact `resource:ops[:qualifier]` form, and which resources
-// carry which of them. A mirror can only ever follow, and this one had already
-// fallen a letter behind: `x` (execute a stored script) shipped in the API
-// while this editor's matrix, its header comment, and its user-facing Advanced
-// hint all still described a four-letter world.
+// carry which of them. A mirror can only ever follow, so it can fall behind:
+// when `x` (execute a stored script) shipped in the API, this editor's matrix,
+// its header comment, and its user-facing Advanced hint all had to move with it.
 //
 // Every OTHER test in this suite pins the catalog against literals written in
 // this same file, in this same language, edited in the same commit. Those are
-// worth having — they catch a half-wired letter — but they cannot catch the
-// failure that actually happened, because both sides of the comparison move
+// worth having — they catch a half-wired letter — but they cannot catch drift
+// from the platform, because both sides of the comparison move
 // together. So this file reads the other side: the `allowed_actions` and
 // `assignable_roles` declarations the SDK publishes on `ScopeClause`, generated
 // from the API's own annotations.
 //
 // It fires on an SDK RE-PIN rather than on an edit here, which is the point —
 // whoever raises the pin learns the grammar moved, in the app whose authoring
-// UI has to move with it. That property costs an EQUALITY-shaped assertion and
-// is not available from a subset one: the first version of this file asserted
-// only `authored ⊆ named`, which is GREEN on a catalog missing a letter the SDK
-// names — i.e. green on the exact drift this app had already suffered and this
-// branch exists to fix. Measured, not reasoned: the pre-fix catalog was run
-// against it and passed. The sibling guard this file is derived from had
-// already made and corrected that mistake, in writing; this copy reverted the
-// correction while keeping the header sentence the correction paid for.
+// UI has to move with it. That property needs an EQUALITY-shaped assertion and
+// is not available from a subset one: asserting only `authored ⊆ named` is
+// GREEN on a catalog missing a letter the SDK names — i.e. green on exactly the
+// drift this guard exists to catch.
 //
 // **What this is NOT.** It is not the deciding artifact. The API decides the
 // letter set in its own authoring validator; this description is a hand-written
@@ -128,8 +123,8 @@ describe('scope catalog conforms to the SDK’s published grammar', () => {
 
     // Direction 2 — THE ONE THAT MATTERS, and the one a subset test cannot see.
     // A letter the SDK names that no catalog resource offers is a grammar the
-    // app has fallen behind: exactly the state this branch found it in, where
-    // `x` had shipped in the API and the matrix still described four letters.
+    // app has fallen behind: e.g. `x` shipping in the API while the matrix still
+    // described four letters.
     const unoffered = [...named].filter((l) => !authored.has(l) && !DELIBERATELY_UNOFFERED.has(l)).sort();
     expect(
       unoffered,

@@ -10,7 +10,7 @@
 //      user is redirected away (see the route-gating describe block below),
 //      not merely missing its nav link.
 //
-// We drive the gate the way production does: register a partner-API token
+// We drive the gate the way production does: register a Vectros API token
 // minter that returns an st_* token whose `scope.scopes[]` clauses encode the
 // caller's effective actions. useScopeGate decodes that — no internal mock of
 // the bundled hook — so this exercises decode → can() → ScopeGate / RequireScope

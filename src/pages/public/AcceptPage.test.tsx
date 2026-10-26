@@ -529,8 +529,8 @@ describe('AcceptPage — existing-identity branches', () => {
 
   it('WRONG-IDENTITY: surfaces a sign-out FAILURE in a role="alert"', async () => {
     const user = userEvent.setup();
-    // Previously the catch silently swallowed the failure (setSigningOut(false)
-    // only) — the user got no feedback. The hardening pass surfaces it.
+    // The catch must surface a sign-out failure in an alert rather than silently
+    // swallowing it (setSigningOut(false) only), which would give the user no feedback.
     const provider = mockAdapter({
       getCurrentUser: vi.fn().mockResolvedValue({
         sub: 'sub-other',
@@ -559,7 +559,7 @@ describe('AcceptPage — existing-identity branches', () => {
 // Signed-out existing-identity branch. Not signed in at all (so the
 // `user`-gated branches above never run), and signUp discovers the email
 // already has a Cognito identity (from a prior invite to another tenant) —
-// this used to fall through to a doomed signup form and a generic inline
+// this must not fall through to a doomed signup form and a generic inline
 // "something went wrong" error with no recovery path.
 // ---------------------------------------------------------------------------
 describe('AcceptPage — existing identity, signed out', () => {

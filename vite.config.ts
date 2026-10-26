@@ -72,10 +72,10 @@ function versionManifest(): Plugin {
 // in-flight page state — and crucially trips a brief window where Amplify's
 // session-restore hasn't completed, so RequireAuth bounces to /login.
 //
-// We saw this manifest in a smoke run (2026-05-30): every protected
-// page test failed on the first run (the run that triggered the new-icon
-// optimization mid-test); the second run passed because the optimization
-// was now cached in `node_modules/.vite/`. The fix is to pre-include the
+// This manifests in smoke runs: every protected page test fails on the first
+// run (the run that triggers the new-icon optimization mid-test); the second
+// run passes because the optimization is then cached in `node_modules/.vite/`.
+// The remedy is to pre-include the
 // icons so Vite warms them at startup, before the first test request.
 //
 // CI implication: CI containers start with no `.vite/` cache, so they

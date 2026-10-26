@@ -239,7 +239,7 @@ describe('ContextsPage', () => {
     await waitFor(() => expect(screen.getByText('1')).toBeInTheDocument());
     expect(screen.getByText('2')).toBeInTheDocument();
     // The reserved control-plane context can't back a context-pinned bearer
-    // (the partner API rejects an explicit mint for it outright) — its counts
+    // (the Vectros API rejects an explicit mint for it outright) — its counts
     // are never fetched, shown as "—" rather than a real (possibly zero) count.
     expect(client.auth.listRoles).not.toHaveBeenCalledWith(
       expect.objectContaining({ contextId: 'vectros-admin' }),
@@ -263,7 +263,7 @@ describe('ContextsPage', () => {
     const engRow = rows[2]!;
     // The reserved vectros-admin row hides Delete entirely (the server
     // refuses reserved-context teardown unconditionally) AND hides Edit (it
-    // would mint a context-pinned bearer the same way, which the partner API
+    // would mint a context-pinned bearer the same way, which the Vectros API
     // now rejects outright for this context). The plain engineering row
     // offers both, enabled.
     expect(

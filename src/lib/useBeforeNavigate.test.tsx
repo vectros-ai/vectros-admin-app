@@ -1,18 +1,17 @@
 // ---------------------------------------------------------------------------
 // useBeforeNavigate tests.
 //
-// **Test-infra convention** (lesson from smoke verification):
+// **Test-infra convention**:
 //   - Use the LEGACY `<MemoryRouter>` component — NOT `createMemoryRouter`.
 //     Production wires the app under `<BrowserRouter>` in main.tsx, and
 //     `<BrowserRouter>` + `<MemoryRouter>` share the legacy non-data-router
-//     plumbing. An earlier version of this test used `createMemoryRouter`
-//     (the data-router variant) which silently diverged from production —
-//     hiding a runtime crash caught only by smoke. The convention going
-//     forward: tests should run against the SAME router type production
-//     does so that React-Router-specific API mismatches surface at vitest
-//     time, not smoke time.
+//     plumbing. `createMemoryRouter` (the data-router variant) silently
+//     diverges from production and can hide a runtime crash that only a
+//     browser run shows. Tests should run against the SAME router type
+//     production does so that React-Router-specific API mismatches surface at
+//     vitest time, not smoke time.
 //
-// **What this hook does now (v1):**
+// **What this hook does:**
 //   - Attaches a `beforeunload` listener while `when` is true.
 //   - Removes the listener when `when` flips back to false or the
 //     component unmounts.

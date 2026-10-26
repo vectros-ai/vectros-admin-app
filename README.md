@@ -17,6 +17,9 @@ Fork it. Re-brand it in one file. Point it at your own Cognito pool. Ship.
 | App contexts, roles & access profiles | Create/edit/delete data contexts; per-context role and access-profile editors with role cloning and reference-aware deletes. |
 | Named platform capabilities (`granted_capabilities`) | Role, access-profile, and scoped-key editors can grant `member-lifecycle` and `delegate-mint` alongside the ordinary `allowed_actions`/`data_scope` clause — two of the platform's six grantable capabilities, the only ones these editors currently offer (a capability grant can only name what the granting session's own credential already holds; `forensic-read` and `context-directory-read` are tenant-wide and served by dedicated server-side endpoints instead, never by a browser session; `delegate-principal-stamp`, added alongside `member-lifecycle`'s own context-level partition, and `trigger-control-plane-grant`, which gates trigger-rule authoring this app doesn't offer, aren't wired into these editors either). The key-creation wizard surfaces the `delegate-mint` requirement up front when binding a key to someone other than yourself, not just as a late 403. |
 | Activity logs | API call history with time-range presets and resource/method/key filters (explicit-fetch gated — the backing log query is metered). |
+| Accounting of disclosures | Look up who read a subject's protected data, when, with which action, and whether a sensitive value was revealed (metadata only). Reads that disclosed content into a call routed to your own model provider also show where it was delivered. Needs read-access logging switched on for the context or record type. |
+| Trigger failures | Automations that ran and failed across your app contexts. A failure disappears once a later retry of the same firing succeeds. |
+| Trusted issuers | Review the identity providers registered for sign-in and adjust their non-cryptographic settings. Registering an issuer is done through the CLI or SDK. |
 | Usage & credits | The account usage report: credits against your plan, a per-category breakdown, read metering, and live/test + per-context decompositions. |
 | Cognito authentication + MFA | Amplify v6 against the Vectros developer user pool; TOTP enrollment and management on the Account page. Single Cognito identity per email across both the Dev Portal and this Admin App. |
 | Sub-user invitation acceptance | `/accept?t=<token>` verifies the invite token client-side against the API's JWKS endpoint (display is never trusted unverified), then runs Cognito self-signup with the `custom:invite_token` attribute. A PostConfirmation hook activates the membership server-side. |
@@ -135,8 +138,9 @@ admin-app/
 │   ├── invitations/     # Invite-token JWKS verification + decode
 │   ├── lib/             # queryClient, drainPages, scope helpers
 │   ├── pages/
-│   │   ├── protected/   # Welcome, Members, Keys, Logs, Usage, Contexts (+ role
-│   │   │                # and access-profile editors), Account
+│   │   ├── protected/   # Welcome, Members, Keys, Logs, Accounting of disclosures,
+│   │   │                # Trigger failures, Usage, Contexts (+ role and access-profile
+│   │   │                # editors), Trusted issuers, Account
 │   │   └── public/      # LoginPage, AcceptPage, ConfirmPage, ForgotPasswordPage
 │   ├── test/            # Vitest setup + provider helpers
 │   ├── App.tsx          # Router (Routes only; BrowserRouter is in main.tsx)

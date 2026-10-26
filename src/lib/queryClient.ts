@@ -17,7 +17,7 @@
 //     tolerate up to 30s of staleness; this kills the cross-component
 //     duplicate-fetch pattern that bit hand-rolled `useEffect` calls.
 //
-//   - `gcTime: 5 * 60_000` — 5min. Matches the Rust authorizer's policy-
+//   - `gcTime: 5 * 60_000` — 5min. Matches the authorizer's policy-
 //     cache window, so admin reads of authorizer-bound data have
 //     predictable freshness.
 //

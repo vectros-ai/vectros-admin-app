@@ -197,7 +197,7 @@ describe('<AuthProvider> signOut flow', () => {
     expect(result.current.isAuthenticated).toBe(false);
   });
 
-  it('clears the partner-API token cache on signOut so a stale bearer cannot survive a logout', async () => {
+  it('clears the Vectros API token cache on signOut so a stale bearer cannot survive a logout', async () => {
     // Behavioral proof of clearVectrosApiTokenCache() inside AuthProvider.signOut:
     // EVERY sign-out path (explicit click, session-expiry redirect) must drop the
     // cached st_* bearers so the next login on the same browser can't read the
