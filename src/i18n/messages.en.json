@@ -229,6 +229,8 @@
   "scopeEditor.resource.schemas": "Schemas",
   "scopeEditor.resource.scripts": "Scripts",
   "scopeEditor.resource.triggers": "Triggers",
+  "scopeEditor.resource.agents": "Agents",
+  "scopeEditor.resource.runs": "Agent runs",
   "scopeEditor.resource.search": "Search",
   "scopeEditor.resource.inference": "AI inference",
   "scopeEditor.resource.keys": "API keys",

@@ -30,10 +30,10 @@
 // or contact their inviter. Falling back to unverified would re-introduce
 // the trust-boundary risk that verifying the signature removes.
 //
-// **Partner-fork knob.** Two constants below (`EXPECTED_ISSUER` +
+// **Fork knob.** Two constants below (`EXPECTED_ISSUER` +
 // `EXPECTED_AUDIENCE`) are hardcoded with a "fork to change" comment. The
 // JWKS URL is derived from the existing `VITE_VECTROS_API_URL` env var —
-// no new config knob; partners that point that env var at their own
+// no new config knob; a fork that points that env var at their own
 // backend automatically get JWKS from there too.
 // ---------------------------------------------------------------------------
 
@@ -44,8 +44,8 @@ import { API_CONFIG } from '../config';
 
 /**
  * The expected `iss` (issuer) claim — Vectros backend constant, mirrored from
- * the backend's invite-token signer. Hardcoded here intentionally — partners forking
- * the Admin App AND using their own backend should change this constant.
+ * the backend's invite-token signer. Hardcoded here intentionally — if you fork
+ * the Admin App AND use your own backend, change this constant.
  */
 const EXPECTED_ISSUER = 'vectros-invite';
 
@@ -100,7 +100,7 @@ export type InviteTokenDecodeResult =
 /**
  * The display-safe subset of an invitation token's claims. Only fields the
  * accept page actually renders are surfaced here. Optional fields default to
- * null if not present in the token (defensive — older or partner-customized
+ * null if not present in the token (defensive — older or customized
  * tokens may omit them).
  */
 export interface InviteTokenClaims {
@@ -147,7 +147,7 @@ let cachedJwksResolver: JwksResolver | null = null;
 function getJwksResolver(): JwksResolver {
   if (cachedJwksResolver) return cachedJwksResolver;
   // The JWKS lives at the Vectros API, served by its JWKS handler.
-  // Partner forks pointing VITE_VECTROS_API_URL at a different backend
+  // Forks pointing VITE_VECTROS_API_URL at a different backend
   // automatically pick up the JWKS from there too — same hostname,
   // /v1/auth/jwks path.
   const url = new URL(`${API_CONFIG.vectrosApiBase}/v1/auth/jwks`);

@@ -3,6 +3,26 @@
 All notable changes to the Vectros Admin App are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.25.0 — 2026-11-07
+
+### Added
+
+- **The access log shows the agent behind a read.** When an agent run read data on a key's behalf, the entry shows the ID of the agent and
+  of the run ("via agent … · run …") under the key that authorized it, with the tool on hover. A read made directly with a key shows no
+  agent. Needs an API that returns `actingVia` (0.49.0 and later).
+- **`agents` (Create, Read, Update, Delete) and `runs` (Create, Read) in the permission matrix** for roles, access profiles and scoped
+  keys. They are separate grants: permission to run an agent does not include permission to author one, and `agents:r` shows an agent's
+  prompt and tool list, so treat it as privileged.
+- **Activity logs can be filtered to the `agents` and `runs` resources.**
+
+### Changed
+
+- **The app is built on SDK 0.49.0.**
+
+### Fixed
+
+- **The Resend action on the Members page no longer fails.**
+
 ## 0.24.1 — 2026-10-25
 
 ### Security

@@ -71,7 +71,7 @@ export const MAX_SCOPE_VALUE_LENGTH = 128;
 /**
  * A scope VALUE is a letter-or-digit start, then `[A-Za-z0-9_-]`, 1–{@link MAX_SCOPE_VALUE_LENGTH}
  * chars total — mirrors what the platform enforces server-side. Wider than the namespace grammar on
- * case (values are frequently UUIDs or partner free-strings) and on a leading digit, but —
+ * case (values are frequently UUIDs or free-form strings you define) and on a leading digit, but —
  * deliberately, like the namespace grammar — excludes `:` and every other punctuation: a value can be
  * used as an identity-entity id in a storage key server-side, so a `:` is not merely cosmetically
  * wrong, it can break key parsing.

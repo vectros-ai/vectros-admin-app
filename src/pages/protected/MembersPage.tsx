@@ -296,6 +296,9 @@ export function MembersPage(): React.JSX.Element {
         email: vars.email,
         contextId: MEMBERS_CONTEXT_ID,
         accessProfile: { roleId: vars.roleId },
+        // The API sends the invite email by default and refuses a resend that names no accept URL;
+        // this is the same value the invite dialog sends.
+        acceptUrl: `${window.location.origin}/accept`,
       }),
     onSuccess: (_data, vars) => {
       setSuccessMessage(intl.formatMessage({ id: 'members.resendSuccess' }, { email: vars.email }));
@@ -367,11 +370,9 @@ export function MembersPage(): React.JSX.Element {
     void queryClient.invalidateQueries({ queryKey: ['members', tenant] });
   };
 
-  // Resend re-mints a fresh token. The SDK's resendInvite requires the
-  // same body shape as createInvite; we re-derive what we can from the
-  // current row (email + the bound role). For a fully-fledged resend
-  // preserving original TTL knobs the platform would need a slimmer
-  // `{ userId }` shape — captured as a backend follow-up.
+  // Resend re-mints a fresh token. The SDK's resendInvite takes the same body
+  // shape as createInvite, which is re-derived from the current row (email and
+  // the bound role); nothing else from the original invite is carried over.
   const handleResend = (member: UserResponse): void => {
     if (!member.email || !member.id) return;
     setSuccessMessage(null);

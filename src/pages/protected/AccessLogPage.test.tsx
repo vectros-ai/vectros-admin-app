@@ -71,6 +71,7 @@ const SAMPLE_ROWS = [
     contextId: 'ctx_intake',
     subjects: [{ type: 'user', id: 'user_abc' }],
     callerKeyId: 'key_scoped',
+    actingVia: { kind: 'agent-run', actorId: 'agt_1', runId: 'run_9', tool: 'records_query' },
     action: 'search',
     resourceType: 'search',
     resourceId: 'rec_2',
@@ -252,6 +253,10 @@ describe('AccessLogPage', () => {
     expect(within(table).getByText('search:rec_2')).toBeInTheDocument();
     // Caller cell.
     expect(within(table).getByText('key_root')).toBeInTheDocument();
+    // A read an agent run made names the agent and the run under the key; a direct read names none.
+    const via = within(table).getAllByTestId('access-log-acting-via');
+    expect(via).toHaveLength(1);
+    expect(via[0]?.textContent).toBe('via agent agt_1 · run run_9');
     // revealedSensitive=true → a "Revealed" chip; the masked row shows "No".
     expect(within(table).getByText(/^revealed$/i)).toBeInTheDocument();
     expect(within(table).getByText(/^no$/i)).toBeInTheDocument();

@@ -51,7 +51,7 @@ vi.mock('../../api/vectrosApi', async (importOriginal) => {
   };
 });
 
-// Contexts are enumerated via the owner-gated developer API (the partner list is
+// Contexts are enumerated via the owner-gated developer API (the data-API list is
 // context-confined); the context-scoped create calls still use the per-context
 // vectrosApiClient bearer above.
 vi.mock('../../api/developerApi', async (importOriginal) => {
@@ -101,7 +101,7 @@ const SAMPLE_CREATED_KEY = {
 
 const SAMPLE_IDEMPOTENT_KEY = {
   // Same shape as SAMPLE_CREATED_KEY but NO rawKey — the backend returns
-  // 200 + the existing metadata when (partner, tenant, context, userId,
+  // 200 + the existing metadata when (account, tenant, context, userId,
   // keyName) already maps to an active key.
   keyId: 'ssk_test_existing',
   keyName: 'good-name',
@@ -1102,7 +1102,7 @@ describe('<ScopedKeyCreateDialog>', () => {
 
     expect(await screen.findByText(/Key already exists/i)).toBeInTheDocument();
     expect(screen.getByText('ssk_test_existing')).toBeInTheDocument();
-    // Cache warning NOT shown on the idempotent path — the partner
+    // Cache warning NOT shown on the idempotent path — the user
     // didn't get a new key, so there's nothing to wait for.
     expect(
       screen.queryByText(/the authorizer's policy-cache window/i),

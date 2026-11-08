@@ -48,7 +48,7 @@ vi.mock('../../api/vectrosApi', async (importOriginal) => {
 });
 
 // The new Transfer-ownership action goes through the owner-gated developer
-// API (../../api/developerApi), not the partner SDK — mock the hook the
+// API (../../api/developerApi), not the data SDK — mock the hook the
 // dialog consumes so these page-level tests don't need a real bearer.
 vi.mock('../../api/developerApi', async (importOriginal) => {
   const actual = await importOriginal<typeof DeveloperApi>();
@@ -842,6 +842,15 @@ describe('MembersPage', () => {
     await user.click(screen.getByRole('button', { name: /resend invite/i }));
 
     await waitFor(() => expect(resendInvite).toHaveBeenCalledTimes(1));
+    // The API refuses a resend that names no accept URL (it sends the email by default), so the body
+    // must carry the same URL the invite dialog sends.
+    expect(resendInvite).toHaveBeenCalledWith(
+      expect.objectContaining({
+        email: 'bob@example.com',
+        accessProfile: { roleId: 'tmpl-owner' },
+        acceptUrl: `${window.location.origin}/accept`,
+      }),
+    );
   });
 
   // -------------------------------------------------------------------------

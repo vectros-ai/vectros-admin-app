@@ -219,7 +219,9 @@ export type GetAdminLogsRequest = Parameters<_Auth['getAdminLogs']>[0];
 // the `{ data, nextCursor }` page envelope.
 export type GetAccessLogRequest = NonNullable<Parameters<_Auth['getAccessLog']>[0]>;
 export type ReadAccessLogPage = Awaited<ReturnType<_Auth['getAccessLog']>>;
-/** A single read-access row from `ReadAccessLogPage.data[]`. */
+/** A single read-access row from `ReadAccessLogPage.data[]`. Its `actingVia` names the automated execution (for
+ *  example an agent run) a read was made through, on behalf of the row's `callerKeyId`; absent for a read made directly
+ *  with a credential. `kind` is an open set. */
 export type ReadAccessLogRow = NonNullable<ReadAccessLogPage['data']>[number];
 
 // Typed status-coded error subclasses (ConflictError, BadRequestError, etc.)

@@ -299,7 +299,7 @@ describe('children rendering', () => {
   });
 });
 
-// Tip for partner forks: to write tests against your own provider, you don't
+// Tip for forks: to write tests against your own provider, you don't
 // need to mock the provider's SDK — just build a Partial<AuthProviderAdapter>
 // like above and pass it to <AuthProvider provider={...}>. This is the value
 // of the abstraction.

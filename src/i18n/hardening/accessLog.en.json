@@ -34,6 +34,8 @@
   "accessLog.columnRevealed": "Sensitive revealed",
   "accessLog.columnDestination": "Delivered to",
   "accessLog.revealedYes": "Revealed",
+  "accessLog.viaAgentRun": "via agent {agent} · run {run}",
+  "accessLog.viaOther": "via {kind} {ref}",
   "accessLog.revealedNo": "No",
   "accessLog.loadMore": "Load more",
   "accessLog.loadingMore": "Loading…",

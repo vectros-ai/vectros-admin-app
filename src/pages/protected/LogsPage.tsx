@@ -135,6 +135,10 @@ const RESOURCES = [
   // from here, not just visible ON other rows.
   'scripts',
   'triggers',
+  // Stored agents and agent runs log under these two resource names, and both
+  // server allow-lists accept them as filters.
+  'agents',
+  'runs',
 ] as const;
 type Resource = (typeof RESOURCES)[number];
 

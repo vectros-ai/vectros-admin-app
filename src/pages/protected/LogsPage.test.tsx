@@ -661,6 +661,8 @@ describe('LogsPage', () => {
     'export',
     'scripts',
     'triggers',
+    'agents',
+    'runs',
   ];
 
   it('offers exactly the server-accepted resource filters, and nothing else', async () => {

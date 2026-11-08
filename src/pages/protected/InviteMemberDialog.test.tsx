@@ -455,7 +455,7 @@ describe('InviteMemberDialog', () => {
   // -------------------------------------------------------------------------
   // Context binding — see the long note in MembersPage.test.tsx. Both of this
   // dialog's calls are context-scoped, and the submit one is the whole invite
-  // flow: a bearer/request mismatch here 403s the only path a partner has to
+  // flow: a bearer/request mismatch here 403s the only path a user has to
   // add a member.
   // -------------------------------------------------------------------------
   it('pins listRoles and createInvite to a bearer minted for the context they name', async () => {

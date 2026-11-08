@@ -300,7 +300,7 @@ describe('createDeveloperApi.transferOwnership', () => {
       .mockResolvedValue(jsonResponse({ partnerId: 'ptr_1', ownerUserId: 'u_alice' }, 200));
     vi.stubGlobal('fetch', fetchSpy);
 
-    // Constructed for 'live', but the route acts on the whole partner
+    // Constructed for 'live', but the route acts on the whole account
     // account (both tenants) — see the interface doc. The URL must carry
     // no `?tenant=` at all, unlike every other method in this file.
     const result = await makeApi({ tenant: 'live' }).transferOwnership('u_alice');

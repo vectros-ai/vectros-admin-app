@@ -294,6 +294,14 @@ export const RESOURCE_CATALOG: readonly ResourceSpec[] = [
   // Unlike scripts, a trigger rule is upsert-based (a blueprint re-apply
   // reconciles it in place), so it carries the full crud verb set.
   { value: 'triggers', group: 'data', ops: 'crud' },
+  // Stored agents: create, read, write a new version (u) and retire (d). An
+  // agent's prompt and tool list steer every run of it, so reading one discloses
+  // that prompt.
+  { value: 'agents', group: 'data', ops: 'crud' },
+  // Running an agent is its own resource, separate from authoring one: `c`
+  // starts a run and cancels one, `r` reads a run's status and result. A run is
+  // never edited or deleted, so there is no `u` or `d`.
+  { value: 'runs', group: 'data', ops: 'cr' },
   { value: 'search', group: 'data', ops: 'r' },
   { value: 'inference', group: 'data', ops: 'r' },
   { value: 'keys', group: 'management', ops: 'crd' },

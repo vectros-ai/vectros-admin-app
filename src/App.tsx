@@ -79,7 +79,7 @@ const ADMIN_ACTIONS = {
   members: 'users:r',
   keys: 'keys:r',
   logs: 'logs:r',
-  // Same literal the partner surface already enforces for this data
+  // Same literal the public API already enforces for this data
   // (`GET /v1/trigger-failures` gates on `triggers:r`) — the dev-portal route
   // behind it is owner-gated server-side regardless of scope, same as
   // `contexts`/`issuers` below.

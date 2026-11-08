@@ -15,7 +15,7 @@
 //       getCurrentUser: vi.fn().mockResolvedValue(aliceUser),
 //     });
 //
-// Partner-fork note: to test against your own provider you don't need to mock
+// Fork note: to test against your own provider you don't need to mock
 // its SDK — build a Partial<AuthProviderAdapter> like this and pass it to
 // <AuthProvider provider={...}>.
 // ---------------------------------------------------------------------------

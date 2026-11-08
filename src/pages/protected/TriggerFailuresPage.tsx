@@ -613,7 +613,7 @@ function TriggerFailureTableRow({
   const intl = useIntl();
   const emDash = intl.formatMessage({ id: 'triggerFailures.cellEmpty' });
   // INTERNAL_ERROR carries a correlationId instead of a detail message — quote
-  // it to support, per the partner-facing endpoint's own documented contract.
+  // it to support, per the endpoint's own documented contract.
   const detailCell = row.detail
     ? row.detail
     : row.correlationId

@@ -3,7 +3,7 @@
 //
 // Steps:
 //   1. basics       — keyName + env (drives ssk_live_* vs ssk_test_* prefix)
-//   2. bind         — pick a PartnerUser (Humans | Services tabs);
+//   2. bind         — pick a user (Humans | Services tabs);
 //                     SERVICE tab supports inline creation.
 //   3. context      — pick an AppContext + verify the AccessProfile exists
 //                     for (context, user). Inline "+ Create profile" embeds
@@ -128,7 +128,7 @@ const STEP_LABEL_KEY: Record<WizardStep, string> = {
  * surface the user-facing copy from the message catalog.
  *
  * Exported so the same contract is reusable across wizard variants /
- * partner forks customizing the BasicsStep UX.
+ * forks customizing the BasicsStep UX.
  */
 export type KeyNameErrorCode = 'required' | 'whitespace' | 'tooLong';
 
@@ -509,7 +509,7 @@ function BasicsStep({
 // ---------------------------------------------------------------------------
 // Step 2: Bind — Humans / Services tabbed user picker.
 //
-// Lists PartnerUsers for the current tenant via TanStack Query, splits by
+// Lists users for the current tenant via TanStack Query, splits by
 // type (HUMAN default for legacy rows w/o the field), and lets the user
 // click a row to bind. The Services tab gains a "Create service principal"
 // button that opens an inline ServicePrincipalCreateDialog — uses
@@ -931,12 +931,12 @@ function ServicePrincipalCreateDialog({
 //
 // Backend contract: createScopedKey requires a pre-existing AccessProfile
 // for (tenantId, contextId, usr_<userId>), so creating a key takes two round-trips.
-// This step offers inline profile creation so a partner picking a context that has no profile yet doesn't
+// This step offers inline profile creation so someone picking a context that has no profile yet doesn't
 // have to leave the wizard.
 //
 // Profile existence is checked by attempting `getAccessProfile`. A 404
 // resolves the query to `null` (the profile doesn't exist for this pair);
-// any other error bubbles through React Query's `isError` so the partner
+// any other error bubbles through React Query's `isError` so the user
 // gets a real error instead of a silent failed-precondition state.
 // ---------------------------------------------------------------------------
 
@@ -989,7 +989,7 @@ function ContextStep({
 
   // Profile-existence probe. Fires only when both contextId AND principalId
   // are set. 404 → resolved-to-null (profile doesn't exist); anything else
-  // bubbles to isError so the partner sees the failure rather than a
+  // bubbles to isError so the user sees the failure rather than a
   // silent "Create profile" stuck state.
   const profileQuery = useQuery({
     queryKey: ['accessProfile', tenantId, contextId, principalId],
@@ -1225,7 +1225,7 @@ function ContextStep({
 // permission building, then POSTs `auth.createAccessProfile`.
 //
 // principalId is always `usr_<userId>` from ContextStep — scoped keys bind
-// to a PartnerUser as the principal, never to a key-as-principal in this
+// to a user as the principal, never to a key-as-principal in this
 // wizard (key-as-principal is reserved for the deprecated Pattern B that
 // was dropped).
 // ---------------------------------------------------------------------------
@@ -1394,7 +1394,7 @@ function InlineProfileCreateDialog({
 //
 // 4 rows matching the dev-portal layout: Key name, Environment (env +
 // tenant ID), User (id + type chip), App context. The intro paragraph
-// surfaces the "raw key is shown ONCE" expectation so partners aren't
+// surfaces the "raw key is shown ONCE" expectation so users aren't
 // surprised on the confirmation step.
 // ---------------------------------------------------------------------------
 
@@ -1478,10 +1478,10 @@ function ReviewRow({ labelId, value }: ReviewRowProps): React.JSX.Element {
 
 // ---------------------------------------------------------------------------
 // Step 5: Confirmation — show the rawKey ONCE (with copy button) on fresh
-// creates, or an idempotent-match info card if the (partner, tenant,
+// creates, or an idempotent-match info card if the (user, tenant,
 // context, userId, keyName) tuple already mapped to an active key. The
 // 5-min authorizer cache window is surfaced here because it's the
-// only place the partner sees the new key — anything sooner would be
+// only place the user sees the new key — anything sooner would be
 // premature; anything later would be too late to act on.
 // ---------------------------------------------------------------------------
 
@@ -1496,7 +1496,7 @@ function ConfirmationStep({ result }: ConfirmationStepProps): React.JSX.Element 
   if (!result) return null;
 
   // Idempotent-match path — backend returns the existing key's metadata
-  // without a rawKey. Tell the partner clearly that the raw value is not
+  // without a rawKey. Tell the user clearly that the raw value is not
   // re-disclosable; their only recovery option is revoke + recreate.
   if (!result.rawKey) {
     return (
@@ -1536,7 +1536,7 @@ function ConfirmationStep({ result }: ConfirmationStepProps): React.JSX.Element 
       setTimeout(() => setCopied(false), 2000);
     } catch {
       // Clipboard API may fail (insecure context, denied permission).
-      // Leave `copied` false — the partner still sees the raw key inline.
+      // Leave `copied` false — the user still sees the raw key inline.
     }
   };
 

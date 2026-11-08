@@ -190,7 +190,7 @@ function buildApiRequest(filters: AccessLogFilters): GetAccessLogRequest {
 
 // ---------------------------------------------------------------------------
 // Cell render helpers — pure, no own state. Colors use MUI palette tokens so a
-// partner fork inherits theme overrides rather than hardcoded hex.
+// fork inherits theme overrides rather than hardcoded hex.
 // ---------------------------------------------------------------------------
 
 /**
@@ -764,6 +764,28 @@ function AccessLogTableRow({ row }: { row: ReadAccessLogRow }): React.JSX.Elemen
         <Tooltip title={row.callerKeyId ?? ''}>
           <span>{row.callerKeyId ?? emDash}</span>
         </Tooltip>
+        {row.actingVia?.kind && (
+          // A read an agent run made on the key's behalf: which agent and run (the tool on hover). Any other,
+          // newer kind is still shown, by its own name and reference.
+          <Tooltip title={row.actingVia.tool ?? ''}>
+            <Box component="span" sx={{ display: 'block' }} data-testid="access-log-acting-via">
+              {row.actingVia.kind === 'agent-run' ? (
+                <FormattedMessage
+                  id="accessLog.viaAgentRun"
+                  values={{ agent: row.actingVia.actorId ?? '', run: row.actingVia.runId ?? '' }}
+                />
+              ) : (
+                <FormattedMessage
+                  id="accessLog.viaOther"
+                  values={{
+                    kind: row.actingVia.kind,
+                    ref: [row.actingVia.actorId, row.actingVia.runId].filter(Boolean).join(' / '),
+                  }}
+                />
+              )}
+            </Box>
+          </Tooltip>
+        )}
       </TableCell>
       <TableCell>
         <RevealedChip revealed={row.revealedSensitive} />

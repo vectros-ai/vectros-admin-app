@@ -44,14 +44,14 @@ export const COGNITO_CONFIG: CognitoConfig = {
 /**
  * API endpoint configuration for the two-stage auth bridge:
  *   - `developerApiBase` — the Cognito-gated developer API. Admin-app calls
- *     `GET ${developerApiBase}/developer/scoped-token` to mint a partner-
+ *     `GET ${developerApiBase}/developer/scoped-token` to mint an
  *     API st_* bearer (unified handler: Dev Admin → wildcard,
  *     sub-user → AccessProfile-bound scope).
  *   - `vectrosApiBase` — the Vectros API the minted st_* unlocks. All
  *     /v1/* admin-app traffic (Members, Keys, Logs) routes through here.
  *
  * For staging both URLs typically resolve to the same host (api.staging.
- * vectros.ai); they are split into two env vars so a partner fork or a
+ * vectros.ai); they are split into two env vars so a fork or a
  * future split-domain deployment can point them at different origins.
  */
 export interface ApiConfig {

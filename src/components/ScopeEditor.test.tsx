@@ -198,7 +198,7 @@ describe('validateClauses()', () => {
 
   it('rejects a non-string action at runtime (JSON-parsed shapes)', () => {
     // TS prevents this at compile time, but raw JSON might carry it; the
-    // runtime defense is still useful for partner-fork code paths that
+    // runtime defense is still useful for fork code paths that
     // skip the type system (e.g. data coming from a CSV import).
     const clauses = [
       { allowed_actions: ['read', 42 as unknown as string], data_scope: {} },
@@ -389,6 +389,24 @@ describe('RESOURCE_CATALOG (grantable scope resources)', () => {
     expect(scripts?.ops).toBe('crdx');
     // And still no `u`: a script version is immutable, a push is a create.
     expect(scripts?.ops).not.toContain('u');
+  });
+
+  // Stored agents carry the full c/r/u/d set (create, read, a new version,
+  // retire); agent runs carry only c (start, cancel) and r (read). Nothing on
+  // the platform checks u or d on runs, so offering either would be a checkbox
+  // that grants nothing.
+  it('offers agents with create/read/update/delete and runs with create/read only', () => {
+    const agents = RESOURCE_CATALOG.find((r) => r.value === 'agents');
+    const runs = RESOURCE_CATALOG.find((r) => r.value === 'runs');
+    expect(agents?.ops).toBe('crud');
+    expect(runs?.ops).toBe('cr');
+  });
+
+  it('round-trips agents and runs grants through the matrix', () => {
+    const actions = ['agents:r', 'runs:cr'];
+    const model = parseClauseActions(actions);
+    expect(model.advanced).toEqual([]);
+    expect(serializeClauseActions(model)).toEqual(actions);
   });
 
   it('has an i18n label for every operation column', () => {
@@ -699,6 +717,38 @@ describe('<ScopeEditor>', () => {
       </TestIntlProvider>,
     );
     expect(screen.queryByRole('button', { name: /remove clause/i })).not.toBeInTheDocument();
+  });
+
+  describe('agents and runs rows', () => {
+    it('renders Create/Read/Update/Delete for agents and only Create/Read for agent runs', () => {
+      render(
+        <TestIntlProvider>
+          <ScopeEditor value={[{ allowed_actions: ['runs:c'], data_scope: {} }]} onChange={() => {}} />
+        </TestIntlProvider>,
+      );
+      for (const op of ['Create', 'Read', 'Update', 'Delete']) {
+        expect(screen.getByRole('checkbox', { name: `${op} Agents` })).not.toBeChecked();
+      }
+      expect(screen.getByRole('checkbox', { name: 'Create Agent runs' })).toBeChecked();
+      expect(screen.getByRole('checkbox', { name: 'Read Agent runs' })).not.toBeChecked();
+      for (const op of ['Update', 'Delete', 'Execute']) {
+        expect(screen.queryByRole('checkbox', { name: `${op} Agent runs` })).not.toBeInTheDocument();
+      }
+    });
+
+    it('ticking Read on agent runs emits runs:cr', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      render(
+        <TestIntlProvider>
+          <ScopeEditor value={[{ allowed_actions: ['runs:c'], data_scope: {} }]} onChange={onChange} />
+        </TestIntlProvider>,
+      );
+      await user.click(screen.getByRole('checkbox', { name: 'Read Agent runs' }));
+      expect(onChange).toHaveBeenLastCalledWith([
+        expect.objectContaining({ allowed_actions: ['runs:cr'] }),
+      ]);
+    });
   });
 
   describe('granted_capabilities authoring (0.40.0)', () => {

@@ -5,8 +5,8 @@
 // instantiate fresh per-test clients via `createQueryClient()` to keep the
 // cache from leaking across `it()` blocks.
 //
-// The defaults below are the OPINIONATED reference-app baseline. Partner
-// forks can override per-query via the second argument to `useQuery` /
+// The defaults below are the OPINIONATED reference-app baseline. Forks
+// can override per-query via the second argument to `useQuery` /
 // `useMutation`, or replace the client entirely. Notes on each:
 //
 //   - `retry: 1` — single transparent retry then bubble. Admin surfaces
@@ -22,7 +22,7 @@
 //     predictable freshness.
 //
 //   - `refetchOnWindowFocus: false` — OFF. Default TanStack Query behavior
-//     refetches on tab focus, which surprises partners migrating from
+//     refetches on tab focus, which surprises developers migrating from
 //     `useEffect` patterns (sudden network activity, jumping spinners).
 //     The current admin surfaces don't need it; opt-in per-query if you do.
 //

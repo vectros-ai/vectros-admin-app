@@ -5,7 +5,7 @@
 //   - Email + Role dropdown upfront. Roles are loaded from
 //     `client.auth.listRoles({ contextId: 'default' })`.
 //     Custom inline scopes are handled by the access-profile UI.
-//   - "Advanced options" collapses the 4 partner-customizable knobs:
+//   - "Advanced options" collapses the optional knobs:
 //     firstName / lastName / ttlDays / sendEmail / fromName / acceptUrl.
 //     acceptUrl auto-fills from `window.location.origin + '/accept'`.
 //   - On 409 with body `{ error: 'email_already_associated' }` — a SUSPENDED membership for
@@ -168,7 +168,7 @@ export function InviteMemberDialog({
   }, [roles, roleId]);
 
   // Auto-fill acceptUrl from current origin on mount. Stays controllable
-  // so a partner customizing the dialog can pre-fill differently.
+  // so a fork customizing the dialog can pre-fill differently.
   useEffect(() => {
     if (open && acceptUrl === '' && typeof window !== 'undefined') {
       setAcceptUrl(`${window.location.origin}/accept`);

@@ -63,7 +63,7 @@ vi.mock('../../api/vectrosApi', async (importOriginal) => {
 });
 
 // List + create of contexts go through the owner-gated developer API, NOT the
-// context-pinned partner SDK; mock the hook the page consumes.
+// context-pinned SDK client; mock the hook the page consumes.
 vi.mock('../../api/developerApi', async (importOriginal) => {
   const actual = await importOriginal<typeof DeveloperApi>();
   return {
@@ -100,13 +100,13 @@ interface MockOverrides {
   createAppContext?: ReturnType<typeof vi.fn>;
   /** Developer-API delete (owner-gated teardown). */
   deleteAppContext?: ReturnType<typeof vi.fn>;
-  /** Partner-SDK per-context calls (counts, edit). */
+  /** SDK per-context calls (counts, edit). */
   listRoles?: ReturnType<typeof vi.fn>;
   listAccessProfiles?: ReturnType<typeof vi.fn>;
   updateAppContext?: ReturnType<typeof vi.fn>;
 }
 
-/** Partner-SDK client mock: per-context counts + edit. */
+/** SDK client mock: per-context counts + edit. */
 function makeMockClient(o: MockOverrides = {}) {
   return {
     auth: {
