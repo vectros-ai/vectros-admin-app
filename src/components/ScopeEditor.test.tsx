@@ -444,6 +444,7 @@ describe('RESOURCE_CATALOG (grantable scope resources)', () => {
 //   users                        — the reveal letter alone
 //   profiles           — the three authoring letters alone
 //   scripts            — the execute letter alone
+//   runs               — the start and read letters alone (an agent name, 0.50.0)
 //
 // The trap this guards is a real one, not a hypothetical: three separate
 // passes over the sibling app's version of this same string each produced a
@@ -466,6 +467,8 @@ function qualifierIsLegal(resource: string, ops: string): boolean {
       return every('cud');
     case 'scripts':
       return every('x');
+    case 'runs':
+      return every('cr');
     default:
       return false;
   }

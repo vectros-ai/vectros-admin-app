@@ -3,6 +3,24 @@
 All notable changes to the Vectros Admin App are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.25.1 — 2026-11-14
+
+### Changed
+
+- **The app is built on SDK 0.50.0.**
+- **Usage page: where requests stop, the included credits and the overage.** Beside Used / Monthly limit / Remaining, the page
+  shows the credit level at which requests stop this period, the credits included in the price and this period's overage, and
+  says when overage carries requests past the monthly limit. A credential confined to some app contexts sees "Not reported" for
+  these. With an API before 0.50.0 the page looks as before.
+- **Usage page:** the credit limit is labelled "Monthly limit" (it was "Plan limit"): the limit that applied this month, which can
+  differ from your plan's.
+- **The Advanced scope hint names the agent qualifier on `runs`:** `runs:c:<agent>` starts that agent and no other, `runs:r:<agent>`
+  reads only its runs, and a bare `runs:c` covers every agent.
+- **README:** the platform now has eight grantable capabilities; the new `public-publish` (which gates making a record type public)
+  and `script-egress-declare` (required to declare, in a pushed script version's `optInOperations`, the operation this capability is mapped to; it grants nothing else) are not offered by these
+  editors. No change to the app itself.
+- **The issuer editor shows each self-signup policy's additional roles** read-only under the policy, and saving keeps them.
+
 ## 0.25.0 — 2026-11-07
 
 ### Added

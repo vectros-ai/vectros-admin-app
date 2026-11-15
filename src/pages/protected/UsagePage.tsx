@@ -122,6 +122,20 @@ function allowance(value: number | null | undefined, unlimitedLabel: string): Re
   return <FormattedNumber value={value} />;
 }
 
+/**
+ * A cell for the overage-era credit fields (`admissionLimit`, `includedCredits`, `overage`). Unlike a plan limit, `null` does not
+ * always mean "unlimited": these fields are not reported to a token confined to some app contexts, so `null` reads "Not reported"
+ * there, and `overage` is never unlimited. Returns null when the API omits the field (an older API), so no cell is shown.
+ */
+function reportedCredits(
+  value: number | null | undefined,
+  opts: { confined: boolean; nullMeansUnlimited: boolean; unlimitedLabel: string; notReportedLabel: string },
+): React.ReactNode | null {
+  if (value === undefined) return null;
+  if (value === null) return opts.confined || !opts.nullMeansUnlimited ? opts.notReportedLabel : opts.unlimitedLabel;
+  return <FormattedNumber value={value} />;
+}
+
 export function UsagePage(): React.JSX.Element {
   const tenant = useActiveTenantId();
   const intl = useIntl();
@@ -233,6 +247,48 @@ export function UsagePage(): React.JSX.Element {
                   <Typography variant="h5">{allowance(credits?.remaining, unlimited)}</Typography>
                 </Box>
               </Stack>
+              {(() => {
+                const labels = {
+                  confined: isContextConfined,
+                  unlimitedLabel: unlimited,
+                  notReportedLabel: intl.formatMessage({ id: 'usage.notReported' }),
+                };
+                const cells = [
+                  { id: 'usage.creditsAdmissionLimit', value: reportedCredits(credits?.admissionLimit, { ...labels, nullMeansUnlimited: true }) },
+                  { id: 'usage.creditsIncluded', value: reportedCredits(credits?.includedCredits, { ...labels, nullMeansUnlimited: true }) },
+                  { id: 'usage.creditsOverage', value: reportedCredits(credits?.overage, { ...labels, nullMeansUnlimited: false }) },
+                ].filter((c) => c.value !== null);
+                if (cells.length === 0) return null;
+                // With overage on, requests continue past the monthly limit up to the level where they stop, so a remaining of 0 is
+                // not the end of the month's requests.
+                const pastLimitWithOverage =
+                  typeof credits?.limit === 'number' &&
+                  typeof credits?.admissionLimit === 'number' &&
+                  credits.admissionLimit > credits.limit &&
+                  typeof credits?.used === 'number' &&
+                  credits.used >= credits.limit &&
+                  // once usage reaches the stop level, requests no longer continue
+                  credits.used < credits.admissionLimit;
+                return (
+                  <>
+                    <Stack direction="row" spacing={4} sx={{ mb: 2, flexWrap: 'wrap' }} useFlexGap>
+                      {cells.map((c) => (
+                        <Box key={c.id}>
+                          <Typography variant="caption" color="text.secondary">
+                            <FormattedMessage id={c.id} />
+                          </Typography>
+                          <Typography variant="h6">{c.value}</Typography>
+                        </Box>
+                      ))}
+                    </Stack>
+                    {pastLimitWithOverage && (
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                        <FormattedMessage id="usage.overageContinues" />
+                      </Typography>
+                    )}
+                  </>
+                );
+              })()}
 
               {breakdown && (
                 <TableContainer component={Paper} variant="outlined">

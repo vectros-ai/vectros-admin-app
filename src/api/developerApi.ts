@@ -87,6 +87,9 @@ export type TenantKind = 'live' | 'test';
 export interface SelfSignupPolicy {
   readonly signup_type: string;
   readonly role_id: string;
+  /** More roles composed after `role_id` onto the new profile (optional). The issuer editor shows them read-only
+   *  and sends them back unchanged. */
+  readonly additional_role_ids?: ReadonlyArray<string>;
 }
 
 /**
@@ -199,7 +202,7 @@ export interface TriggerFailuresQuery {
 
 /**
  * One page of trigger failures. `incomplete`/`contextsNotSearched` name any app context this page
- * could not read (a transient fault) — a caller MUST surface these rather than let an honest gap
+ * could not read (a transient fault) — a caller MUST surface these rather than let a real gap
  * read as "nothing failed" (the same discipline `accessLog.coverageBody` states for disclosures).
  * Results are newest-first WITHIN a context; walked across contexts in a fixed order, not merged
  * into one account-wide timeline — a design tradeoff for a cursor whose size doesn't grow with the

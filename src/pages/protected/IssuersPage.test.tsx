@@ -17,6 +17,8 @@
 //  10. A pending row shows a Verify action (an active row does not); the dialog shows the
 //      challenge fields, submits the pasted token, and closes + invalidates the list on success.
 //  11. A refused verify shows the guidance matching its refusal reason, not a generic failure.
+//  12. A policy's additional_role_ids are shown read-only and sent back unchanged on save
+//      (the update replaces the whole list, so dropping them would silently rewrite the policy).
 // ---------------------------------------------------------------------------
 
 import { render, screen, waitFor, within } from '@testing-library/react';
@@ -159,6 +161,31 @@ describe('IssuersPage', () => {
 
     // Dialog closes on success.
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('keeps a policy\'s additional_role_ids on save and shows them read-only', async () => {
+    const withExtras = {
+      ...AUTH0_PROD,
+      selfSignupPolicies: [{ signup_type: 'member', role_id: 'member-role', additional_role_ids: ['org-owner', 'org-member'] }],
+    };
+    const user = userEvent.setup();
+    const { developerApi } = renderPage({ listIssuers: vi.fn().mockResolvedValue(pageOf([withExtras])) });
+    await screen.findByText('auth0-prod');
+
+    await user.click(screen.getByRole('button', { name: /edit safe fields/i }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(/org-owner, org-member/)).toBeInTheDocument();
+
+    // Edit an unrelated field, then save.
+    await user.click(within(dialog).getByLabelText(/status/i));
+    await user.click(await screen.findByRole('option', { name: 'Suspended' }));
+    await user.click(within(dialog).getByRole('button', { name: /save/i }));
+
+    await waitFor(() => expect(developerApi.updateIssuer).toHaveBeenCalledTimes(1));
+    const [, payload] = developerApi.updateIssuer.mock.calls[0] as [string, Record<string, unknown>];
+    expect(payload.selfSignupPolicies).toEqual([
+      { signup_type: 'member', role_id: 'member-role', additional_role_ids: ['org-owner', 'org-member'] },
+    ]);
   });
 
   it('clearing subClaim/emailClaim to blank sends them through (not omitted), so a reset to default reaches the server', async () => {

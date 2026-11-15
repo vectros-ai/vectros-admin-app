@@ -178,6 +178,102 @@ describe('UsagePage', () => {
     expect(screen.getAllByText('Unlimited')).toHaveLength(2);
   });
 
+  it('with overage on and the limit used up, shows where requests stop, the included credits and the overage, and says requests continue', async () => {
+    renderPage(
+      vi.fn().mockResolvedValue({
+        ...SAMPLE_REPORT,
+        credits: { ...SAMPLE_REPORT.credits, used: 1200, limit: 1000, remaining: 0, admissionLimit: 1600, includedCredits: 1000, overage: 200 },
+      }),
+    );
+
+    expect(await screen.findByText('Requests stop at')).toBeInTheDocument();
+    expect(screen.getByText('1,600')).toBeInTheDocument();
+    expect(screen.getByText('Included credits')).toBeInTheDocument();
+    expect(screen.getByText('Overage this period')).toBeInTheDocument();
+    expect(screen.getByText('200')).toBeInTheDocument();
+    expect(screen.getByText(/requests continue past it, billed as overage/i)).toBeInTheDocument();
+  });
+
+  it('once usage reaches the stop level, says nothing about requests continuing', async () => {
+    renderPage(
+      vi.fn().mockResolvedValue({
+        ...SAMPLE_REPORT,
+        credits: { ...SAMPLE_REPORT.credits, used: 1600, limit: 1000, remaining: 0, admissionLimit: 1600, includedCredits: 1000, overage: 600 },
+      }),
+    );
+    expect(await screen.findByText('Requests stop at')).toBeInTheDocument();
+    expect(screen.queryByText(/requests continue past it/i)).not.toBeInTheDocument();
+  });
+
+  it('with overage on but usage still below the limit, says nothing about continuing', async () => {
+    renderPage(
+      vi.fn().mockResolvedValue({
+        ...SAMPLE_REPORT,
+        credits: { ...SAMPLE_REPORT.credits, used: 400, limit: 1000, remaining: 600, admissionLimit: 1600, includedCredits: 1000, overage: 0 },
+      }),
+    );
+    expect(await screen.findByText('Requests stop at')).toBeInTheDocument();
+    expect(screen.queryByText(/requests continue past it/i)).not.toBeInTheDocument();
+  });
+
+  it('an unlimited contract with an included amount: the limit and stop level read Unlimited, the included credits show their number', async () => {
+    renderPage(
+      vi.fn().mockResolvedValue({
+        ...SAMPLE_REPORT,
+        credits: { ...SAMPLE_REPORT.credits, limit: null, remaining: null, admissionLimit: null, includedCredits: 5000, overage: 120 },
+      }),
+    );
+    expect(await screen.findByText('Included credits')).toBeInTheDocument();
+    expect(screen.getByText('5,000')).toBeInTheDocument();
+    // limit, remaining and the stop level
+    expect(screen.getAllByText('Unlimited')).toHaveLength(3);
+    expect(screen.queryByText(/requests continue past it/i)).not.toBeInTheDocument();
+  });
+
+  it('without overage (the stop level equals the limit) says nothing about continuing', async () => {
+    renderPage(
+      vi.fn().mockResolvedValue({
+        ...SAMPLE_REPORT,
+        credits: { ...SAMPLE_REPORT.credits, used: 1000, limit: 1000, remaining: 0, admissionLimit: 1000, includedCredits: 1000, overage: 0 },
+      }),
+    );
+
+    expect(await screen.findByText('Requests stop at')).toBeInTheDocument();
+    expect(screen.queryByText(/requests continue past it/i)).not.toBeInTheDocument();
+  });
+
+  it('renders the new fields as Not reported, never Unlimited, for a context-confined credential; an older API shows no cells', async () => {
+    renderPage(
+      vi.fn().mockResolvedValue({
+        ...SAMPLE_REPORT,
+        credits: { ...SAMPLE_REPORT.credits, admissionLimit: null, includedCredits: null, overage: null },
+        tenants: { live: SAMPLE_REPORT.tenants.live, test: null },
+      }),
+    );
+    expect(await screen.findByText('Requests stop at')).toBeInTheDocument();
+    expect(screen.getAllByText('Not reported')).toHaveLength(3);
+    expect(screen.queryByText('Unlimited')).not.toBeInTheDocument();
+  });
+
+  it('an account with no monthly limit: the stop level and included credits read Unlimited, the overage Not reported only if null', async () => {
+    renderPage(
+      vi.fn().mockResolvedValue({
+        ...SAMPLE_REPORT,
+        credits: { ...SAMPLE_REPORT.credits, limit: null, remaining: null, admissionLimit: null, includedCredits: null, overage: 0 },
+      }),
+    );
+    expect(await screen.findByText('Requests stop at')).toBeInTheDocument();
+    // limit, remaining, the stop level and the included credits
+    expect(screen.getAllByText('Unlimited')).toHaveLength(4);
+    expect(screen.queryByText('Not reported')).not.toBeInTheDocument();
+  });
+
+  it('an API without the new fields shows none of their cells', async () => {
+    renderPage(vi.fn().mockResolvedValue(SAMPLE_REPORT));
+    await screen.findByText('2026-07');
+    expect(screen.queryByText('Requests stop at')).not.toBeInTheDocument();
+  });
+
   it('does not show the context-confinement notice for a cross-context credential (both environments populated)', async () => {
     renderPage(vi.fn().mockResolvedValue(SAMPLE_REPORT));
 

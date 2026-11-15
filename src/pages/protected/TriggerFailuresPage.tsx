@@ -11,7 +11,7 @@
 //     none of them set, unlike the Disclosures page's required subject axis.
 //   - Cursor pagination: the result is a `{ data, nextCursor }` page, PLUS
 //     `incomplete`/`contextsNotSearched`. A context this page could not read
-//     (a transient fault) is named explicitly — an honest gap must never read
+//     (a transient fault) is named explicitly — a real gap must never read
 //     as "nothing failed", so the warning banner below is always shown when
 //     any loaded page reported one.
 //   - Results are newest-first WITHIN a context; contexts are walked in a

@@ -68,7 +68,7 @@ import { ApiErrorAlert, LoadingBlock, SubmitButton } from '@vectros-ai/react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import { useDeveloperApi } from '../../api/developerApi';
-import type { IssuerSummary } from '../../api/developerApi';
+import type { IssuerSummary, SelfSignupPolicy } from '../../api/developerApi';
 import { accessQueryKeys } from '../../lib/accessQueryKeys';
 import { drainPages, AUTH_PAGE_SIZE } from '../../lib/drainPages';
 import { classifyVerifyRefusal } from './issuerVerifyRefusal';
@@ -269,11 +269,15 @@ function IssuerRow({
 // ---------------------------------------------------------------------------
 
 /** One in-progress self-signup policy row in the editor — mirrors {@link SelfSignupPolicy} but keyed
- *  by a local id so React can track rows across add/remove/reorder. */
+ *  by a local id so React can track rows across add/remove/reorder. `original` is the entry as loaded:
+ *  the save merges the two edited fields into it, so a field this editor does not edit
+ *  (`additional_role_ids`, or one a later API version adds) is sent back unchanged rather than dropped
+ *  (the update replaces the whole policy list). */
 interface DraftPolicy {
   readonly key: string;
   signupType: string;
   roleId: string;
+  readonly original?: SelfSignupPolicy;
 }
 
 let draftKeySeq = 0;
@@ -319,7 +323,7 @@ function IssuerEditorDialog({
         ...(pendingVerification ? {} : { status }),
         selfSignupPolicies: policies
           .filter((p) => p.signupType.trim() !== '' && p.roleId.trim() !== '')
-          .map((p) => ({ signup_type: p.signupType.trim(), role_id: p.roleId.trim() })),
+          .map((p) => ({ ...p.original, signup_type: p.signupType.trim(), role_id: p.roleId.trim() })),
       });
     },
     onSuccess: () => {
@@ -337,8 +341,9 @@ function IssuerEditorDialog({
     setPolicies(
       (target.selfSignupPolicies ?? []).map((p) => ({
         key: nextDraftKey(),
-        signupType: p.signup_type,
-        roleId: p.role_id,
+        signupType: p.signup_type ?? '',
+        roleId: p.role_id ?? '',
+        original: p,
       })),
     );
     mutation.reset();
@@ -433,7 +438,8 @@ function IssuerEditorDialog({
             </Typography>
             <Stack spacing={1.5} sx={{ mt: 1.5 }}>
               {policies.map((policy) => (
-                <Stack key={policy.key} direction="row" spacing={1} alignItems="center">
+                <Box key={policy.key}>
+                <Stack direction="row" spacing={1} alignItems="center">
                   <TextField
                     size="small"
                     label={intl.formatMessage({ id: 'access.issuers.editDialog.signupTypeLabel' })}
@@ -456,6 +462,15 @@ function IssuerEditorDialog({
                     <DeleteOutlineIcon fontSize="small" />
                   </IconButton>
                 </Stack>
+                {(policy.original?.additional_role_ids?.length ?? 0) > 0 && (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                    <FormattedMessage
+                      id="access.issuers.editDialog.additionalRolesNote"
+                      values={{ roles: (policy.original?.additional_role_ids ?? []).join(', ') }}
+                    />
+                  </Typography>
+                )}
+                </Box>
               ))}
             </Stack>
           </Box>
