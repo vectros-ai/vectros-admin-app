@@ -351,6 +351,11 @@ describe('formatScopeClauseValidationError()', () => {
 // ---------------------------------------------------------------------------
 
 describe('RESOURCE_CATALOG (grantable scope resources)', () => {
+  it('offers publishable keys as a management grant with exactly c, r and d', () => {
+    const pk = RESOURCE_CATALOG.find((r) => r.value === 'public-keys');
+    expect(pk).toEqual({ value: 'public-keys', group: 'management', ops: 'crd' });
+  });
+
   it('offers `entities` and NOT the retired org/client — nor the inert `namespaces`', () => {
     const values = RESOURCE_CATALOG.map((r) => r.value);
     // The generic entities surface replaced the retired org/client routes.

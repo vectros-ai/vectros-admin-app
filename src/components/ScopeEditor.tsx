@@ -314,6 +314,10 @@ export const RESOURCE_CATALOG: readonly ResourceSpec[] = [
   // NOT `namespaces`: the backend delists it as a grantable resource (registry
   // reads are open, writes need a root key), so `namespaces:<verb>` is inert.
   { value: 'entities', group: 'management', ops: 'crud' },
+  // Publishable app keys for anonymous public reads: issue (c), list (r) and revoke (d). No `u`: a key is never
+  // edited. Issuing one opens the context's public views to anyone holding it, and revoking one cuts off every visitor
+  // using that key or an older one, so it is a management grant like `keys`.
+  { value: 'public-keys', group: 'management', ops: 'crd' },
 ];
 
 /**

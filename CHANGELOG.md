@@ -3,6 +3,21 @@
 All notable changes to the Vectros Admin App are documented here.
 This project adheres to [Semantic Versioning](https://semver.org).
 
+## 0.26.0 — 2026-11-25
+
+### Added
+
+- The scope editor offers `public-keys`.
+- The usage page itemises the public access and address geocoding charges.
+- The read metering table lists public cache hits, which count a third of a read each against the read allowance.
+
+### Changed
+
+- **The app is built on SDK 0.51.0.**
+- The app context delete dialog says what happens to an issuer whose users signed in through it.
+- The README names `write-policy-declare` among the platform's grantable capabilities; the editors do not offer it.
+- The usage page labels the documents charge "Document writes and deletes"; it said "Document downloads", which are charged on data out.
+
 ## 0.25.1 — 2026-11-14
 
 ### Changed

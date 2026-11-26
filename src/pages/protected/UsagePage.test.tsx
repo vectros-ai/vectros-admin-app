@@ -43,7 +43,7 @@ const SAMPLE_REPORT = {
     remaining: 951,
     breakdown: {
       searchQueries: 12,
-      searchIngest: 9,
+      searchIngest: 5,
       documents: 3,
       records: 8,
       identity: 1,
@@ -51,6 +51,8 @@ const SAMPLE_REPORT = {
       reads: 2,
       dataOut: 2,
       scriptExecution: 7,
+      publicAccess: 3,
+      geocodeStored: 1,
     },
   },
   reads: {
@@ -122,7 +124,7 @@ describe('UsagePage', () => {
     expect(within(contexts).getByText('staging-eval')).toBeInTheDocument();
   });
 
-  // Proves the nine categories the API reports today all RENDER, and that they add
+  // Proves the eleven categories the API reports today all RENDER, and that they add
   // up to the headline.
   //
   // ⚠️ It does NOT catch a category neither this fixture nor BREAKDOWN_ROWS has
@@ -163,6 +165,55 @@ describe('UsagePage', () => {
     // row. Labelling it "Trigger script execution time" told that account its
     // charge came from something it does not use.
     expect(within(breakdown).queryByText(/trigger/i)).not.toBeInTheDocument();
+  });
+
+  it('labels the documents charge as writes and deletes, never as downloads (downloads are on data out)', async () => {
+    renderPage(vi.fn().mockResolvedValue(SAMPLE_REPORT));
+
+    const breakdown = await screen.findByRole('table', { name: /credit breakdown/i });
+    const row = within(breakdown).getByText('Document writes and deletes').closest('tr') as HTMLElement;
+    expect(within(row).getByText('3')).toBeInTheDocument();
+    expect(within(breakdown).queryByText(/download/i)).not.toBeInTheDocument();
+  });
+
+  it('itemises the public access and address geocoding charges', async () => {
+    renderPage(vi.fn().mockResolvedValue(SAMPLE_REPORT));
+
+    const breakdown = await screen.findByRole('table', { name: /credit breakdown/i });
+    const rowFor = (label: string) => within(breakdown).getByText(label).closest('tr') as HTMLElement;
+    expect(within(rowFor('Public access')).getByText('3')).toBeInTheDocument();
+    expect(within(rowFor('Address geocoding')).getByText('1')).toBeInTheDocument();
+  });
+
+  it('lists public cache hits as shared with the read allowance, and says why overage can exceed used minus allowance', async () => {
+    renderPage(
+      vi.fn().mockResolvedValue({
+        ...SAMPLE_REPORT,
+        reads: {
+          ...SAMPLE_REPORT.reads,
+          calls: { used: 1000, freeAllowance: 1000, edgeHits: 300, overage: 100, overageCredits: 0 },
+        },
+      }),
+    );
+
+    const reads = await screen.findByRole('table', { name: /read metering/i });
+    const row = within(reads).getByText('Public cache hits').closest('tr') as HTMLElement;
+    expect(within(row).getByText('300')).toBeInTheDocument();
+    expect(within(row).getByText('Shared with read calls')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Public cache hits count a third of a read each against the same allowance, so Overage on the Read calls row can be more than Used minus Allowance. Their charge is under Public access in the credit breakdown./,
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('renders the public cache hits row with 0 when the report has none', async () => {
+    renderPage(vi.fn().mockResolvedValue(SAMPLE_REPORT));
+
+    const reads = await screen.findByRole('table', { name: /read metering/i });
+    const row = within(reads).getByText('Public cache hits').closest('tr') as HTMLElement;
+    expect(within(row).getByText('0')).toBeInTheDocument();
+    expect(within(row).getByText('Shared with read calls')).toBeInTheDocument();
   });
 
   it('renders a null plan limit as Unlimited', async () => {

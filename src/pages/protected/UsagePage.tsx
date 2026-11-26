@@ -71,6 +71,8 @@ const BREAKDOWN_ROWS = [
   { field: 'reads', labelId: 'usage.categoryReads' },
   { field: 'dataOut', labelId: 'usage.categoryDataOut' },
   { field: 'scriptExecution', labelId: 'usage.categoryScriptExecution' },
+  { field: 'publicAccess', labelId: 'usage.categoryPublicAccess' },
+  { field: 'geocodeStored', labelId: 'usage.categoryGeocoding' },
 ] as const;
 
 /** Every credit-bearing `CreditBreakdown` key — i.e. all of them except the
@@ -370,6 +372,19 @@ export function UsagePage(): React.JSX.Element {
                         </TableCell>
                         <TableCell align="right">{num(reads.calls?.overage)}</TableCell>
                         <TableCell align="right">{num(reads.calls?.overageCredits)}</TableCell>
+                      </TableRow>
+                      {/* Public cache hits share the read allowance at a third of a read each, so the Read calls
+                          overage can exceed used minus allowance; their charge is itemised under Public access. */}
+                      <TableRow>
+                        <TableCell>
+                          <FormattedMessage id="usage.readsEdgeHits" />
+                        </TableCell>
+                        <TableCell align="right">{num(reads.calls?.edgeHits ?? 0)}</TableCell>
+                        <TableCell align="right">
+                          <FormattedMessage id="usage.readsEdgeShared" />
+                        </TableCell>
+                        <TableCell align="right">—</TableCell>
+                        <TableCell align="right">—</TableCell>
                       </TableRow>
                       <TableRow>
                         <TableCell>
